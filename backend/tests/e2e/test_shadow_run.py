@@ -11,7 +11,8 @@ from goldguard.ai.decision import DecisionRequest, DecisionVetoEngine
 from goldguard.backtest.engine import BacktestEngine
 from goldguard.backtest.walk_forward import WalkForwardHarness
 from goldguard.broker.paper import PaperBroker
-from goldguard.context.playbook import ChecklistResult
+from goldguard.context.models import ContextItem, ContextSnapshot, ContextSource
+from goldguard.context.playbook import ChecklistInputs, ChecklistResult
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
 from goldguard.domain.enums import AiDecision, CandidateAction, ChecklistAction
 from goldguard.domain.models import Candle, Quote
@@ -68,17 +69,43 @@ def make_candle(index: int, base: Decimal, delta: Decimal) -> Candle:
 
 
 class MockChecklist:
-    def evaluate(self, *, features: Any, quote: Any) -> ChecklistResult:
+    def evaluate(self, inputs: ChecklistInputs) -> ChecklistResult:
+        assert inputs.context.sources
         return ChecklistResult(action=ChecklistAction.PASS, reason_codes=("PRO_PASS",))
 
 
 class MockVeto:
-    def decide(self, *, features: Any, quote: Any) -> Any:
+    def decide(self, request: DecisionRequest) -> Any:
+        assert request.candidate is CandidateAction.ENTRY_CANDIDATE
         return SimpleNamespace(
             decision=AiDecision.APPROVE_ENTRY,
             confidence=85,
             reason_codes=("TREND_ALIGNED", "LIQUIDITY_GOOD"),
         )
+
+
+def fresh_context(now: datetime) -> ContextSnapshot:
+    return ContextSnapshot.build(
+        fetched_at=now,
+        sources=(
+            ContextSource(
+                url="https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+                title="FOMC calendar",
+                published_at=now,
+            ),
+        ),
+        items=(
+            ContextItem(
+                summary="No blocking macro release is active during this paper run.",
+                driver="rates",
+                direction="neutral",
+                severity="low",
+                published_at=now,
+                source_indexes=(0,),
+                contradictory=False,
+            ),
+        ),
+    )
 
 
 @pytest.mark.asyncio
@@ -254,6 +281,7 @@ async def test_end_to_end_shadow_trading_and_research_cycle(database: Database) 
                 closed_at=c.close_time,
                 quote=quote,
                 features=features,
+                context_snapshot=fresh_context(c.close_time),
                 account_scope=session_id,
             )
 

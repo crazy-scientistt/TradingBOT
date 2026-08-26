@@ -3,9 +3,10 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from goldguard.ai.gemini import AiAssessment
+from goldguard.ai.gemini import AiAssessment, DecisionRequest
 from goldguard.broker.paper import PaperBroker
-from goldguard.context.playbook import ChecklistResult
+from goldguard.context.models import ContextItem, ContextSnapshot, ContextSource
+from goldguard.context.playbook import ChecklistInputs, ChecklistResult
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
 from goldguard.domain.enums import AiDecision, ChecklistAction, ExitReason
 from goldguard.domain.models import Quote, TradePlan
@@ -37,6 +38,30 @@ def symbol_filters() -> SymbolFilters:
     )
 
 
+def fresh_context(now: datetime) -> ContextSnapshot:
+    return ContextSnapshot.build(
+        fetched_at=now,
+        sources=(
+            ContextSource(
+                url="https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+                title="FOMC calendar",
+                published_at=now,
+            ),
+        ),
+        items=(
+            ContextItem(
+                summary="No blocking macro event is active for the current paper candle.",
+                driver="rates",
+                direction="neutral",
+                severity="low",
+                published_at=now,
+                source_indexes=(0,),
+                contradictory=False,
+            ),
+        ),
+    )
+
+
 def test_coordinator_full_pipeline_entry_and_idempotency(
     database: Database,
     symbol_filters: SymbolFilters,
@@ -50,11 +75,13 @@ def test_coordinator_full_pipeline_entry_and_idempotency(
     genome_repo.save_genome(trend_pullback_v1(), origin="baseline", status="active")
 
     class MockEvidenceChecklist:
-        def evaluate(self, *args, **kwargs) -> ChecklistResult:
+        def evaluate(self, inputs: ChecklistInputs) -> ChecklistResult:
+            assert inputs.context.items
             return ChecklistResult(ChecklistAction.PASS, ("PRO_CHECKLIST_PASSED",))
 
     class MockAiVeto:
-        def decide(self, *args, **kwargs) -> AiAssessment:
+        def decide(self, request: DecisionRequest) -> AiAssessment:
+            assert request.strategy_version == "trend-pullback-v1"
             return AiAssessment(
                 decision=AiDecision.APPROVE_ENTRY,
                 confidence=85,
@@ -105,6 +132,7 @@ def test_coordinator_full_pipeline_entry_and_idempotency(
         closed_at=candle_close,
         quote=quote,
         features=features,
+        context_snapshot=fresh_context(candle_close),
     )
 
     assert outcome.executed is True
@@ -117,6 +145,7 @@ def test_coordinator_full_pipeline_entry_and_idempotency(
         closed_at=candle_close,
         quote=quote,
         features=features,
+        context_snapshot=fresh_context(candle_close),
     )
     assert second_outcome.action in ("ALREADY_PROCESSED", "POSITION_ALREADY_OPEN")
     assert broker.position is not None

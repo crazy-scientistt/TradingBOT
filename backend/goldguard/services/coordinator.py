@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Protocol
 
+from goldguard.ai.gemini import AiAssessment, DecisionRequest
+from goldguard.context.models import ContextSnapshot
+from goldguard.context.playbook import ChecklistInputs, ChecklistResult
 from goldguard.broker.base import Broker, ClosedPaperTrade, PaperFill
 from goldguard.domain.enums import AiDecision, CandidateAction, ChecklistAction, ExitReason
 from goldguard.domain.models import Quote, TradePlan
@@ -20,12 +23,21 @@ class DecisionOutcome:
     reason_codes: tuple[str, ...]
     plan: TradePlan | None = None
     fill: PaperFill | None = None
+    closed_trade: ClosedPaperTrade | None = None
 
 
 @dataclass(frozen=True)
 class ExitOutcome:
     closed_trade: ClosedPaperTrade | None = None
     reason: str = ""
+
+
+class ChecklistGate(Protocol):
+    def evaluate(self, inputs: ChecklistInputs) -> ChecklistResult: ...
+
+
+class AiVetoGate(Protocol):
+    def decide(self, request: DecisionRequest) -> AiAssessment: ...
 
 
 class TradingCoordinator:
@@ -43,8 +55,8 @@ class TradingCoordinator:
         ledger_repo: LedgerRepository,
         runtime: GenomeRuntime,
         risk_engine: RiskEngine,
-        checklist: Any,
-        ai_veto: Any,
+        checklist: ChecklistGate | None,
+        ai_veto: AiVetoGate | None,
         filters: SymbolFilters,
         lease_name: str = "coordinator_worker",
     ) -> None:
@@ -66,6 +78,8 @@ class TradingCoordinator:
         closed_at: datetime,
         quote: Quote,
         features: FeatureSnapshot,
+        context_snapshot: ContextSnapshot | None = None,
+        memory_summaries: tuple[dict[str, object], ...] = (),
         account_scope: str = "default_paper",
     ) -> DecisionOutcome:
         candle_key = f"{symbol}:{closed_at.isoformat()}"
@@ -95,13 +109,18 @@ class TradingCoordinator:
                     if "REGIME_INVALIDATION" in eval_result.reason_codes
                     else ExitReason.AI_RISK_REDUCTION
                 )
-                self.broker.exit_long(
+                closed_trade = self.broker.exit_long(
                     quote,
                     client_order_id=f"exit-{int(closed_at.timestamp())}",
                     reason=exit_reason,
                 )
                 self._processed_candles.add(candle_key)
-                return DecisionOutcome(True, "EXIT_TRIGGERED", eval_result.reason_codes)
+                return DecisionOutcome(
+                    True,
+                    "EXIT_TRIGGERED",
+                    eval_result.reason_codes,
+                    closed_trade=closed_trade,
+                )
 
             self._processed_candles.add(candle_key)
             return DecisionOutcome(False, "POSITION_ALREADY_OPEN", ("POSITION_ALREADY_OPEN",))
@@ -114,14 +133,62 @@ class TradingCoordinator:
 
         # Evidence & Professional Checklist Gate
         if self.checklist is not None:
-            checklist_result = self.checklist.evaluate(features=features, quote=quote)
+            if context_snapshot is None:
+                raise ValueError("context_snapshot is required when checklist gate is enabled")
+            checklist_result = self.checklist.evaluate(
+                ChecklistInputs(
+                    context=context_snapshot,
+                    now=quote.observed_at,
+                    data_healthy=features.sufficient_history and features.contiguous and features.quote_fresh,
+                    exchange_normal=True,
+                    liquidity_acceptable=features.spread_rate <= 0.0015,
+                    regime_clear=True,
+                    deterministic_setup=True,
+                    complete_trade_plan=True,
+                    risk_budget_available=True,
+                    cooldown_clear=True,
+                    event_blackout=False,
+                )
+            )
             if checklist_result.action is not ChecklistAction.PASS:
                 self._processed_candles.add(candle_key)
                 return DecisionOutcome(False, "CHECKLIST_HELD", checklist_result.reason_codes)
 
         # AI Veto Gate
         if self.ai_veto is not None:
-            ai_assessment = self.ai_veto.decide(features=features, quote=quote)
+            ai_assessment = self.ai_veto.decide(
+                DecisionRequest(
+                    candidate=eval_result.action,
+                    strategy_version=active_genome.genome_id,
+                    features={
+                        "previous_close": features.previous_close,
+                        "latest_close": features.latest_close,
+                        "ema20_15m": features.ema20_15m,
+                        "ema50_15m": features.ema50_15m,
+                        "previous_rsi14": features.previous_rsi14,
+                        "rsi14": features.rsi14,
+                        "atr14": features.atr14,
+                        "atr_rate": features.atr_rate,
+                        "volume_ratio": features.volume_ratio,
+                        "spread_rate": features.spread_rate,
+                        "latest_close_1h": features.latest_close_1h,
+                        "ema50_1h": features.ema50_1h,
+                        "ema200_1h": features.ema200_1h,
+                        "ema50_slope_1h": features.ema50_slope_1h,
+                        "consecutive_closes_below_ema50": features.consecutive_closes_below_ema50,
+                        "sufficient_history": features.sufficient_history,
+                        "contiguous": features.contiguous,
+                        "quote_fresh": features.quote_fresh,
+                    },
+                    context={
+                        "content_hash": context_snapshot.content_hash if context_snapshot else "",
+                        "conflict_level": context_snapshot.conflict_level if context_snapshot else "UNKNOWN",
+                        "source_count": len(context_snapshot.sources) if context_snapshot else 0,
+                        "item_count": len(context_snapshot.items) if context_snapshot else 0,
+                    },
+                    memory_summaries=memory_summaries,
+                )
+            )
             if ai_assessment.decision is not AiDecision.APPROVE_ENTRY:
                 self._processed_candles.add(candle_key)
                 return DecisionOutcome(False, "AI_VETO_REJECTED", ai_assessment.reason_codes)

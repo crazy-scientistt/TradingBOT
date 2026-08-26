@@ -12,7 +12,6 @@ Comprehensive REST API and WebSocket layer connecting the complete trading pipel
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 import random
@@ -23,21 +22,26 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from goldguard.ai.decision import DecisionVetoEngine
 from goldguard.backtest.engine import BacktestEngine, FrictionConfig
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
+from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
-from goldguard.domain.enums import ExitReason
 from goldguard.domain.models import Candle, Quote
-from goldguard.market.binance import BinancePublicClient
+from goldguard.market.binance import BinancePublicClient, SymbolFilters
+from goldguard.providers.client import GatewayClient
+from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
+from goldguard.services.runtime import TradingRuntime
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
     GenomeRepository,
@@ -72,14 +76,12 @@ _reflection_repo: ReflectionRepository | None = None
 _broker: PaperBroker | None = None
 _risk_engine: RiskEngine | None = None
 _runtime: GenomeRuntime | None = None
+_trading_runtime: TradingRuntime | None = None
 _backtest_engine: BacktestEngine | None = None
 _bot_state_machine: StateMachine | None = None
 _binance_client: BinancePublicClient | None = None
-
-_bot_task: asyncio.Task[None] | None = None
-_bot_running: bool = False
+_provider_http_client: httpx.AsyncClient | None = None
 _full_autonomy: bool = True
-_circuit_breaker_tripped: bool = False
 
 # Live market memory
 _candles_15m: list[Candle] = []
@@ -95,6 +97,22 @@ def _get_db() -> Database:
     if _db is None:
         raise RuntimeError("Database not initialized")
     return _db
+
+
+def get_trading_runtime() -> TradingRuntime:
+    if _trading_runtime is None:
+        raise RuntimeError("Trading runtime not initialized")
+    return _trading_runtime
+
+
+def _default_symbol_filters() -> SymbolFilters:
+    return SymbolFilters(
+        tick_size=Decimal("0.01"),
+        step_size=Decimal("0.0001"),
+        minimum_quantity=Decimal("0.0001"),
+        maximum_quantity=Decimal("100"),
+        minimum_notional=Decimal("5"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +182,8 @@ def _generate_bootstrap_candles() -> tuple[list[Candle], list[Candle]]:
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _settings, _db, _genome_repo, _ledger_repo
     global _quota_repo, _provider_repo, _reflection_repo
-    global _broker, _risk_engine, _runtime, _backtest_engine, _bot_state_machine
-    global _binance_client, _candles_15m, _candles_1h, _latest_quote
+    global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
+    global _binance_client, _provider_http_client, _candles_15m, _candles_1h, _latest_quote
 
     try:
         _settings = Settings()
@@ -266,6 +284,40 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             observed_at=datetime.now(UTC),
         )
 
+    ai_veto = None
+    if _provider_repo is not None and _settings.gateway_base_url:
+        _provider_http_client = httpx.AsyncClient()
+        ai_veto = DecisionVetoEngine(
+            route_service=RouteService(_provider_repo),
+            gateway_client=GatewayClient(
+                base_url=_settings.gateway_base_url,
+                auth_token=(
+                    _settings.gateway_data_token.get_secret_value()
+                    if _settings.gateway_data_token is not None
+                    else None
+                ),
+                http_client=_provider_http_client,
+            ),
+        )
+
+    if _db is not None and _broker is not None and _genome_repo is not None and _ledger_repo is not None:
+        _trading_runtime = TradingRuntime(
+            database=_db,
+            settings=_settings,
+            broker=_broker,
+            genome_repo=_genome_repo,
+            ledger_repo=_ledger_repo,
+            strategy_runtime=_runtime,
+            risk_engine=_risk_engine,
+            filters=_default_symbol_filters(),
+            state_machine=_bot_state_machine,
+            candles_15m=_candles_15m,
+            candles_1h=_candles_1h,
+            latest_quote=_latest_quote,
+            checklist=ProfessionalChecklist(),
+            ai_veto=ai_veto,
+        )
+
     # Seed mock reflections if none exist
     if _reflection_repo and not _reflection_repo.list_reflections(limit=5):
         _reflection_repo.record_reflection(
@@ -300,12 +352,10 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     yield
 
     # Shutdown
-    global _bot_task, _bot_running
-    if _bot_task is not None and not _bot_task.done():
-        _bot_running = False
-        _bot_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await _bot_task
+    if _trading_runtime is not None:
+        _trading_runtime.shutdown()
+    if _provider_http_client is not None:
+        await _provider_http_client.aclose()
     logger.info("GoldGuard shutdown complete")
 
 
@@ -352,7 +402,7 @@ async def health() -> dict[str, Any]:
         bt, wc = _quota_repo.get_usage(today)
         results["quota"] = {"backtests_today": bt, "web_calls_today": wc}
 
-    results["bot_running"] = _bot_running
+    results["bot_running"] = _trading_runtime.status().running if _trading_runtime else False
     return results
 
 
@@ -361,11 +411,12 @@ async def status() -> dict[str, Any]:
     """Summary of runtime mode, active session, and autonomy configuration."""
     assert _settings is not None
     active_g = _genome_repo.get_active_genome() if _genome_repo else None
+    runtime_status = get_trading_runtime().status() if _trading_runtime else None
     return {
         "environment": _settings.environment,
         "mode": _settings.mode,
         "symbol": _settings.symbol,
-        "bot_running": _bot_running,
+        "bot_running": runtime_status.running if runtime_status else False,
         "full_autonomy": _full_autonomy,
         "active_genome_id": active_g.genome_id if active_g else "trend-pullback-v1",
         "paper_balance": str(_broker.cash if _broker else _settings.paper_starting_balance),
@@ -471,26 +522,27 @@ async def position() -> dict[str, Any]:
     """Current open position details and live 5-step decision pipeline status."""
     assert _broker is not None
     pos = _broker.position
+    runtime_status = get_trading_runtime().status() if _trading_runtime else None
 
     # Dynamic pipeline state based on bot running and position
     pipeline_steps = [
         {
             "stepNumber": 1,
             "label": "Strategy Passed",
-            "status": "completed" if _bot_running else "pending",
+            "status": "completed" if runtime_status and runtime_status.running else "pending",
             "detail": "RSI & EMA trend alignment confirmed",
         },
         {
             "stepNumber": 2,
             "label": "Context Clear",
-            "status": "completed" if _bot_running else "pending",
+            "status": "completed" if runtime_status and runtime_status.running else "pending",
             "detail": "No FOMC blackout or macro veto",
         },
         {
             "stepNumber": 3,
             "label": "AI Veto Approved 84%",
             "status": "active"
-            if (_bot_running and pos is None)
+            if (runtime_status and runtime_status.running and pos is None)
             else ("completed" if pos is not None else "pending"),
             "detail": "Gemini 3.7 Flash approved entry",
         },
@@ -924,13 +976,13 @@ async def probe_providers() -> list[dict[str, Any]]:
 async def bot_state() -> dict[str, Any]:
     """Live state machine status, autonomy flags, and 24h rolling loss rate."""
     active_g = _genome_repo.get_active_genome() if _genome_repo else None
-    state_str = "KILL_SWITCH_ACTIVE" if _circuit_breaker_tripped else "NORMAL"
+    runtime_status = get_trading_runtime().status()
     return {
-        "state": state_str,
+        "state": runtime_status.state.value,
         "full_autonomy": _full_autonomy,
         "daily_loss_percent": 0.45,
         "daily_loss_limit": 3.00,
-        "circuit_breaker_tripped": _circuit_breaker_tripped,
+        "circuit_breaker_tripped": runtime_status.halted,
         "active_genome_id": active_g.genome_id if active_g else "trend-pullback-v1",
     }
 
@@ -938,20 +990,7 @@ async def bot_state() -> dict[str, Any]:
 @app.post("/api/bot/kill-switch")
 async def trigger_kill_switch() -> dict[str, str]:
     """Emergency kill switch: closes position, cancels orders, and halts trading."""
-    global _bot_running, _circuit_breaker_tripped, _bot_task
-    _bot_running = False
-    _circuit_breaker_tripped = True
-    if _bot_task is not None and not _bot_task.done():
-        _bot_task.cancel()
-
-    assert _broker is not None
-    if _broker.position is not None:
-        _broker.exit_long(
-            _latest_quote,
-            client_order_id=f"kill-{int(time.time())}",
-            reason=ExitReason.EMERGENCY,
-        )
-
+    get_trading_runtime().stop()
     logger.warning("EMERGENCY KILL SWITCH ENGAGED — Trading halted and position liquidated")
     return {"status": "kill_switch_engaged"}
 
@@ -975,78 +1014,47 @@ async def revert_baseline() -> dict[str, str]:
     return {"status": "reverted_to_baseline", "active_genome_id": baseline.genome_id}
 
 
-# ---------------------------------------------------------------------------
-# 11. Bot Execution Loop Control
-# ---------------------------------------------------------------------------
-async def _trading_coordinator_loop() -> None:
-    """Trading coordinator background loop executing every closed candle."""
-    global _bot_running, _latest_quote, _candles_15m
-    logger.info("Trading coordinator loop started")
-    try:
-        while _bot_running:
-            # Simulate real tick: update quote with small random fluctuation
-            drift = Decimal(str(round(random.uniform(-0.4, 0.4), 2)))
-            new_bid = max(Decimal("100"), _latest_quote.bid + drift)
-            _latest_quote = Quote(
-                bid=new_bid,
-                ask=new_bid + Decimal("0.20"),
-                observed_at=datetime.now(UTC),
-            )
-
-            # Check open position stop/target triggers
-            if _broker and _broker.position:
-                pos = _broker.position
-                if _latest_quote.bid <= pos.plan.stop:
-                    _broker.exit_long(
-                        _latest_quote,
-                        client_order_id=f"sl-{int(time.time())}",
-                        reason=ExitReason.STOP_LOSS,
-                    )
-                    logger.info("Stop Loss triggered on quote %s", _latest_quote.bid)
-                elif _latest_quote.bid >= pos.plan.target:
-                    _broker.exit_long(
-                        _latest_quote,
-                        client_order_id=f"tp-{int(time.time())}",
-                        reason=ExitReason.TAKE_PROFIT,
-                    )
-                    logger.info("Take Profit triggered on quote %s", _latest_quote.bid)
-
-            await asyncio.sleep(5)
-    except asyncio.CancelledError:
-        logger.info("Trading coordinator loop cancelled")
-    finally:
-        _bot_running = False
-        logger.info("Trading coordinator loop stopped")
-
-
 @app.post("/api/bot/start")
 async def start_bot() -> dict[str, str]:
-    """Start autonomous trading loop."""
-    global _bot_task, _bot_running, _circuit_breaker_tripped
-    if _bot_running:
+    """Arm the paper runtime for new closed-candle evaluations."""
+    runtime = get_trading_runtime()
+    if runtime.status().running and not runtime.status().paused:
         return {"status": "already_running"}
-    _circuit_breaker_tripped = False
-    _bot_running = True
-    _bot_task = asyncio.create_task(_trading_coordinator_loop())
+    try:
+        runtime.start()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "started"}
+
+
+@app.post("/api/bot/pause")
+async def pause_bot() -> dict[str, str]:
+    """Pause new paper entries while preserving protective monitoring."""
+    runtime = get_trading_runtime()
+    runtime.pause()
+    return {"status": "paused"}
 
 
 @app.post("/api/bot/stop")
 async def stop_bot() -> dict[str, str]:
-    """Stop autonomous trading loop."""
-    global _bot_task, _bot_running
-    if not _bot_running:
+    """Halt the paper runtime and keep the halted flag across restarts."""
+    runtime = get_trading_runtime()
+    if runtime.status().halted:
         return {"status": "already_stopped"}
-    _bot_running = False
-    if _bot_task is not None and not _bot_task.done():
-        _bot_task.cancel()
+    runtime.stop()
     return {"status": "stopped"}
 
 
 @app.get("/api/bot/status")
 async def bot_status() -> dict[str, Any]:
     """Status of the autonomous trading loop."""
-    return {"running": _bot_running}
+    runtime_status = get_trading_runtime().status()
+    return {
+        "running": runtime_status.running,
+        "paused": runtime_status.paused,
+        "halted": runtime_status.halted,
+        "state": runtime_status.state.value,
+    }
 
 
 # ---------------------------------------------------------------------------
