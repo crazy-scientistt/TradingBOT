@@ -1,6 +1,7 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,6 +12,65 @@ def _reject_binary_float(value: Any) -> Any:
     if isinstance(value, float):
         raise ValueError("money must be supplied as a decimal string or Decimal")
     return value
+
+
+@dataclass(frozen=True)
+class MoneyRange:
+    """Validator helper for bounded decimal ranges."""
+
+    minimum: Decimal
+    maximum: Decimal
+
+    def __post_init__(self) -> None:
+        _reject_binary_float(self.minimum)
+        _reject_binary_float(self.maximum)
+        if self.maximum < self.minimum:
+            raise ValueError("maximum must be greater than or equal to minimum")
+
+    def validate(self, value: Any) -> Decimal:
+        _reject_binary_float(value)
+        dec_val = Decimal(str(value)) if not isinstance(value, Decimal) else value
+        if dec_val < self.minimum:
+            raise ValueError(f"value {dec_val} is below minimum {self.minimum}")
+        if dec_val > self.maximum:
+            raise ValueError(f"value {dec_val} is above maximum {self.maximum}")
+        return dec_val
+
+
+class RiskLimitPreset(BaseModel):
+    """Versioned, immutable record of risk ceilings.
+
+    A promoted strategy genome may mutate strategy parameters, but ONLY a human
+    with a new preset version may mutate risk ceilings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    preset_id: str
+    version: int = Field(ge=1)
+    max_risk_per_trade: Decimal = Field(gt=0, le=Decimal("0.02"))
+    max_daily_loss: Decimal = Field(gt=0, le=Decimal("0.10"))
+    max_peak_drawdown: Decimal = Field(gt=0, le=Decimal("0.20"))
+    max_consecutive_losses: int = Field(ge=1, le=20)
+    cooldown_minutes: int = Field(ge=1, le=10080)
+    loss_cooldown_minutes: int = Field(ge=1, le=10080)
+    created_by: Literal["human"] = "human"
+
+    @field_validator(
+        "max_risk_per_trade",
+        "max_daily_loss",
+        "max_peak_drawdown",
+        mode="before",
+    )
+    @classmethod
+    def reject_float_money(cls, value: Any) -> Any:
+        return _reject_binary_float(value)
+
+    @model_validator(mode="after")
+    def validate_preset_relationships(self) -> Self:
+        if self.max_peak_drawdown <= self.max_daily_loss:
+            raise ValueError("max peak drawdown must exceed max daily loss")
+        return self
 
 
 class Candle(BaseModel):

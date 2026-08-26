@@ -18,6 +18,10 @@ class BotState(StrEnum):
     DATA_HALTED = "DATA_HALTED"
     RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
     EMERGENCY_STOPPED = "EMERGENCY_STOPPED"
+    # Autonomy & research lifecycle states
+    RESEARCH_ACTIVE = "RESEARCH_ACTIVE"
+    AUTONOMY_SUSPENDED = "AUTONOMY_SUSPENDED"
+    QUARANTINE = "QUARANTINE"
 
 
 class CandidateAction(StrEnum):
