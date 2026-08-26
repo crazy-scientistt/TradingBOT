@@ -1,11 +1,20 @@
 import hashlib
+import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from goldguard.domain.models import Candle
 
 INTERVAL_MILLISECONDS = {"15m": 15 * 60 * 1000, "1h": 60 * 60 * 1000}
+
+
+class DatasetStatus(StrEnum):
+    DOWNLOADING = "DOWNLOADING"
+    VERIFIED = "VERIFIED"
+    CORRUPT = "CORRUPT"
 
 
 @dataclass(frozen=True)
@@ -28,6 +37,22 @@ class DatasetManifest:
     duplicate_intervals: int
     checksum: str
     verified: bool
+
+
+@dataclass(frozen=True)
+class BootstrapManifest:
+    symbol: str
+    requested_start: datetime
+    requested_end: datetime
+    actual_start: datetime
+    actual_end: datetime
+    warmup_days: int
+    warmup_included: bool
+    status: DatasetStatus
+    timeframe_checksums: dict[str, str]
+    timeframe_counts: dict[str, int]
+    checksum: str
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -132,7 +157,7 @@ class HistoryDownloader:
             if not page:
                 break
             for item in page:
-                if start <= item.open_time < end:
+                if start <= item.open_time < end and item.closed:
                     by_open_time.setdefault(item.open_time, item)
             last_open_ms = max(_datetime_to_ms(item.open_time) for item in page)
             next_cursor = last_open_ms + interval_ms
@@ -156,3 +181,99 @@ class HistoryDownloader:
             verified=verification.verified,
         )
         return HistoryResult(candles=candles, manifest=manifest)
+
+
+async def bootstrap_history(
+    *,
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    timeframes: tuple[str, ...] = ("15m", "1h"),
+    warmup_days: int = 30,
+    client: KlineClient,
+    storage_dir: Path,
+) -> BootstrapManifest:
+    """Resumably bootstrap multi-timeframe market history including warmup period."""
+    actual_start = start - timedelta(days=warmup_days)
+    downloader = HistoryDownloader(client)
+
+    dataset_dir = storage_dir / "market" / symbol
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+    manifest_file = dataset_dir / "manifest.json"
+
+    tf_checksums: dict[str, str] = {}
+    tf_counts: dict[str, int] = {}
+    all_verified = True
+
+    for tf in timeframes:
+        start_str = actual_start.strftime("%Y%m%d")
+        end_str = end.strftime("%Y%m%d")
+        tf_file = dataset_dir / f"{tf}_{start_str}_{end_str}.json"
+        candles: list[Candle] = []
+
+        if tf_file.exists():
+            try:
+                raw_data = json.loads(tf_file.read_text(encoding="utf-8"))
+                candles = [Candle.model_validate(c) for c in raw_data]
+                v_res = verify_candles(candles, tf)
+                if v_res.verified:
+                    tf_checksums[tf] = _checksum(tuple(candles))
+                    tf_counts[tf] = len(candles)
+                    continue
+            except Exception:
+                candles = []
+
+        # Download if absent or invalid
+        res = await downloader.fetch(
+            symbol=symbol,
+            timeframe=tf,
+            start=actual_start,
+            end=end,
+        )
+        if not res.manifest.verified:
+            all_verified = False
+
+        tf_checksums[tf] = res.manifest.checksum
+        tf_counts[tf] = res.manifest.candle_count
+
+        # Save to disk
+        dump_data = [c.model_dump(mode="json") for c in res.candles]
+        tf_file.write_text(json.dumps(dump_data, default=str), encoding="utf-8")
+
+    combined_hash = hashlib.sha256(
+        "|".join(f"{k}:{v}" for k, v in sorted(tf_checksums.items())).encode()
+    ).hexdigest()
+
+    status = DatasetStatus.VERIFIED if all_verified else DatasetStatus.CORRUPT
+
+    manifest = BootstrapManifest(
+        symbol=symbol,
+        requested_start=start,
+        requested_end=end,
+        actual_start=actual_start,
+        actual_end=end,
+        warmup_days=warmup_days,
+        warmup_included=True,
+        status=status,
+        timeframe_checksums=tf_checksums,
+        timeframe_counts=tf_counts,
+        checksum=combined_hash,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+
+    manifest_dict = {
+        "symbol": manifest.symbol,
+        "requested_start": manifest.requested_start.isoformat(),
+        "requested_end": manifest.requested_end.isoformat(),
+        "actual_start": manifest.actual_start.isoformat(),
+        "actual_end": manifest.actual_end.isoformat(),
+        "warmup_days": manifest.warmup_days,
+        "warmup_included": manifest.warmup_included,
+        "status": manifest.status.value,
+        "timeframe_checksums": manifest.timeframe_checksums,
+        "timeframe_counts": manifest.timeframe_counts,
+        "checksum": manifest.checksum,
+        "created_at": manifest.created_at,
+    }
+    manifest_file.write_text(json.dumps(manifest_dict, indent=2), encoding="utf-8")
+    return manifest
