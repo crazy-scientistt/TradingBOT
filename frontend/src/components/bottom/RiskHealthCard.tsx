@@ -11,11 +11,11 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items }) => {
   const getIcon = (iconType: string) => {
     switch (iconType) {
       case 'database':
-        return <Database size={14} color="#94a3b8" />;
+        return <Database size={14} color="#9498a4" />;
       case 'lease':
-        return <FileText size={14} color="#94a3b8" />;
+        return <FileText size={14} color="#9498a4" />;
       case 'gemini':
-        return <Link2 size={14} color="#94a3b8" />;
+        return <Link2 size={14} color="#9498a4" />;
       case 'hermes':
         return <HermesIcon size={14} className="text-secondary" />;
       default:
@@ -26,7 +26,7 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items }) => {
   return (
     <div className="dashboard-card" style={{ flex: 1, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       {/* Header */}
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
         RISK & HEALTH
       </div>
 
@@ -49,7 +49,7 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items }) => {
               }}
             >
               {/* Left icon + label */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '9px', color: '#e2e8f0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '9px', color: '#e2e4e8' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '16px' }}>
                   {getIcon(item.icon)}
                 </div>

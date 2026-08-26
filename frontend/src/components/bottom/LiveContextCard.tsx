@@ -16,7 +16,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
             width: '26px',
             height: '26px',
             borderRadius: '50%',
-            backgroundColor: '#172554',
+            backgroundColor: '#122338',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -31,7 +31,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
             width: '26px',
             height: '26px',
             borderRadius: '50%',
-            backgroundColor: '#172554',
+            backgroundColor: '#122338',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -63,7 +63,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
   return (
     <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       {/* Header */}
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
         LIVE CONTEXT
       </div>
 
@@ -78,7 +78,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
               </div>
               <div style={{ fontSize: '10.5px', color: '#38bdf8' }}>
                 <span style={{ cursor: 'pointer' }}>{item.source}</span>
-                <span style={{ color: '#64748b', margin: '0 4px' }}>·</span>
+                <span style={{ color: '#676b78', margin: '0 4px' }}>·</span>
                 <span style={{ color: '#38bdf8' }}>{item.time}</span>
               </div>
             </div>
