@@ -1,0 +1,171 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-app: #08090b;
+  --bg-sidebar: #090a0c;
+  --bg-card: #121316;
+  --bg-card-header: #15161a;
+  --bg-card-hover: #18191d;
+  --border-color: #1f2127;
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-focus: #d4a017;
+  
+  --gold-primary: #f0b90b;
+  --gold-accent: #e5a93c;
+  --gold-dark: #b8860b;
+  --gold-bg-subtle: rgba(240, 185, 11, 0.08);
+  --gold-border: rgba(240, 185, 11, 0.35);
+
+  --green-bull: #22c55e;
+  --green-dark: #16a34a;
+  --green-bg-subtle: rgba(34, 197, 94, 0.12);
+  --green-border: rgba(34, 197, 94, 0.35);
+
+  --red-bear: #ef4444;
+  --red-dark: #dc2626;
+  --red-bg-subtle: rgba(239, 68, 68, 0.12);
+
+  --blue-ema: #38bdf8;
+  --blue-link: #38bdf8;
+
+  --text-main: #f8fafc;
+  --text-secondary: #9498a4;
+  --text-muted: #676b78;
+  --text-dim: #454853;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  background-color: var(--bg-app);
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-app);
+}
+::-webkit-scrollbar-thumb {
+  background: #202228;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2c2f37;
+}
+
+/* Utilities */
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+.text-gold {
+  color: var(--gold-primary);
+}
+
+.text-green {
+  color: var(--green-bull);
+}
+
+.text-red {
+  color: var(--red-bear);
+}
+
+.text-blue {
+  color: var(--blue-ema);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+/* Cards standard style - Pure obsidian dark tone */
+.dashboard-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.dashboard-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Badges */
+.badge-paper {
+  background: var(--gold-bg-subtle);
+  border: 1px solid var(--gold-border);
+  color: var(--gold-primary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: uppercase;
+}
+
+.badge-live {
+  background: var(--green-bg-subtle);
+  border: 1px solid var(--green-border);
+  color: var(--green-bull);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Glow effects */
+.glow-gold {
+  filter: drop-shadow(0 0 6px rgba(240, 185, 11, 0.4));
+}
+
+.glow-blue {
+  filter: drop-shadow(0 0 6px rgba(56, 189, 248, 0.4));
+}
+
+.glow-green {
+  filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.4));
+}
