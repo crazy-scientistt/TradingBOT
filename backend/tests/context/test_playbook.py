@@ -30,6 +30,7 @@ def fresh_context() -> ContextSnapshot:
                 contradictory=False,
             ),
         ),
+        conflict_level="LOW",
     )
 
 
@@ -109,10 +110,10 @@ def test_stale_uncited_conflicting_or_injected_context_holds() -> None:
 
     conflicting = replace(
         fresh_context(),
-        items=(replace(fresh_context().items[0], contradictory=True),),
+        conflict_level="HIGH",
     )
     assert checklist.evaluate(replace(valid_inputs(), context=conflicting)).reason_codes == (
-        "CONTRADICTORY_CONTEXT",
+        "CONTEXT_CONFLICT_HIGH",
     )
 
     injected = replace(fresh_context(), prompt_injection_suspected=True)

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import urlparse
 
-PRIMARY_DOMAINS = (
+TIER_1_DOMAINS = (
     "federalreserve.gov",
     "bls.gov",
     "bea.gov",
@@ -14,17 +14,34 @@ PRIMARY_DOMAINS = (
     "paxos.com",
     "binance.com",
     "developers.binance.com",
+)
+
+TIER_2_DOMAINS = (
+    "reuters.com",
+    "bloomberg.com",
+    "ft.com",
+    "wsj.com",
+    "apnews.com",
+)
+
+TIER_3_DOMAINS = (
+    "coindesk.com",
+    "kitco.com",
     "gold.org",
+    "cointelegraph.com",
+    "tradingview.com",
 )
 
 
 def source_tier(url: str) -> int:
     hostname = (urlparse(url).hostname or "").lower()
-    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in PRIMARY_DOMAINS):
+    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in TIER_1_DOMAINS):
         return 1
-    if hostname.endswith(("reuters.com", "apnews.com", "ft.com", "wsj.com")):
+    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in TIER_2_DOMAINS):
         return 2
-    return 3
+    if any(hostname == domain or hostname.endswith(f".{domain}") for domain in TIER_3_DOMAINS):
+        return 3
+    return 4
 
 
 def require_utc(value: datetime, label: str) -> datetime:
@@ -45,7 +62,9 @@ class ContextSource:
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("context source must use an absolute HTTPS URL")
         if self.published_at is not None:
-            object.__setattr__(self, "published_at", require_utc(self.published_at, "published_at"))
+            object.__setattr__(
+                self, "published_at", require_utc(self.published_at, "published_at")
+            )
         object.__setattr__(self, "tier", source_tier(self.url))
 
 
@@ -63,7 +82,9 @@ class ContextItem:
         if not self.summary.strip() or len(self.summary) > 500:
             raise ValueError("context summary must contain 1-500 characters")
         if self.published_at is not None:
-            object.__setattr__(self, "published_at", require_utc(self.published_at, "published_at"))
+            object.__setattr__(
+                self, "published_at", require_utc(self.published_at, "published_at")
+            )
 
 
 @dataclass(frozen=True)
@@ -72,6 +93,7 @@ class ContextSnapshot:
     sources: tuple[ContextSource, ...]
     items: tuple[ContextItem, ...]
     content_hash: str
+    conflict_level: str = "LOW"
     prompt_injection_suspected: bool = False
 
     def __post_init__(self) -> None:
@@ -84,6 +106,7 @@ class ContextSnapshot:
         fetched_at: datetime,
         sources: tuple[ContextSource, ...],
         items: tuple[ContextItem, ...],
+        conflict_level: str = "LOW",
         prompt_injection_suspected: bool = False,
     ) -> "ContextSnapshot":
         canonical = json.dumps(
@@ -91,6 +114,7 @@ class ContextSnapshot:
                 "fetched_at": fetched_at.isoformat(),
                 "sources": [asdict(source) for source in sources],
                 "items": [asdict(item) for item in items],
+                "conflict_level": conflict_level,
                 "prompt_injection_suspected": prompt_injection_suspected,
             },
             default=str,
@@ -102,5 +126,6 @@ class ContextSnapshot:
             sources=sources,
             items=items,
             content_hash=hashlib.sha256(canonical.encode()).hexdigest(),
+            conflict_level=conflict_level,
             prompt_injection_suspected=prompt_injection_suspected,
         )

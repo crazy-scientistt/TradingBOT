@@ -57,6 +57,8 @@ class ProfessionalChecklist:
             return "MACRO_EVENT_BLACKOUT"
         if inputs.now - inputs.context.fetched_at > self.max_context_age:
             return "STALE_CONTEXT"
+        if inputs.context.conflict_level == "HIGH":
+            return "CONTEXT_CONFLICT_HIGH"
         if not inputs.context.items or not inputs.context.sources:
             return "UNCITED_CONTEXT"
         for item in inputs.context.items:
