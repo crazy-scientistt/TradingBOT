@@ -64,6 +64,11 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 
     _settings = Settings()
     data_dir = _settings.data_dir
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        data_dir = Path("./data")
+        data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "goldguard.db"
     logger.info("Starting GoldGuard — env=%s mode=%s db=%s",
                 _settings.environment, _settings.mode, db_path)
@@ -349,7 +354,15 @@ async def list_audit(limit: int = 50) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Frontend static files (served from built frontend dist/)
 # ---------------------------------------------------------------------------
-_frontend_dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+_possible_dists = [
+    Path(__file__).resolve().parents[3] / "frontend" / "dist",
+    Path.cwd() / "frontend" / "dist",
+    Path("/app/frontend/dist"),
+]
+_frontend_dist = next(
+    (p for p in _possible_dists if (p / "index.html").exists()),
+    _possible_dists[0],
+)
 
 
 @app.get("/", response_model=None)
