@@ -2,11 +2,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-
 from goldguard.backtest.walk_forward import (
     HoldoutQuarantineError,
-    WFWindows,
     WalkForwardHarness,
+    WFWindows,
 )
 from goldguard.domain.models import Candle
 from goldguard.strategy.genome import trend_pullback_v1

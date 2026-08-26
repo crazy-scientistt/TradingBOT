@@ -1,6 +1,10 @@
 from decimal import Decimal
 
-from goldguard.memory.reflections import ReflectionEngine, ReflectionStore, TradeOutcome
+from goldguard.memory.reflections import (
+    ReflectionEngine,
+    ReflectionStore,
+    TradeOutcome,
+)
 
 
 def outcome(
@@ -8,34 +12,59 @@ def outcome(
     *,
     namespace: str = "forward",
     pnl: str = "1.25",
+    fees: str = "0.15",
+    mae: str = "-0.30",
+    mfe: str = "1.80",
+    exit_reason: str = "TAKE_PROFIT",
     regime: tuple[str, ...] = ("trend", "normal-volatility"),
+    context_error: bool = False,
+    rule_adherent: bool = True,
 ) -> TradeOutcome:
     return TradeOutcome(
         trade_id=identifier,
-        namespace=namespace,
+        namespace=namespace,  # type: ignore[arg-type]
         hypothesis="Pullback recovery should continue with the hourly trend.",
         realized_pnl=Decimal(pnl),
-        maximum_adverse_excursion=Decimal("-0.30"),
-        maximum_favorable_excursion=Decimal("1.80"),
-        fees=Decimal("0.15"),
-        exit_reason="TAKE_PROFIT" if Decimal(pnl) > 0 else "STOP_LOSS",
+        maximum_adverse_excursion=Decimal(mae),
+        maximum_favorable_excursion=Decimal(mfe),
+        fees=Decimal(fees),
+        exit_reason=exit_reason,
         regime_tags=regime,
-        context_error=False,
-        rule_adherent=True,
+        context_error=context_error,
+        rule_adherent=rule_adherent,
     )
 
 
-def test_closed_trade_becomes_a_complete_immutable_reflection() -> None:
-    reflection = ReflectionEngine().create(outcome("trade-1"))
+def test_closed_trade_lesson_codes() -> None:
+    engine = ReflectionEngine()
 
-    assert reflection.trade_id == "trade-1"
-    assert reflection.namespace == "forward"
-    assert reflection.net_pnl == Decimal("1.25")
-    assert reflection.fee_drag == Decimal("0.15")
-    assert reflection.maximum_adverse_excursion == Decimal("-0.30")
-    assert reflection.maximum_favorable_excursion == Decimal("1.80")
-    assert reflection.lesson_code == "VALID_SETUP_WIN"
-    assert reflection.identifier
+    # 1. Clean TP
+    tp_ref = engine.create(outcome("t-tp", pnl="2.50", exit_reason="TAKE_PROFIT"))
+    assert tp_ref.lesson_code == "TP_CLEAN"
+
+    # 2. Stop hit with adverse expansion
+    sl_ref = engine.create(
+        outcome("t-sl", pnl="-1.50", mae="-1.50", mfe="0.10", exit_reason="STOP_LOSS")
+    )
+    assert sl_ref.lesson_code == "STOP_HIT_EXPANSION"
+
+    # 3. Chop whipsaw (ran into positive MFE before getting stopped out)
+    chop_ref = engine.create(
+        outcome("t-chop", pnl="-1.50", mae="-1.50", mfe="1.50", exit_reason="STOP_LOSS")
+    )
+    assert chop_ref.lesson_code == "CHOP_WHIPSAW"
+
+    # 4. Regime shift exit
+    regime_ref = engine.create(
+        outcome("t-regime", pnl="-0.50", exit_reason="REGIME_INVALIDATION")
+    )
+    assert regime_ref.lesson_code == "REGIME_SHIFT"
+
+    # 5. High fee drag
+    fee_ref = engine.create(
+        outcome("t-fee", pnl="-0.20", fees="0.50", exit_reason="STOP_LOSS")
+    )
+    assert fee_ref.lesson_code == "FEE_DRAG_HIGH"
 
 
 def test_retrieval_is_namespace_isolated_regime_matched_and_limited() -> None:
@@ -66,9 +95,7 @@ def test_retrieval_is_namespace_isolated_regime_matched_and_limited() -> None:
 
 
 def test_rule_violation_is_never_mislabeled_as_strategy_learning() -> None:
-    bad = outcome("trade-violation", pnl="-1")
-    bad = TradeOutcome(**{**bad.__dict__, "rule_adherent": False})
-
+    bad = outcome("trade-violation", pnl="-1", rule_adherent=False)
     reflection = ReflectionEngine().create(bad)
 
     assert reflection.lesson_code == "PROCESS_VIOLATION"

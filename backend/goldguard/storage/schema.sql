@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS equity_snapshots (
 
 CREATE TABLE IF NOT EXISTS reflections (
     id TEXT PRIMARY KEY,
-    trade_id TEXT NOT NULL REFERENCES trades(id),
+    trade_id TEXT NOT NULL,
     namespace TEXT NOT NULL CHECK (namespace IN ('historical', 'forward')),
     lesson_code TEXT NOT NULL DEFAULT 'GENERAL',
     lesson TEXT NOT NULL DEFAULT '',
