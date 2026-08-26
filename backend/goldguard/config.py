@@ -2,7 +2,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -35,9 +35,47 @@ class Settings(BaseSettings):
     slippage_rate: Decimal = Field(default=Decimal("0.0002"), ge=0, le=Decimal("0.01"))
     maximum_spread_rate: Decimal = Field(default=Decimal("0.0015"), gt=0, le=Decimal("0.01"))
 
+    # Autonomy & research bounds
+    autopromotion_enabled: bool = False
+    research_backtest_max_per_day: int = Field(default=8, ge=1)
+    research_backtest_seconds_per_call: int = Field(default=300, ge=10)
+    research_candles_max_per_call: int = Field(default=50_000, ge=100)
+    research_web_calls_max_per_day: int = Field(default=50, ge=1)
+
+    # Provider Gateway (OpenCodex / unified provider hub)
+    gateway_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOLDGUARD_GATEWAY_BASE_URL", "OPENCODEX_BASE_URL"),
+    )
+    gateway_data_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOLDGUARD_GATEWAY_DATA_TOKEN", "OPENCODEX_API_AUTH_TOKEN"),
+        repr=False,
+    )
+    gateway_management_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOLDGUARD_GATEWAY_MANAGEMENT_TOKEN", "OPENCODEX_ADMIN_AUTH_TOKEN"
+        ),
+        repr=False,
+    )
+
+    # Hermes Agent service & bridge
+    hermes_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOLDGUARD_HERMES_BASE_URL", "HERMES_BASE_URL"),
+    )
+    hermes_bridge_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOLDGUARD_HERMES_BRIDGE_TOKEN", "HERMES_API_KEY"),
+        repr=False,
+    )
+
+    # Live trading constraints
     live_capability_enabled: bool = False
     live_max_capital: Decimal = Field(default=Decimal("0"), ge=0)
 
+    # Legacy & session secrets
     session_secret: SecretStr = Field(
         default=SecretStr("development-only-change-me"),
         repr=False,
@@ -67,8 +105,11 @@ class Settings(BaseSettings):
     def validate_safety_gates(self) -> Self:
         if self.live_capability_enabled and self.live_max_capital <= 0:
             raise ValueError("live capability requires a positive live capital ceiling")
-        if self.mode == "live" and not self.live_capability_enabled:
-            raise ValueError("live mode requires the server live-capability gate")
+        if self.mode == "live":
+            if not self.live_capability_enabled:
+                raise ValueError("live mode requires the server live-capability gate")
+            if not self.gateway_data_token:
+                raise ValueError("live mode requires gateway data token to route decisions")
         if (
             self.environment == "production"
             and self.session_secret.get_secret_value() == "development-only-change-me"
