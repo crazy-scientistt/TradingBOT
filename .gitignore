@@ -1,20 +1,35 @@
+# Environment variables & secrets
 .env
 .env.*
 !.env.example
-data/
+
+# Data & SQLite databases
+data/*
+!data/.gitkeep
 *.db
 *.db-shm
 *.db-wal
+gateway/data/
+hermes-data/
+
+# Python cache & virtual environments
 __pycache__/
 .venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Frontend dependencies & builds
 node_modules/
 dist/
+frontend/dist/
 *.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
+
+# Test & report artifacts
 playwright-report/
 test-results/
+reports/*.json
+!reports/.gitkeep
 .worktrees/
