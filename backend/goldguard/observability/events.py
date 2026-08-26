@@ -95,6 +95,7 @@ class EventBus:
     def recent(self, limit: int = 30) -> tuple[AgentEvent, ...]:
         if limit <= 0:
             return ()
+        limit = min(limit, 30)
         cutoff = datetime.now(UTC) - self._routine_ttl
         events = [
             event
