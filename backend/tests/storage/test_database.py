@@ -14,7 +14,7 @@ def test_migration_enables_wal_foreign_keys_and_integrity(tmp_path) -> None:
         tables = {
             row[0]
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
             ).fetchall()
         }
 
@@ -32,6 +32,14 @@ def test_migration_enables_wal_foreign_keys_and_integrity(tmp_path) -> None:
         "shadow_runs",
         "hermes_events",
         "audit_events",
+        "providers",
+        "model_routes",
+        "active_routes",
+        "genomes",
+        "evaluations",
+        "promotions",
+        "research_quota",
+        "research_events",
     }.issubset(tables)
     assert database.integrity_check() == "ok"
 

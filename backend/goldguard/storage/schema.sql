@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT OR IGNORE INTO schema_migrations(version, applied_at)
-VALUES (1, strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'));
+VALUES (2, strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'));
 
 CREATE TABLE IF NOT EXISTS settings_versions (
     id TEXT PRIMARY KEY,
@@ -174,6 +174,14 @@ CREATE TABLE IF NOT EXISTS reflections (
     id TEXT PRIMARY KEY,
     trade_id TEXT NOT NULL REFERENCES trades(id),
     namespace TEXT NOT NULL CHECK (namespace IN ('historical', 'forward')),
+    lesson_code TEXT NOT NULL DEFAULT 'GENERAL',
+    lesson TEXT NOT NULL DEFAULT '',
+    regime_tags_json TEXT NOT NULL DEFAULT '[]',
+    net_pnl_text TEXT NOT NULL DEFAULT '0',
+    fee_drag_text TEXT NOT NULL DEFAULT '0',
+    mae_text TEXT NOT NULL DEFAULT '0',
+    mfe_text TEXT NOT NULL DEFAULT '0',
+    exit_reason TEXT NOT NULL DEFAULT 'TAKE_PROFIT',
     payload_json TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -238,6 +246,83 @@ CREATE TABLE IF NOT EXISTS audit_events (
     details_json TEXT NOT NULL
 );
 
+-- Storage v2 additions: Providers, Model Routes, Genomes, Evaluations, Promotions, Quotas
+
+CREATE TABLE IF NOT EXISTS providers (
+    name TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    key_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL,
+    last_probe_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_routes (
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL CHECK (role IN ('decision', 'context', 'hermes')),
+    provider TEXT NOT NULL REFERENCES providers(name),
+    model TEXT NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 1,
+    version INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE VIEW IF NOT EXISTS active_routes AS
+SELECT r.* FROM model_routes r
+INNER JOIN (
+    SELECT role, MAX(version) as max_version
+    FROM model_routes
+    GROUP BY role
+) latest ON r.role = latest.role AND r.version = latest.max_version;
+
+CREATE TABLE IF NOT EXISTS genomes (
+    genome_id TEXT PRIMARY KEY,
+    genome_hash TEXT NOT NULL UNIQUE,
+    parent_id TEXT REFERENCES genomes(genome_id),
+    origin TEXT NOT NULL CHECK (origin IN ('baseline', 'hermes', 'human')),
+    status TEXT NOT NULL CHECK (status IN ('candidate', 'shadow', 'active', 'quarantined', 'retired')),
+    hypothesis TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    genome_id TEXT NOT NULL REFERENCES genomes(genome_id),
+    partition TEXT NOT NULL CHECK (partition IN ('development', 'validation', 'holdout')),
+    window TEXT NOT NULL,
+    metrics_json TEXT NOT NULL,
+    run_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(genome_id, partition, window, run_hash)
+);
+
+CREATE TABLE IF NOT EXISTS promotions (
+    promotion_id TEXT PRIMARY KEY,
+    genome_id TEXT NOT NULL REFERENCES genomes(genome_id),
+    promoted_by TEXT NOT NULL CHECK (promoted_by IN ('gate', 'human')),
+    mode TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+    gate_report_json TEXT NOT NULL,
+    at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS research_quota (
+    date TEXT PRIMARY KEY,
+    backtests_used INTEGER NOT NULL DEFAULT 0,
+    web_calls_used INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS research_events (
+    event_id TEXT PRIMARY KEY,
+    tool TEXT NOT NULL,
+    bytes_out INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL
+);
+
+-- Immutability triggers
 CREATE TRIGGER IF NOT EXISTS settings_versions_no_update
 BEFORE UPDATE ON settings_versions BEGIN
     SELECT RAISE(ABORT, 'settings versions are immutable');
@@ -266,4 +351,14 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 BEFORE DELETE ON audit_events BEGIN
     SELECT RAISE(ABORT, 'audit events are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS reflections_no_update
+BEFORE UPDATE ON reflections BEGIN
+    SELECT RAISE(ABORT, 'reflections are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS reflections_no_delete
+BEFORE DELETE ON reflections BEGIN
+    SELECT RAISE(ABORT, 'reflections are immutable');
 END;
