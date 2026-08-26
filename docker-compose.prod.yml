@@ -1,19 +1,20 @@
 version: "3.8"
 
 services:
-  opencodex:
-    image: python:3.11-slim
-    container_name: goldguard-opencodex-gateway
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: goldguard-gateway
     restart: unless-stopped
-    command: python -m uvicorn gateway.app:app --host 0.0.0.0 --port 10100
     environment:
       - PORT=10100
-      - OPENCODEX_PROVIDER=google-antigravity
-      - GEMINI_MODEL=gemini-3.7-flash
+      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN}
+      - OPENCODEX_ADMIN_AUTH_TOKEN=${OPENCODEX_ADMIN_AUTH_TOKEN}
     ports:
       - "10100:10100"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:10100/healthz')"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:10100/healthz"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -25,34 +26,29 @@ services:
     container_name: goldguard-backend
     restart: unless-stopped
     depends_on:
-      opencodex:
-        condition: service_started
+      gateway:
+        condition: service_healthy
     environment:
       - GOLDGUARD_MODE=paper
-      - GOLDGUARD_DB_PATH=/app/data/goldguard.db
-      - GOLDGUARD_GATEWAY_URL=http://opencodex:10100
-      - GOLDGUARD_DEFAULT_MODEL=google-antigravity/gemini-3.7-flash
-      - GOLDGUARD_AUTONOMY_ENABLED=true
+      - GOLDGUARD_ENVIRONMENT=production
+      - GOLDGUARD_DATA_DIR=/data
+      - GOLDGUARD_SESSION_SECRET=${GOLDGUARD_SESSION_SECRET}
+      - GOLDGUARD_LIVE_CAPABILITY_ENABLED=false
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENCODEX_BASE_URL=http://gateway:10100
+      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN}
+      - HERMES_API_KEY=${HERMES_API_KEY}
+      - PORT=8000
     volumes:
-      - goldguard_data:/app/data
+      - goldguard_data:/data
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "python", "scripts/health_check.py", "--db", "/app/data/goldguard.db", "--gateway-url", "http://opencodex:10100"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: goldguard-frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    ports:
-      - "5173:80"
 
 volumes:
   goldguard_data:
