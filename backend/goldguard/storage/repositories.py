@@ -3,10 +3,12 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
 from goldguard.storage.database import Database
+from goldguard.observability.events import AgentEvent
 from goldguard.strategy.genome import StrategyGenome, genome_hash
 
 
@@ -147,6 +149,49 @@ class LedgerRepository:
         if row is None:
             raise RuntimeError("decision count returned no row")
         return int(row[0])
+
+
+class AgentEventRepository:
+    """Durable sink for audit-worthy agent events."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def save(self, event: AgentEvent) -> None:
+        if not event.audit_worthy:
+            return
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO agent_events "
+                "(event_id, action, reason, reason_codes_json, payload_json, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    event.event_id,
+                    event.action,
+                    event.reason,
+                    canonical_json(event.reason_codes),
+                    canonical_json(dict(event.payload)),
+                    event.occurred_at.isoformat(),
+                ),
+            )
+
+    def list_events(self, limit: int = 30) -> tuple[AgentEvent, ...]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM agent_events ORDER BY occurred_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return tuple(
+            AgentEvent(
+                event_id=str(row["event_id"]),
+                action=str(row["action"]),
+                reason=str(row["reason"]),
+                reason_codes=tuple(json.loads(row["reason_codes_json"])),
+                payload=MappingProxyType(json.loads(row["payload_json"])),
+                occurred_at=datetime.fromisoformat(row["occurred_at"]),
+                audit_worthy=True,
+            )
+            for row in rows
+        )
 
 
 class GenomeRepository:

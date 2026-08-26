@@ -246,6 +246,15 @@ CREATE TABLE IF NOT EXISTS audit_events (
     details_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_events (
+    event_id TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    reason_codes_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    occurred_at TEXT NOT NULL
+);
+
 -- Storage v2 additions: Providers, Model Routes, Genomes, Evaluations, Promotions, Quotas
 
 CREATE TABLE IF NOT EXISTS providers (
@@ -351,6 +360,16 @@ END;
 CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
 BEFORE DELETE ON audit_events BEGIN
     SELECT RAISE(ABORT, 'audit events are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_events_no_update
+BEFORE UPDATE ON agent_events BEGIN
+    SELECT RAISE(ABORT, 'agent events are immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_events_no_delete
+BEFORE DELETE ON agent_events BEGIN
+    SELECT RAISE(ABORT, 'agent events are immutable');
 END;
 
 CREATE TRIGGER IF NOT EXISTS reflections_no_update
