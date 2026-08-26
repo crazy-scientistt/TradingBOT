@@ -35,6 +35,9 @@ ALLOWED_TRANSITIONS: dict[BotState, frozenset[BotState]] = {
             BotState.DATA_HALTED,
             BotState.EMERGENCY_STOPPED,
             BotState.DISARMED,
+            BotState.RESEARCH_ACTIVE,
+            BotState.AUTONOMY_SUSPENDED,
+            BotState.QUARANTINE,
         }
     ),
     BotState.RUNNING_OPEN: frozenset(
@@ -45,6 +48,7 @@ ALLOWED_TRANSITIONS: dict[BotState, frozenset[BotState]] = {
             BotState.RECOVERY_REQUIRED,
             BotState.EMERGENCY_STOPPED,
             BotState.DISARMED,
+            BotState.QUARANTINE,
         }
     ),
     BotState.COOLDOWN: frozenset(
@@ -58,6 +62,33 @@ ALLOWED_TRANSITIONS: dict[BotState, frozenset[BotState]] = {
     ),
     BotState.RECOVERY_REQUIRED: frozenset({BotState.DISARMED, BotState.EMERGENCY_STOPPED}),
     BotState.EMERGENCY_STOPPED: frozenset({BotState.DISARMED}),
+    # Autonomy states
+    BotState.RESEARCH_ACTIVE: frozenset(
+        {
+            BotState.RUNNING_FLAT,
+            BotState.AUTONOMY_SUSPENDED,
+            BotState.QUARANTINE,
+            BotState.DISARMED,
+            BotState.EMERGENCY_STOPPED,
+        }
+    ),
+    BotState.AUTONOMY_SUSPENDED: frozenset(
+        {
+            BotState.RESEARCH_ACTIVE,
+            BotState.RUNNING_FLAT,
+            BotState.QUARANTINE,
+            BotState.DISARMED,
+            BotState.EMERGENCY_STOPPED,
+        }
+    ),
+    BotState.QUARANTINE: frozenset(
+        {
+            BotState.RUNNING_FLAT,
+            BotState.DISARMED,
+            BotState.RECOVERY_REQUIRED,
+            BotState.EMERGENCY_STOPPED,
+        }
+    ),
 }
 
 

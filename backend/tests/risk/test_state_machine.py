@@ -19,6 +19,15 @@ from goldguard.risk.state_machine import StateMachine, TransitionError
         (BotState.RECOVERY_REQUIRED, BotState.DISARMED),
         (BotState.RUNNING_OPEN, BotState.EMERGENCY_STOPPED),
         (BotState.EMERGENCY_STOPPED, BotState.DISARMED),
+        # Autonomy state transitions
+        (BotState.RUNNING_FLAT, BotState.RESEARCH_ACTIVE),
+        (BotState.RESEARCH_ACTIVE, BotState.AUTONOMY_SUSPENDED),
+        (BotState.AUTONOMY_SUSPENDED, BotState.RESEARCH_ACTIVE),
+        (BotState.RESEARCH_ACTIVE, BotState.QUARANTINE),
+        (BotState.RUNNING_OPEN, BotState.QUARANTINE),
+        (BotState.QUARANTINE, BotState.RUNNING_FLAT),
+        (BotState.QUARANTINE, BotState.DISARMED),
+        (BotState.AUTONOMY_SUSPENDED, BotState.DISARMED),
     ],
 )
 def test_allowed_state_transitions(current: BotState, target: BotState) -> None:

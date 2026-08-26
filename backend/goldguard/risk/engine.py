@@ -23,6 +23,12 @@ class RiskContext:
     spread_acceptable: bool
     event_blackout: bool
     lease_owned: bool
+    # Autonomy kill switches & genome provenance
+    promotion_churn: int = 0
+    quota_exhausted: bool = False
+    gateway_degraded: bool = False
+    genome_status: str = "active"
+    genome_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,6 +36,7 @@ class RiskDecision:
     approved: bool
     reason_codes: tuple[str, ...]
     plan: TradePlan | None = None
+    genome_hash: str = ""
 
 
 def floor_to_increment(value: Decimal, increment: Decimal) -> Decimal:
@@ -46,9 +53,11 @@ class RiskEngine:
     def plan_entry(self, context: RiskContext) -> RiskDecision:
         blocked = self._blocked_reason(context)
         if blocked is not None:
-            return RiskDecision(False, (blocked,))
+            return RiskDecision(False, (blocked,), genome_hash=context.genome_hash)
         if min(context.equity, context.available_cash, context.entry, context.atr) <= 0:
-            return RiskDecision(False, ("INVALID_ACCOUNT_OR_MARKET_VALUE",))
+            return RiskDecision(
+                False, ("INVALID_ACCOUNT_OR_MARKET_VALUE",), genome_hash=context.genome_hash
+            )
 
         raw_distance = context.atr * self.settings.stop_atr_multiple
         minimum_distance = context.entry * self.settings.minimum_stop_rate
@@ -57,7 +66,7 @@ class RiskEngine:
         stop = floor_to_increment(context.entry - distance, context.filters.tick_size)
         actual_distance = context.entry - stop
         if actual_distance <= 0:
-            return RiskDecision(False, ("INVALID_STOP_DISTANCE",))
+            return RiskDecision(False, ("INVALID_STOP_DISTANCE",), genome_hash=context.genome_hash)
 
         risk_budget = context.equity * self.settings.risk_per_trade
         quantity_by_risk = risk_budget / actual_distance
@@ -71,9 +80,9 @@ class RiskEngine:
         )
         quantity = floor_to_increment(unrounded_quantity, context.filters.step_size)
         if quantity < context.filters.minimum_quantity or quantity <= 0:
-            return RiskDecision(False, ("BELOW_MINIMUM_QUANTITY",))
+            return RiskDecision(False, ("BELOW_MINIMUM_QUANTITY",), genome_hash=context.genome_hash)
         if quantity * context.entry < context.filters.minimum_notional:
-            return RiskDecision(False, ("BELOW_MINIMUM_NOTIONAL",))
+            return RiskDecision(False, ("BELOW_MINIMUM_NOTIONAL",), genome_hash=context.genome_hash)
 
         target_unrounded = context.entry + (actual_distance * self.settings.reward_r_multiple)
         target = floor_to_increment(target_unrounded, context.filters.tick_size)
@@ -87,9 +96,20 @@ class RiskEngine:
             risk_amount=actual_risk,
             expected_fees=expected_fees,
         )
-        return RiskDecision(True, ("RISK_APPROVED",), plan)
+        return RiskDecision(True, ("RISK_APPROVED",), plan, genome_hash=context.genome_hash)
 
     def _blocked_reason(self, context: RiskContext) -> str | None:
+        # Autonomy & System Kill Switches
+        if context.genome_status != "active":
+            return "GENOME_NOT_ACTIVE"
+        if context.gateway_degraded:
+            return "GATEWAY_DEGRADED"
+        if context.quota_exhausted:
+            return "RESEARCH_QUOTA_EXHAUSTED"
+        if context.promotion_churn >= 3:
+            return "PROMOTION_CHURN_HALT"
+
+        # Risk and Market Gates
         if context.peak_drawdown_rate >= self.settings.emergency_drawdown_halt:
             return "EMERGENCY_DRAWDOWN_HALT"
         if context.rolling_24h_loss_rate >= self.settings.daily_loss_halt:

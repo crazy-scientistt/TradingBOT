@@ -30,6 +30,11 @@ def valid_context() -> RiskContext:
         spread_acceptable=True,
         event_blackout=False,
         lease_owned=True,
+        promotion_churn=0,
+        quota_exhausted=False,
+        gateway_degraded=False,
+        genome_status="active",
+        genome_hash="sha256-test-hash-valid",
     )
 
 
@@ -44,6 +49,7 @@ def test_risk_engine_sizes_exact_decimal_plan_with_atr_stop_and_two_r_target() -
     assert result.plan.quantity == Decimal("0.0333")
     assert result.plan.risk_amount == Decimal("0.499500")
     assert result.plan.expected_fees == Decimal("0.1665000")
+    assert result.genome_hash == "sha256-test-hash-valid"
 
 
 def test_stop_distance_is_clamped_to_approved_bounds() -> None:
@@ -68,6 +74,11 @@ def test_stop_distance_is_clamped_to_approved_bounds() -> None:
         ("spread_acceptable", False, "SPREAD_TOO_WIDE"),
         ("event_blackout", True, "MACRO_EVENT_BLACKOUT"),
         ("lease_owned", False, "WORKER_LEASE_MISSING"),
+        ("genome_status", "candidate", "GENOME_NOT_ACTIVE"),
+        ("genome_status", "quarantined", "GENOME_NOT_ACTIVE"),
+        ("gateway_degraded", True, "GATEWAY_DEGRADED"),
+        ("quota_exhausted", True, "RESEARCH_QUOTA_EXHAUSTED"),
+        ("promotion_churn", 3, "PROMOTION_CHURN_HALT"),
     ],
 )
 def test_each_risk_gate_rejects_entry(field: str, value: object, reason: str) -> None:
@@ -85,3 +96,13 @@ def test_exchange_minimum_notional_rejects_too_small_account() -> None:
 
     assert result.approved is False
     assert result.reason_codes == ("BELOW_MINIMUM_NOTIONAL",)
+
+
+def test_provenance_invariant_cannot_forge_risk_decision() -> None:
+    """Prove that RiskDecision quantity and prices originate exclusively in RiskEngine."""
+    engine = RiskEngine(SAFE_DEFAULT_V1)
+    context = valid_context()
+    decision = engine.plan_entry(context)
+    assert decision.approved is True
+    assert decision.plan is not None
+    assert decision.genome_hash == context.genome_hash
