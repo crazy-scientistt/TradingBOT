@@ -156,16 +156,16 @@ class GenomeRepository:
     def save_genome(
         self,
         genome: StrategyGenome,
-        origin: str,
+        origin: str = "baseline",
         status: str = "candidate",
     ) -> str:
-        g_hash = genome_hash(genome)
         payload = genome.model_dump(mode="json")
+        g_hash = genome_hash(genome)
         evidence = list(genome.evidence_refs)
         with self.database.transaction() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO genomes(
+                INSERT INTO genomes(
                     genome_id, genome_hash, parent_id, origin, status,
                     hypothesis, payload_json, evidence_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -194,6 +194,29 @@ class GenomeRepository:
             return None
         data = json.loads(row["payload_json"])
         return StrategyGenome.model_validate(data)
+
+    def get_genome_row(self, genome_id: str) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM genomes WHERE genome_id = ?",
+                (genome_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_genome_status(self, genome_id: str) -> str | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT status FROM genomes WHERE genome_id = ?",
+                (genome_id,),
+            ).fetchone()
+        return str(row["status"]) if row else None
+
+    def update_status(self, genome_id: str, new_status: str) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE genomes SET status = ? WHERE genome_id = ?",
+                (new_status, genome_id),
+            )
 
     def get_active_genome(self) -> StrategyGenome | None:
         with self.database.connect() as connection:
@@ -241,15 +264,12 @@ class GenomeRepository:
                     (genome_id,),
                 )
             elif new_status == "shadow":
-                if current_status != "candidate":
+                if current_status not in ("candidate", "holdout_passed"):
                     raise ValueError(
                         f"invalid status transition from {current_status} to {new_status}"
                     )
-            elif new_status in ("quarantined", "retired"):
-                if current_status not in ("active", "shadow", "candidate"):
-                    raise ValueError(
-                        f"invalid status transition from {current_status} to {new_status}"
-                    )
+            elif new_status in ("quarantined", "retired", "archived"):
+                pass
 
             connection.execute(
                 "UPDATE genomes SET status = ? WHERE genome_id = ?",
@@ -279,23 +299,24 @@ class EvaluationRepository:
     def record_evaluation(
         self,
         *,
-        evaluation_id: str,
         genome_id: str,
         partition: str,
         window: str,
         metrics: dict[str, Any],
         run_hash: str,
+        evaluation_id: str | None = None,
     ) -> None:
+        eval_id = evaluation_id or str(uuid4())
         with self.database.transaction() as connection:
             connection.execute(
                 """
-                INSERT OR REPLACE INTO evaluations(
+                INSERT INTO evaluations(
                     evaluation_id, genome_id, partition, window,
                     metrics_json, run_hash, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    evaluation_id,
+                    eval_id,
                     genome_id,
                     partition,
                     window,

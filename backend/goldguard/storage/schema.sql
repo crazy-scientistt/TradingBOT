@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS genomes (
     genome_hash TEXT NOT NULL UNIQUE,
     parent_id TEXT REFERENCES genomes(genome_id),
     origin TEXT NOT NULL CHECK (origin IN ('baseline', 'hermes', 'human')),
-    status TEXT NOT NULL CHECK (status IN ('candidate', 'shadow', 'active', 'quarantined', 'retired')),
+    status TEXT NOT NULL CHECK (status IN ('candidate', 'dev_passed', 'val_passed', 'holdout_passed', 'shadow', 'active', 'quarantined', 'retired', 'archived')),
     hypothesis TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     evidence_json TEXT NOT NULL,
@@ -302,8 +302,8 @@ CREATE TABLE IF NOT EXISTS evaluations (
 CREATE TABLE IF NOT EXISTS promotions (
     promotion_id TEXT PRIMARY KEY,
     genome_id TEXT NOT NULL REFERENCES genomes(genome_id),
-    promoted_by TEXT NOT NULL CHECK (promoted_by IN ('gate', 'human')),
-    mode TEXT NOT NULL CHECK (mode IN ('paper', 'live')),
+    promoted_by TEXT NOT NULL,
+    mode TEXT NOT NULL,
     gate_report_json TEXT NOT NULL,
     at TEXT NOT NULL
 );
