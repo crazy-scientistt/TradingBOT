@@ -75,6 +75,11 @@ def _resolve_operand(
     if isinstance(operand, IndicatorSpec):
         return _resolve_spec_value(operand, features)
     if isinstance(operand, str):
+        try:
+            return float(operand)
+        except ValueError:
+            pass
+
         # Named shorthand aliases
         if operand == "ema50_1h":
             return features.ema50_1h
