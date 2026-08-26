@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -5,10 +7,10 @@ from uuid import uuid4
 
 from goldguard.backtest.metrics import PerformanceReport
 from goldguard.backtest.reports import report_to_dict
-from goldguard.backtest.walk_forward import WalkForwardReport
 from goldguard.strategy.genome import StrategyGenome
 
 if TYPE_CHECKING:
+    from goldguard.backtest.walk_forward import WalkForwardReport
     from goldguard.storage.repositories import (
         EvaluationRepository,
         GenomeRepository,
@@ -100,9 +102,9 @@ class PromotionPipeline:
     def __init__(
         self,
         *,
-        genome_repo: "GenomeRepository | GenomeRepoProtocol",
-        eval_repo: "EvaluationRepository | EvalRepoProtocol",
-        promotion_repo: "PromotionRepository | PromotionRepoProtocol",
+        genome_repo: GenomeRepository | GenomeRepoProtocol,
+        eval_repo: EvaluationRepository | EvalRepoProtocol,
+        promotion_repo: PromotionRepository | PromotionRepoProtocol,
         dev_config: DevGateConfig | None = None,
         val_config: ValGateConfig | None = None,
         holdout_config: HoldoutGateConfig | None = None,

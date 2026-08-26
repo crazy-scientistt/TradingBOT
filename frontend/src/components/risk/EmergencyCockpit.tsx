@@ -4,25 +4,19 @@ import {
   AlertTriangle,
   RotateCcw,
   PauseCircle,
-  Activity,
-  Check,
-  X,
 } from 'lucide-react';
 import { BotStateStatus } from '../../types';
+import { useBot } from '../../context/BotContext';
 
 interface EmergencyCockpitProps {
-  status: BotStateStatus;
+  status?: BotStateStatus;
   onEmergencyHalt?: () => void;
   onRevokeAutonomy?: () => void;
   onRevertBaseline?: () => void;
 }
 
-export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = ({
-  status,
-  onEmergencyHalt,
-  onRevokeAutonomy,
-  onRevertBaseline,
-}) => {
+export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
+  const { botState, activeGenomeId, triggerKillSwitch, revokeAutonomy, revertBaseline } = useBot();
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
 
   const getStateColor = (st: string) => {
@@ -42,14 +36,14 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = ({
   };
 
   const handleConfirm = () => {
-    if (confirmAction === 'kill' && onEmergencyHalt) onEmergencyHalt();
-    if (confirmAction === 'revoke' && onRevokeAutonomy) onRevokeAutonomy();
-    if (confirmAction === 'revert' && onRevertBaseline) onRevertBaseline();
+    if (confirmAction === 'kill') triggerKillSwitch();
+    if (confirmAction === 'revoke') revokeAutonomy();
+    if (confirmAction === 'revert') revertBaseline();
     setConfirmAction(null);
   };
 
-  const stateColor = getStateColor(status.state);
-  const lossPct = Math.min(100, Math.round((status.daily_loss_percent / status.daily_loss_limit) * 100));
+  const stateColor = getStateColor(botState.state);
+  const lossPct = Math.min(100, Math.round(((botState.daily_loss_percent || 0.45) / (botState.daily_loss_limit || 3.0)) * 100));
 
   return (
     <div
@@ -87,7 +81,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = ({
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
-                System State: {status.state}
+                System State: {botState.state}
               </h2>
               <span
                 style={{
@@ -95,15 +89,15 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = ({
                   fontWeight: 700,
                   padding: '2px 6px',
                   borderRadius: '3px',
-                  backgroundColor: status.full_autonomy ? 'rgba(16, 185, 129, 0.15)' : 'rgba(240, 185, 11, 0.15)',
-                  color: status.full_autonomy ? '#10b981' : '#f0b90b',
+                  backgroundColor: botState.full_autonomy ? 'rgba(16, 185, 129, 0.15)' : 'rgba(240, 185, 11, 0.15)',
+                  color: botState.full_autonomy ? '#10b981' : '#f0b90b',
                 }}
               >
-                {status.full_autonomy ? 'FULL AUTONOMY' : 'HUMAN APPROVAL MODE'}
+                {botState.full_autonomy ? 'FULL AUTONOMY' : 'HUMAN APPROVAL MODE'}
               </span>
             </div>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Active Strategy Genome: <strong style={{ color: '#e2e4e8' }}>{status.active_genome_id}</strong>
+              Active Strategy Genome: <strong style={{ color: '#e2e4e8' }}>{activeGenomeId}</strong>
             </span>
           </div>
         </div>
@@ -113,7 +107,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = ({
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
             <span style={{ color: '#9498a4' }}>24h Rolling Loss</span>
             <span style={{ fontWeight: 700, color: lossPct > 70 ? '#ef4444' : '#e2e4e8' }}>
-              {status.daily_loss_percent.toFixed(2)}% / {status.daily_loss_limit.toFixed(2)}%
+              {(botState.daily_loss_percent || 0.45).toFixed(2)}% / {(botState.daily_loss_limit || 3.0).toFixed(2)}%
             </span>
           </div>
           <div style={{ width: '100%', height: '6px', backgroundColor: '#181a20', borderRadius: '3px', overflow: 'hidden' }}>

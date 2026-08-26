@@ -1,20 +1,49 @@
-import React from 'react';
-import { FlaskConical, Play, Sparkles, BookOpen, Clock, Tag } from 'lucide-react';
+import React, { useState } from 'react';
+import { FlaskConical, Sparkles, BookOpen } from 'lucide-react';
 import { ResearchQuota, TradeReflection } from '../../types';
+import { mockQuota, mockReflections } from '../../data/mockData';
+import { useBot } from '../../context/BotContext';
 
 interface ResearchLabProps {
-  quota: ResearchQuota;
-  reflections: TradeReflection[];
+  quota?: ResearchQuota;
+  reflections?: TradeReflection[];
   isRunning?: boolean;
   onRunStep?: () => void;
 }
 
 export const ResearchLab: React.FC<ResearchLabProps> = ({
-  quota,
-  reflections,
-  isRunning = false,
-  onRunStep,
+  quota: propQuota,
+  reflections: propReflections,
+  isRunning: propIsRunning,
+  onRunStep: propOnRunStep,
 }) => {
+  let botContext: ReturnType<typeof useBot> | null = null;
+  try {
+    botContext = useBot();
+  } catch {
+    // Isolated test environment
+  }
+
+  const quota = propQuota || (botContext ? botContext.quota : mockQuota);
+  const reflections = propReflections || (botContext ? botContext.reflections : mockReflections);
+  const [internalRunning, setInternalRunning] = useState(false);
+  const isRunning = propIsRunning !== undefined ? propIsRunning : internalRunning;
+
+  const handleStep = async () => {
+    if (propOnRunStep) {
+      propOnRunStep();
+      return;
+    }
+    if (botContext) {
+      setInternalRunning(true);
+      try {
+        await botContext.triggerHermesStep();
+      } finally {
+        setInternalRunning(false);
+      }
+    }
+  };
+
   const getLessonBadgeStyle = (code: string) => {
     switch (code) {
       case 'TP_CLEAN':
@@ -32,8 +61,8 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
     }
   };
 
-  const backtestPct = Math.min(100, Math.round((quota.backtests_used / quota.backtests_limit) * 100));
-  const webPct = Math.min(100, Math.round((quota.web_calls_used / quota.web_calls_limit) * 100));
+  const backtestPct = Math.min(100, Math.round(((quota?.backtests_used || 0) / (quota?.backtests_limit || 8)) * 100));
+  const webPct = Math.min(100, Math.round(((quota?.web_calls_used || 0) / (quota?.web_calls_limit || 50)) * 100));
 
   return (
     <div
@@ -69,30 +98,28 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
           </div>
         </div>
 
-        {onRunStep && (
-          <button
-            type="button"
-            onClick={onRunStep}
-            disabled={isRunning}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 14px',
-              backgroundColor: '#f0b90b',
-              color: '#000',
-              fontWeight: 700,
-              fontSize: '13px',
-              borderRadius: '6px',
-              border: 'none',
-              cursor: isRunning ? 'not-allowed' : 'pointer',
-              opacity: isRunning ? 0.7 : 1,
-            }}
-          >
-            <Sparkles size={14} fill="#000" />
-            {isRunning ? 'Hermes Reasoning...' : 'Trigger Hermes Step'}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleStep}
+          disabled={isRunning}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '8px 14px',
+            backgroundColor: '#f0b90b',
+            color: '#000',
+            fontWeight: 700,
+            fontSize: '13px',
+            borderRadius: '6px',
+            border: 'none',
+            cursor: isRunning ? 'not-allowed' : 'pointer',
+            opacity: isRunning ? 0.7 : 1,
+          }}
+        >
+          <Sparkles size={14} fill="#000" />
+          {isRunning ? 'Hermes Reasoning...' : 'Trigger Hermes Step'}
+        </button>
       </div>
 
       {/* Daily Quota Cards */}
@@ -113,7 +140,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
               Daily Backtest Engine Quota
             </span>
             <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#f0b90b', fontFamily: 'monospace' }}>
-              {quota.backtests_used} / {quota.backtests_limit}
+              {quota?.backtests_used || 0} / {quota?.backtests_limit || 8}
             </span>
           </div>
           {/* Progress Bar */}
@@ -148,7 +175,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
               Daily Web Search Quota (Gemini Grounding)
             </span>
             <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#60a5fa', fontFamily: 'monospace' }}>
-              {quota.web_calls_used} / {quota.web_calls_limit}
+              {quota?.web_calls_used || 0} / {quota?.web_calls_limit || 50}
             </span>
           </div>
           <div style={{ width: '100%', height: '6px', backgroundColor: '#181a20', borderRadius: '3px', overflow: 'hidden' }}>
@@ -187,7 +214,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {reflections.map((ref) => {
+          {(reflections || []).map((ref) => {
             const badgeStyle = getLessonBadgeStyle(ref.lesson_code);
             const isProfit = parseFloat(ref.net_pnl) > 0;
             return (
@@ -241,7 +268,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
                 </p>
 
                 <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
-                  {ref.regime_tags.map((tag, i) => (
+                  {(ref.regime_tags || []).map((tag, i) => (
                     <span
                       key={i}
                       style={{

@@ -121,11 +121,7 @@ async def test_bootstrap_history_warmup_and_resumable(tmp_path: Path) -> None:
                 if start_time_ms
                 else actual_start
             )
-            end_dt = (
-                datetime.fromtimestamp(end_time_ms / 1000, tz=UTC)
-                if end_time_ms
-                else end
-            )
+            end_dt = datetime.fromtimestamp(end_time_ms / 1000, tz=UTC) if end_time_ms else end
             return [c for c in source if start_dt <= c.open_time < end_dt][:limit]
 
     client = MockKlineClient()

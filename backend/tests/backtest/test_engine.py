@@ -38,8 +38,7 @@ def make_candle(
 def test_backtest_engine_identical_input_produces_identical_run_hash() -> None:
     # Build synthetic 15m candles
     candles_15m = [
-        make_candle(i, open_="2500", high="2505", low="2495", close="2502")
-        for i in range(250)
+        make_candle(i, open_="2500", high="2505", low="2495", close="2502") for i in range(250)
     ]
     # Synthetic 1h candles
     candles_1h = [
@@ -86,8 +85,8 @@ def test_intrabar_collision_resolves_to_stop_hit_first() -> None:
 
 def test_fee_drag_and_slippage_accounting() -> None:
     friction = FrictionConfig(
-        commission_rate=Decimal("0.001"),   # 0.1%
-        slippage_rate=Decimal("0.0002"),     # 2 bps
+        commission_rate=Decimal("0.001"),  # 0.1%
+        slippage_rate=Decimal("0.0002"),  # 2 bps
         half_spread_rate=Decimal("0.0002"),  # 2 bps
     )
     engine = BacktestEngine(friction)

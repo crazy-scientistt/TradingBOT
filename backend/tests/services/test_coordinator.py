@@ -147,7 +147,7 @@ def test_monitor_open_position_fast_protection_path(
         runtime=GenomeRuntime(),
         risk_engine=RiskEngine(SAFE_DEFAULT_V1),
         checklist=None,  # Not consulted during monitoring!
-        ai_veto=None,    # Not consulted during monitoring!
+        ai_veto=None,  # Not consulted during monitoring!
         filters=symbol_filters,
     )
 

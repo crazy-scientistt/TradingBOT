@@ -11,12 +11,10 @@ from goldguard.storage.repositories import QuotaRepository
 def detect_conflict_level(items: tuple[ContextItem, ...]) -> str:
     """Analyze direction and contradictions among context items."""
     has_bullish = any(
-        item.direction == "bullish" and item.severity in ("high", "critical")
-        for item in items
+        item.direction == "bullish" and item.severity in ("high", "critical") for item in items
     )
     has_bearish = any(
-        item.direction == "bearish" and item.severity in ("high", "critical")
-        for item in items
+        item.direction == "bearish" and item.severity in ("high", "critical") for item in items
     )
     if has_bullish and has_bearish:
         return "HIGH"
@@ -51,9 +49,7 @@ class ContextEngine:
 
         # Quota enforcement
         if self.quota_repo is not None:
-            allowed = self.quota_repo.consume_web_call(
-                date_str, max_limit=self.max_daily_searches
-            )
+            allowed = self.quota_repo.consume_web_call(date_str, max_limit=self.max_daily_searches)
             if not allowed:
                 # Quota exhausted: return fail-closed minimal snapshot
                 return ContextSnapshot.build(

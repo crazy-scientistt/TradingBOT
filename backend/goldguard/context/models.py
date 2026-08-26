@@ -62,9 +62,7 @@ class ContextSource:
         if parsed.scheme != "https" or not parsed.hostname:
             raise ValueError("context source must use an absolute HTTPS URL")
         if self.published_at is not None:
-            object.__setattr__(
-                self, "published_at", require_utc(self.published_at, "published_at")
-            )
+            object.__setattr__(self, "published_at", require_utc(self.published_at, "published_at"))
         object.__setattr__(self, "tier", source_tier(self.url))
 
 
@@ -82,9 +80,7 @@ class ContextItem:
         if not self.summary.strip() or len(self.summary) > 500:
             raise ValueError("context summary must contain 1-500 characters")
         if self.published_at is not None:
-            object.__setattr__(
-                self, "published_at", require_utc(self.published_at, "published_at")
-            )
+            object.__setattr__(self, "published_at", require_utc(self.published_at, "published_at"))
 
 
 @dataclass(frozen=True)

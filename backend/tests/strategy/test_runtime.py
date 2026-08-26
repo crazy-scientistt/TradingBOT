@@ -106,9 +106,7 @@ def test_runtime_position_exits() -> None:
     genome = trend_pullback_v1()
 
     # Regime invalidation
-    r_exit = runtime.evaluate(
-        genome, replace(valid_features(), ema50_1h=2390.0), has_position=True
-    )
+    r_exit = runtime.evaluate(genome, replace(valid_features(), ema50_1h=2390.0), has_position=True)
     assert r_exit.action is CandidateAction.EXIT_CANDIDATE
     assert "REGIME_INVALIDATION" in r_exit.reason_codes
 

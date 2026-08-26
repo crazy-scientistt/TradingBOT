@@ -55,15 +55,11 @@ def test_closed_trade_lesson_codes() -> None:
     assert chop_ref.lesson_code == "CHOP_WHIPSAW"
 
     # 4. Regime shift exit
-    regime_ref = engine.create(
-        outcome("t-regime", pnl="-0.50", exit_reason="REGIME_INVALIDATION")
-    )
+    regime_ref = engine.create(outcome("t-regime", pnl="-0.50", exit_reason="REGIME_INVALIDATION"))
     assert regime_ref.lesson_code == "REGIME_SHIFT"
 
     # 5. High fee drag
-    fee_ref = engine.create(
-        outcome("t-fee", pnl="-0.20", fees="0.50", exit_reason="STOP_LOSS")
-    )
+    fee_ref = engine.create(outcome("t-fee", pnl="-0.20", fees="0.50", exit_reason="STOP_LOSS"))
     assert fee_ref.lesson_code == "FEE_DRAG_HIGH"
 
 

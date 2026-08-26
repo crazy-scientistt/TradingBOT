@@ -169,9 +169,7 @@ class GenomeRuntime:
                     return EngineResult(
                         CandidateAction.EXIT_CANDIDATE, ("TWO_CLOSES_BELOW_EMA50",), version
                     )
-                return EngineResult(
-                    CandidateAction.NO_ACTION, ("POSITION_ALREADY_OPEN",), version
-                )
+                return EngineResult(CandidateAction.NO_ACTION, ("POSITION_ALREADY_OPEN",), version)
 
             # 5. Flat Evaluation (Entry Evaluation)
             if not regime_ok:

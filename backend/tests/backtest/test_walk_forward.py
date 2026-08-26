@@ -81,9 +81,7 @@ def test_overfitted_or_underperforming_strategy_fails_gate() -> None:
     candles = generate_market_data(num_days=10)
     harness = WalkForwardHarness()
 
-    bad_genome = trend_pullback_v1().model_copy(
-        update={"genome_id": "overfitted-fail-1"}
-    )
+    bad_genome = trend_pullback_v1().model_copy(update={"genome_id": "overfitted-fail-1"})
     windows = WFWindows(train_days=3, test_days=1, step_days=1)
     report = harness.evaluate(
         genome=bad_genome,

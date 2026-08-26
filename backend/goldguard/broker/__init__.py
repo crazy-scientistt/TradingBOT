@@ -14,4 +14,3 @@ __all__ = [
     "SafetyGuardError",
     "check_safe_url",
 ]
-

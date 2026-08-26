@@ -26,8 +26,8 @@ from goldguard.strategy.runtime import GenomeRuntime
 
 @dataclass(frozen=True)
 class FrictionConfig:
-    commission_rate: Decimal = Decimal("0.001")   # 0.1% taker fee
-    slippage_rate: Decimal = Decimal("0.0002")     # 2 bps slippage
+    commission_rate: Decimal = Decimal("0.001")  # 0.1% taker fee
+    slippage_rate: Decimal = Decimal("0.0002")  # 2 bps slippage
     half_spread_rate: Decimal = Decimal("0.0002")  # 2 bps half-spread
 
 

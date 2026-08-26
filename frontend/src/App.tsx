@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { BotProvider, useBot } from './context/BotContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopHeader } from './components/layout/TopHeader';
 import { KpiCardsRow } from './components/metrics/KpiCardsRow';
@@ -13,26 +14,34 @@ import { ResearchLab } from './components/research/ResearchLab';
 import { RouteMatrix } from './components/providers/RouteMatrix';
 import { EmergencyCockpit } from './components/risk/EmergencyCockpit';
 
-import {
-  mockKpiData,
-  mockCandles,
-  mockPosition,
-  mockPipelineSteps,
-  mockEquityHistory,
-  mockLiveContext,
-  mockRiskHealth,
-  mockGenomes,
-  mockProviders,
-  mockRoutes,
-  mockQuota,
-  mockReflections,
-  mockBotState,
-} from './data/mockData';
+import { MarketView } from './components/views/MarketView';
+import { ContextView } from './components/views/ContextView';
+import { DecisionsView } from './components/views/DecisionsView';
+import { TradesView } from './components/views/TradesView';
+import { SettingsModal } from './components/views/SettingsModal';
+import { ToastContainer } from './components/common/ToastContainer';
 
-export const App: React.FC = () => {
+const MainDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Overview');
-  const [selectedPair, setSelectedPair] = useState('PAXG / USDT');
-  const [isPaperMode, setIsPaperMode] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  const {
+    kpi,
+    candles,
+    position,
+    pipelineSteps,
+    equityHistory,
+    liveContext,
+    riskHealth,
+  } = useBot();
+
+  const handleSelectTab = (tab: string) => {
+    if (tab === 'Settings') {
+      setIsSettingsOpen(true);
+    } else {
+      setActiveTab(tab);
+    }
+  };
 
   return (
     <div
@@ -46,7 +55,7 @@ export const App: React.FC = () => {
       }}
     >
       {/* Left Sidebar */}
-      <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
+      <Sidebar activeTab={activeTab} onSelectTab={handleSelectTab} />
 
       {/* Main Content Area */}
       <div
@@ -60,12 +69,7 @@ export const App: React.FC = () => {
         }}
       >
         {/* Top Header */}
-        <TopHeader
-          currentPair={selectedPair}
-          onSelectPair={setSelectedPair}
-          isPaperMode={isPaperMode}
-          onToggleMode={() => setIsPaperMode(!isPaperMode)}
-        />
+        <TopHeader onOpenSettings={() => setIsSettingsOpen(true)} />
 
         {/* Dashboard Body / Active Tab View */}
         <main
@@ -81,7 +85,7 @@ export const App: React.FC = () => {
           {activeTab === 'Overview' && (
             <>
               {/* Row 1: 5 KPI Cards */}
-              <KpiCardsRow data={mockKpiData} />
+              <KpiCardsRow data={kpi} />
 
               {/* Row 2: Middle Section - Chart (Left) + Open Position & Pipeline (Right) */}
               <div
@@ -92,10 +96,10 @@ export const App: React.FC = () => {
                   width: '100%',
                 }}
               >
-                <CandlestickChart candles={mockCandles} />
+                <CandlestickChart candles={candles} />
                 <OpenPositionCard
-                  position={mockPosition}
-                  pipelineSteps={mockPipelineSteps}
+                  position={position}
+                  pipelineSteps={pipelineSteps}
                 />
               </div>
 
@@ -108,59 +112,41 @@ export const App: React.FC = () => {
                   width: '100%',
                 }}
               >
-                <EquityCurveCard data={mockEquityHistory} />
-                <LiveContextCard items={mockLiveContext} />
-                <RiskHealthCard items={mockRiskHealth} />
+                <EquityCurveCard data={equityHistory} />
+                <LiveContextCard items={liveContext} />
+                <RiskHealthCard items={riskHealth} />
               </div>
             </>
           )}
 
-          {activeTab === 'Studio' && (
-            <StrategyStudio
-              initialGenomes={mockGenomes}
-              activeGenomeId="trend-pullback-v1"
-            />
-          )}
-
-          {activeTab === 'Hermes' && (
-            <ResearchLab
-              quota={mockQuota}
-              reflections={mockReflections}
-            />
-          )}
-
-          {activeTab === 'Providers' && (
-            <RouteMatrix
-              providers={mockProviders}
-              initialRoutes={mockRoutes}
-            />
-          )}
-
-          {activeTab === 'Cockpit' && (
-            <EmergencyCockpit status={mockBotState} />
-          )}
-
-          {/* Fallback for other sidebar items */}
-          {['Market', 'Context', 'Decisions', 'Trades'].includes(activeTab) && (
-            <div
-              style={{
-                backgroundColor: '#0d0e12',
-                border: '1px solid #1e222b',
-                borderRadius: '8px',
-                padding: '24px',
-                textAlign: 'center',
-                color: '#9498a4',
-              }}
-            >
-              <h3 style={{ color: '#f8fafc', margin: '0 0 8px 0' }}>{activeTab} Feed</h3>
-              <p style={{ fontSize: '13px', margin: 0 }}>
-                Live streaming feed integrated with Binance Spot PAXG/USDT market stream and decision ledger.
-              </p>
-            </div>
-          )}
+          {activeTab === 'Studio' && <StrategyStudio />}
+          {activeTab === 'Hermes' && <ResearchLab />}
+          {activeTab === 'Providers' && <RouteMatrix />}
+          {activeTab === 'Cockpit' && <EmergencyCockpit />}
+          {activeTab === 'Market' && <MarketView />}
+          {activeTab === 'Context' && <ContextView />}
+          {activeTab === 'Decisions' && <DecisionsView />}
+          {activeTab === 'Trades' && <TradesView />}
         </main>
       </div>
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
+
+      {/* Toast Notification Container */}
+      <ToastContainer />
     </div>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <BotProvider>
+      <MainDashboard />
+    </BotProvider>
   );
 };
 

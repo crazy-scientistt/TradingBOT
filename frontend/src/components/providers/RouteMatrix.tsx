@@ -1,20 +1,48 @@
 import React from 'react';
-import { Cpu, Zap, Key, CheckCircle2, ShieldCheck, RefreshCw } from 'lucide-react';
+import { Cpu, Zap, Key, ShieldCheck, RefreshCw } from 'lucide-react';
 import { AIProvider, ProviderRoute } from '../../types';
+import { mockProviders, mockRoutes } from '../../data/mockData';
+import { useBot } from '../../context/BotContext';
 
 interface RouteMatrixProps {
-  providers: AIProvider[];
-  initialRoutes: ProviderRoute[];
+  providers?: AIProvider[];
+  initialRoutes?: ProviderRoute[];
   onRouteChange?: (role: 'decision' | 'context' | 'hermes', providerName: string) => void;
   onRefreshLatency?: () => void;
 }
 
 export const RouteMatrix: React.FC<RouteMatrixProps> = ({
-  providers,
-  initialRoutes,
-  onRouteChange,
-  onRefreshLatency,
+  providers: propProviders,
+  initialRoutes: propRoutes,
+  onRouteChange: propOnChange,
+  onRefreshLatency: propOnRefresh,
 }) => {
+  let botContext: ReturnType<typeof useBot> | null = null;
+  try {
+    botContext = useBot();
+  } catch {
+    // Isolated test environment
+  }
+
+  const providers = propProviders || (botContext ? botContext.providers : mockProviders);
+  const routes = propRoutes || (botContext ? botContext.routes : mockRoutes);
+
+  const handleRouteChange = (role: 'decision' | 'context' | 'hermes', provider: string) => {
+    if (propOnChange) {
+      propOnChange(role, provider);
+    } else if (botContext) {
+      botContext.updateRoute(role, provider);
+    }
+  };
+
+  const handleProbe = () => {
+    if (propOnRefresh) {
+      propOnRefresh();
+    } else if (botContext) {
+      botContext.probeLatencies();
+    }
+  };
+
   const roles: Array<{ role: 'decision' | 'context' | 'hermes'; label: string; desc: string }> = [
     {
       role: 'decision',
@@ -67,26 +95,24 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
           </div>
         </div>
 
-        {onRefreshLatency && (
-          <button
-            type="button"
-            onClick={onRefreshLatency}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '6px 12px',
-              backgroundColor: '#181a20',
-              color: '#e2e4e8',
-              border: '1px solid #2d3139',
-              borderRadius: '6px',
-              fontSize: '12px',
-              cursor: 'pointer',
-            }}
-          >
-            <RefreshCw size={13} /> Probe Latencies
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={handleProbe}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '6px 12px',
+            backgroundColor: '#181a20',
+            color: '#e2e4e8',
+            border: '1px solid #2d3139',
+            borderRadius: '6px',
+            fontSize: '12px',
+            cursor: 'pointer',
+          }}
+        >
+          <RefreshCw size={13} /> Probe Latencies
+        </button>
       </div>
 
       {/* Provider Cards Row */}
@@ -180,7 +206,7 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {roles.map(({ role, label, desc }) => {
-            const currentRoute = initialRoutes.find((r) => r.role === role);
+            const currentRoute = routes.find((r) => r.role === role);
             return (
               <div
                 key={role}
@@ -208,8 +234,8 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <select
                     data-testid={`route-select-${role}`}
-                    value={currentRoute?.provider || providers[0]?.name}
-                    onChange={(e) => onRouteChange && onRouteChange(role, e.target.value)}
+                    value={currentRoute?.provider || providers[0]?.name || 'opencodex'}
+                    onChange={(e) => handleRouteChange(role, e.target.value)}
                     style={{
                       backgroundColor: '#0d0e12',
                       color: '#f8fafc',

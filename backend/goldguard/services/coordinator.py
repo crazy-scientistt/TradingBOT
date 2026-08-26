@@ -70,13 +70,9 @@ class TradingCoordinator:
     ) -> DecisionOutcome:
         candle_key = f"{symbol}:{closed_at.isoformat()}"
         if candle_key in self._processed_candles and self.broker.position is not None:
-            return DecisionOutcome(
-                False, "POSITION_ALREADY_OPEN", ("POSITION_ALREADY_OPEN",)
-            )
+            return DecisionOutcome(False, "POSITION_ALREADY_OPEN", ("POSITION_ALREADY_OPEN",))
         if candle_key in self._processed_candles:
-            return DecisionOutcome(
-                False, "ALREADY_PROCESSED", ("IDEMPOTENT_SKIP",)
-            )
+            return DecisionOutcome(False, "ALREADY_PROCESSED", ("IDEMPOTENT_SKIP",))
 
         # Record idempotent decision chain in ledger
         self.ledger_repo.record_decision_chain(
@@ -87,9 +83,7 @@ class TradingCoordinator:
             candle_close_time=closed_at.isoformat(),
         )
 
-        active_genome: StrategyGenome = (
-            self.genome_repo.get_active_genome() or trend_pullback_v1()
-        )
+        active_genome: StrategyGenome = self.genome_repo.get_active_genome() or trend_pullback_v1()
         current_g_hash = genome_hash(active_genome)
 
         # Case 1: Open position monitoring on closed candle
@@ -110,9 +104,7 @@ class TradingCoordinator:
                 return DecisionOutcome(True, "EXIT_TRIGGERED", eval_result.reason_codes)
 
             self._processed_candles.add(candle_key)
-            return DecisionOutcome(
-                False, "POSITION_ALREADY_OPEN", ("POSITION_ALREADY_OPEN",)
-            )
+            return DecisionOutcome(False, "POSITION_ALREADY_OPEN", ("POSITION_ALREADY_OPEN",))
 
         # Case 2: Flat position — evaluate entry candidate
         eval_result = self.runtime.evaluate(active_genome, features, has_position=False)
@@ -125,18 +117,14 @@ class TradingCoordinator:
             checklist_result = self.checklist.evaluate(features=features, quote=quote)
             if checklist_result.action is not ChecklistAction.PASS:
                 self._processed_candles.add(candle_key)
-                return DecisionOutcome(
-                    False, "CHECKLIST_HELD", checklist_result.reason_codes
-                )
+                return DecisionOutcome(False, "CHECKLIST_HELD", checklist_result.reason_codes)
 
         # AI Veto Gate
         if self.ai_veto is not None:
             ai_assessment = self.ai_veto.decide(features=features, quote=quote)
             if ai_assessment.decision is not AiDecision.APPROVE_ENTRY:
                 self._processed_candles.add(candle_key)
-                return DecisionOutcome(
-                    False, "AI_VETO_REJECTED", ai_assessment.reason_codes
-                )
+                return DecisionOutcome(False, "AI_VETO_REJECTED", ai_assessment.reason_codes)
 
         # Deterministic Risk Sizing Gate
         risk_context = RiskContext(
@@ -165,9 +153,7 @@ class TradingCoordinator:
         risk_decision: RiskDecision = self.risk_engine.plan_entry(risk_context)
         if not risk_decision.approved or risk_decision.plan is None:
             self._processed_candles.add(candle_key)
-            return DecisionOutcome(
-                False, "RISK_REJECTED", risk_decision.reason_codes
-            )
+            return DecisionOutcome(False, "RISK_REJECTED", risk_decision.reason_codes)
 
         # Execute entry fill on broker
         fill = self.broker.open_long(
