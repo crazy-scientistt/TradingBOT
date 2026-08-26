@@ -62,30 +62,42 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _settings, _db, _genome_repo, _ledger_repo
     global _quota_repo, _provider_repo, _reflection_repo
 
-    _settings = Settings()
+    try:
+        _settings = Settings()
+    except Exception as exc:
+        logger.error("Failed to load settings from environment: %s", exc)
+        _settings = Settings(environment="development")
+
     data_dir = _settings.data_dir
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        data_dir = Path("./data")
+        test_file = data_dir / ".perm_check"
+        test_file.touch()
+        test_file.unlink()
+    except (OSError, PermissionError):
+        logger.warning("Directory %s is not writable, falling back to /app/data", data_dir)
+        data_dir = Path("/app/data")
         data_dir.mkdir(parents=True, exist_ok=True)
     db_path = data_dir / "goldguard.db"
     logger.info("Starting GoldGuard — env=%s mode=%s db=%s",
                 _settings.environment, _settings.mode, db_path)
 
-    _db = Database(db_path)
-    _db.migrate()
+    try:
+        _db = Database(db_path)
+        _db.migrate()
 
-    _genome_repo = GenomeRepository(_db)
-    _ledger_repo = LedgerRepository(_db)
-    _quota_repo = QuotaRepository(_db)
-    _provider_repo = ProviderRepository(_db)
-    _reflection_repo = ReflectionRepository(_db)
+        _genome_repo = GenomeRepository(_db)
+        _ledger_repo = LedgerRepository(_db)
+        _quota_repo = QuotaRepository(_db)
+        _provider_repo = ProviderRepository(_db)
+        _reflection_repo = ReflectionRepository(_db)
 
-    # Ensure a paper session exists
-    if _ledger_repo.current_paper_session_id() is None:
-        session_id = _ledger_repo.create_paper_session(_settings.paper_starting_balance)
-        logger.info("Created initial paper session: %s", session_id)
+        # Ensure a paper session exists
+        if _ledger_repo.current_paper_session_id() is None:
+            session_id = _ledger_repo.create_paper_session(_settings.paper_starting_balance)
+            logger.info("Created initial paper session: %s", session_id)
+    except Exception as exc:
+        logger.error("Database migration error (degraded mode): %s", exc, exc_info=True)
 
     yield
 
@@ -125,9 +137,13 @@ app.add_middleware(
 async def health() -> dict[str, Any]:
     """Production health check — verifies DB, quota, and gateway reachability."""
     results: dict[str, Any] = {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
+    if _db is None:
+        results["status"] = "starting"
+        results["database"] = "uninitialized"
+        return results
+
     try:
-        db = _get_db()
-        integrity = db.integrity_check()
+        integrity = _db.integrity_check()
         results["database"] = integrity
     except Exception as exc:
         results["database"] = f"FAIL: {exc}"

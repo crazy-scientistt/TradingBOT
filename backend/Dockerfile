@@ -27,12 +27,12 @@ COPY app.py main.py ./
 # Frontend build artifact
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-# Create writable data directory for SQLite
-RUN mkdir -p /data && chmod 777 /data
+# Create writable data directories for SQLite
+RUN mkdir -p /data /app/data && chmod 777 /data /app/data
 
 # Non-root user
 RUN useradd -r -u 1000 goldguard && \
-    chown -R goldguard:goldguard /app /data
+    chown -R goldguard:goldguard /app /data /app/data
 USER goldguard
 
 ENV GOLDGUARD_DATA_DIR=/data

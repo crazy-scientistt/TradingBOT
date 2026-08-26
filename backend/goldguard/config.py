@@ -1,3 +1,4 @@
+import secrets
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Self
@@ -77,7 +78,7 @@ class Settings(BaseSettings):
 
     # Legacy & session secrets
     session_secret: SecretStr = Field(
-        default=SecretStr("development-only-change-me"),
+        default_factory=lambda: SecretStr(secrets.token_urlsafe(32)),
         repr=False,
     )
     gemini_api_key: SecretStr | None = Field(
@@ -110,9 +111,4 @@ class Settings(BaseSettings):
                 raise ValueError("live mode requires the server live-capability gate")
             if not self.gateway_data_token:
                 raise ValueError("live mode requires gateway data token to route decisions")
-        if (
-            self.environment == "production"
-            and self.session_secret.get_secret_value() == "development-only-change-me"
-        ):
-            raise ValueError("production requires a non-default session secret")
         return self
