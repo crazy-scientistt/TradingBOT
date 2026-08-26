@@ -1,0 +1,42 @@
+services:
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: goldguard-gateway
+    restart: unless-stopped
+    ports:
+      - "10100:10100"
+    environment:
+      - PORT=10100
+      - OPENCODEX_MANAGEMENT_TOKEN=${OPENCODEX_MANAGEMENT_TOKEN:-test-mgmt-token}
+    volumes:
+      - gateway-data:/app/data
+    networks:
+      - goldguard-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: goldguard-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - GOLDGUARD_GATEWAY_URL=http://gateway:10100
+      - GOLDGUARD_GATEWAY_TOKEN=${GOLDGUARD_GATEWAY_TOKEN:-}
+    depends_on:
+      - gateway
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - goldguard-net
+
+volumes:
+  gateway-data:
+  backend-data:
+
+networks:
+  goldguard-net:
+    driver: bridge

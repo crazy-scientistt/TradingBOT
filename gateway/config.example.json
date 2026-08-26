@@ -1,0 +1,9 @@
+{
+  "port": 10100,
+  "providers": {
+    "google-antigravity": {
+      "kind": "antigravity",
+      "model": "google-antigravity/gemini-3.7-flash"
+    }
+  }
+}

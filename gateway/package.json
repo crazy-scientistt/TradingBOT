@@ -1,0 +1,11 @@
+{
+  "name": "goldguard-gateway",
+  "version": "2.26.0",
+  "description": "OpenCodex Unified AI Provider Gateway for GoldGuard",
+  "scripts": {
+    "start": "opencodex --port 10100"
+  },
+  "dependencies": {
+    "@bitkyc08/opencodex": "2.26.0"
+  }
+}
