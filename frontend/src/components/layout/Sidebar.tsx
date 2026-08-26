@@ -1,4 +1,3 @@
-import React, { useState } from 'react';
 import { 
   LayoutDashboard, 
   TrendingUp, 
@@ -7,7 +6,10 @@ import {
   Briefcase, 
   BarChart2, 
   Settings, 
-  ChevronDown 
+  ChevronDown,
+  Sparkles,
+  Cpu,
+  ShieldAlert
 } from 'lucide-react';
 import { GoldGuardLogo, HermesIcon } from '../common/Icons';
 
@@ -17,20 +19,21 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSelectTab }) => {
-  const [selected, setSelected] = useState(activeTab);
+  const selected = activeTab;
 
   const navItems = [
     { name: 'Overview', icon: LayoutDashboard },
+    { name: 'Studio', icon: Sparkles },
+    { name: 'Hermes', icon: HermesIcon, isCustom: true },
+    { name: 'Providers', icon: Cpu },
+    { name: 'Cockpit', icon: ShieldAlert },
     { name: 'Market', icon: TrendingUp },
     { name: 'Context', icon: Layers },
     { name: 'Decisions', icon: CheckCircle2 },
     { name: 'Trades', icon: Briefcase },
-    { name: 'Backtests', icon: BarChart2 },
-    { name: 'Hermes', icon: HermesIcon, isCustom: true },
   ];
 
   const handleSelect = (name: string) => {
-    setSelected(name);
     if (onSelectTab) onSelectTab(name);
   };
 
