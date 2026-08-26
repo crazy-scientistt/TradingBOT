@@ -1,7 +1,7 @@
 model:
-  default: gemini-2.5-flash
-  provider: gemini
-  base_url: https://generativelanguage.googleapis.com/v1beta
+  default: goldguard-hermes
+  provider: opencodex
+  base_url: http://opencodex:10100/v1
 
 tool_loop_guardrails:
   hard_stop_enabled: true
