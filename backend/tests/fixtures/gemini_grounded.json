@@ -1,0 +1,29 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Gold traders are monitoring an upcoming Federal Reserve policy decision and current real-yield moves."
+          }
+        ]
+      },
+      "groundingMetadata": {
+        "groundingChunks": [
+          {
+            "web": {
+              "uri": "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm",
+              "title": "Federal Reserve FOMC calendars"
+            }
+          },
+          {
+            "web": {
+              "uri": "https://home.treasury.gov/resource-center/data-chart-center/interest-rates",
+              "title": "US Treasury interest rates"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

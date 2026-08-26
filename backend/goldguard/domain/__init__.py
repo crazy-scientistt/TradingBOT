@@ -1,0 +1,1 @@
+"""Canonical trading domain types."""
