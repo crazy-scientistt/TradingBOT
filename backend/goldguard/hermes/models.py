@@ -1,27 +1,9 @@
 from decimal import Decimal
-from typing import Any, Literal, Self
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-StrategyParameter = Literal[
-    "rsi_recovery",
-    "rsi_ceiling",
-    "minimum_volume_ratio",
-    "stop_atr_multiple",
-    "reward_r_multiple",
-    "minimum_atr_rate",
-    "maximum_atr_rate",
-]
-
-PARAMETER_BOUNDS: dict[StrategyParameter, tuple[Decimal, Decimal]] = {
-    "rsi_recovery": (Decimal("20"), Decimal("70")),
-    "rsi_ceiling": (Decimal("40"), Decimal("90")),
-    "minimum_volume_ratio": (Decimal("0"), Decimal("5")),
-    "stop_atr_multiple": (Decimal("0.5"), Decimal("3")),
-    "reward_r_multiple": (Decimal("1"), Decimal("4")),
-    "minimum_atr_rate": (Decimal("0"), Decimal("0.02")),
-    "maximum_atr_rate": (Decimal("0.0001"), Decimal("0.05")),
-}
+from goldguard.domain.defaults import PARAMETER_BOUNDS, StrategyParameter
 
 
 class StrategyChange(BaseModel):
