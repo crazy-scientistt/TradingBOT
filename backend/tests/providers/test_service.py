@@ -25,7 +25,7 @@ def test_provider_registration_is_write_only_and_fingerprinted(database: Databas
     gateway_client = GatewayClient(base_url="http://localhost:10100", http_client=async_client)
     service = ProviderService(repo, gateway_client)
 
-    raw_key = "sk-super-secret-key-123456"
+    raw_key = "sk-test-super-secret-key-123456"
     fingerprint = service.register_provider(
         name="custom-openai",
         kind="openai",
