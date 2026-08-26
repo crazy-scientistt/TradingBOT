@@ -57,7 +57,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
     <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           EQUITY CURVE (PAPER)
         </span>
         <div style={{ display: 'flex', gap: '10px' }}>
@@ -70,7 +70,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  color: isActive ? '#f0b90b' : '#64748b',
+                  color: isActive ? '#f0b90b' : '#676b78',
                   fontSize: '11px',
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
@@ -106,7 +106,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
             </filter>
           </defs>
 
-          {/* Grid lines & Y-Axis Labels */}
+          {/* Grid lines & Y-Axis Labels - pure neutral dark */}
           {yLevels.map((lvl) => {
             const y = getY(lvl);
             const is100 = lvl === 100;
@@ -117,14 +117,14 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                   y1={y}
                   x2={chartWidth - 5}
                   y2={y}
-                  stroke={is100 ? '#263042' : '#171c26'}
+                  stroke={is100 ? '#22252c' : '#151619'}
                   strokeWidth="1"
                   strokeDasharray={is100 ? '3 3' : undefined}
                 />
                 <text
                   x={width - 24}
                   y={y + 3.5}
-                  fill="#64748b"
+                  fill="#676b78"
                   fontSize="9.5"
                   fontFamily="var(--font-mono)"
                   textAnchor="start"
@@ -141,7 +141,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
             y1={baseline100Y}
             x2={chartWidth - 5}
             y2={baseline100Y}
-            stroke="#2c3649"
+            stroke="#262830"
             strokeWidth="1"
             strokeDasharray="3 3"
           />
@@ -165,7 +165,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                 key={`eq-date-${d.label}`}
                 x={x}
                 y={height - 2}
-                fill="#64748b"
+                fill="#676b78"
                 fontSize="9.5"
                 fontFamily="var(--font-sans)"
                 textAnchor="middle"

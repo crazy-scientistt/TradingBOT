@@ -8,11 +8,11 @@ interface DecisionPipelineProps {
 
 export const DecisionPipeline: React.FC<DecisionPipelineProps> = ({ steps }) => {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '9px', marginTop: '12px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '9px', marginTop: '10px' }}>
       <div style={{
         fontSize: '11px',
         fontWeight: 600,
-        color: '#94a3b8',
+        color: '#9498a4',
         letterSpacing: '0.04em',
         textTransform: 'uppercase',
         marginBottom: '2px'
@@ -33,8 +33,8 @@ export const DecisionPipeline: React.FC<DecisionPipelineProps> = ({ steps }) => 
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                fontSize: '12.5px',
-                color: isPending ? '#64748b' : isActive ? '#f8fafc' : '#e2e8f0'
+                fontSize: '12px',
+                color: isPending ? '#555963' : isActive ? '#f8fafc' : '#e2e4e8'
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -44,8 +44,8 @@ export const DecisionPipeline: React.FC<DecisionPipelineProps> = ({ steps }) => 
                     width: '18px',
                     height: '18px',
                     borderRadius: '50%',
-                    backgroundColor: '#f59e0b',
-                    color: '#0a0c10',
+                    backgroundColor: '#f0b90b',
+                    color: '#0a0a0c',
                     fontSize: '11px',
                     fontWeight: 700,
                     display: 'flex',
@@ -59,8 +59,8 @@ export const DecisionPipeline: React.FC<DecisionPipelineProps> = ({ steps }) => 
                     width: '18px',
                     height: '18px',
                     borderRadius: '50%',
-                    border: isCompleted ? '1.5px solid #d4a017' : '1.5px solid #334155',
-                    color: isCompleted ? '#f59e0b' : '#64748b',
+                    border: isCompleted ? '1.5px solid #d4a017' : '1.5px solid #33363f',
+                    color: isCompleted ? '#f0b90b' : '#555963',
                     fontSize: '10.5px',
                     fontWeight: 600,
                     display: 'flex',
@@ -74,15 +74,15 @@ export const DecisionPipeline: React.FC<DecisionPipelineProps> = ({ steps }) => 
                 {/* Label */}
                 <span style={{
                   fontWeight: isActive ? 600 : isCompleted ? 500 : 400,
-                  color: isActive ? '#f8fafc' : isCompleted ? '#e2e8f0' : '#64748b'
+                  color: isActive ? '#f8fafc' : isCompleted ? '#e2e4e8' : '#555963'
                 }}>
                   {step.label}
                 </span>
               </div>
 
-              {/* Status indicator on right */}
+              {/* Status checkmark on right */}
               {isCompleted && (
-                <Check size={16} color="#22c55e" strokeWidth={2.5} />
+                <Check size={15} color="#22c55e" strokeWidth={2.5} />
               )}
             </div>
           );

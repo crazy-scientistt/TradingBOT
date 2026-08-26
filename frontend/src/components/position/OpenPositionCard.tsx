@@ -28,7 +28,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
           marginBottom: '8px'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
               OPEN POSITION
             </span>
             <span className="badge-live">
@@ -38,7 +38,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
           <button style={{
             background: 'transparent',
             border: 'none',
-            color: '#94a3b8',
+            color: '#9498a4',
             cursor: 'pointer',
             padding: '2px',
             display: 'flex',
@@ -63,7 +63,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {/* ENTRY */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>ENTRY</span>
+            <span style={{ color: '#9498a4', fontWeight: 500 }}>ENTRY</span>
             <span style={{ color: '#f8fafc', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
               {position.entry.toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
@@ -71,7 +71,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
 
           {/* STOP */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>STOP</span>
+            <span style={{ color: '#9498a4', fontWeight: 500 }}>STOP</span>
             <span style={{ color: '#ef4444', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
               {position.stop.toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
@@ -79,7 +79,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
 
           {/* TARGET */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>TARGET</span>
+            <span style={{ color: '#9498a4', fontWeight: 500 }}>TARGET</span>
             <span style={{ color: '#22c55e', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
               {position.target.toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </span>
@@ -87,7 +87,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
 
           {/* QUANTITY */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>QUANTITY</span>
+            <span style={{ color: '#9498a4', fontWeight: 500 }}>QUANTITY</span>
             <span style={{ color: '#f8fafc', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
               {position.quantity}
             </span>
@@ -95,7 +95,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
 
           {/* RISK */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
-            <span style={{ color: '#94a3b8', fontWeight: 500 }}>RISK</span>
+            <span style={{ color: '#9498a4', fontWeight: 500 }}>RISK</span>
             <span style={{ color: '#f8fafc', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
               {position.riskPercent.toFixed(2)}%
             </span>
