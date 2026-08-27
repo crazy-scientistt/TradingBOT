@@ -9,7 +9,8 @@ import {
   ChevronDown,
   Sparkles,
   Cpu,
-  ShieldAlert
+  ShieldAlert,
+  Activity
 } from 'lucide-react';
 import { GoldGuardLogo, HermesIcon } from '../common/Icons';
 
@@ -23,6 +24,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSele
 
   const navItems = [
     { name: 'Overview', icon: LayoutDashboard },
+    { name: 'Agent', icon: Activity },
     { name: 'Studio', icon: Sparkles },
     { name: 'Hermes', icon: HermesIcon, isCustom: true },
     { name: 'Providers', icon: Cpu },

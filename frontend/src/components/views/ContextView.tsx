@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Globe, ExternalLink, ShieldCheck } from 'lucide-react';
+import { Layers, Globe } from 'lucide-react';
 import { useBot } from '../../context/BotContext';
 
 export const ContextView: React.FC = () => {
@@ -13,8 +13,10 @@ export const ContextView: React.FC = () => {
         return { label: 'Real Yields', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.1)' };
       case 'exchange':
         return { label: 'Paxos Reserve', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
+      case 'macro':
+        return { label: 'Macro', color: '#f0b90b', bg: 'rgba(240, 185, 11, 0.1)' };
       default:
-        return { label: 'Geopolitical', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)' };
+        return { label: cat || 'Context', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)' };
     }
   };
 
@@ -44,28 +46,18 @@ export const ContextView: React.FC = () => {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span
-            style={{
-              fontSize: '12px',
-              color: '#10b981',
-              backgroundColor: 'rgba(16, 185, 129, 0.1)',
-              padding: '4px 10px',
-              borderRadius: '4px',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
-            <ShieldCheck size={14} /> AI Context Veto Clear
-          </span>
-        </div>
+        <span style={{ fontSize: '11px', color: '#676b78' }}>
+          {liveContext.length} observation{liveContext.length !== 1 ? 's' : ''}
+        </span>
       </div>
 
       {/* Macro Intel Cards */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        {liveContext.map((item) => {
+        {liveContext.length === 0 ? (
+          <div style={{ padding: '32px', textAlign: 'center', color: '#9498a4', fontSize: '13px' }}>
+            No macro context observations yet. The AI context layer will populate here once the agent evaluates market conditions.
+          </div>
+        ) : liveContext.map((item) => {
           const badge = getCategoryBadge(item.category);
           return (
             <div

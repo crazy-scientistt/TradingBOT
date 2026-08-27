@@ -614,7 +614,9 @@ def audit_runtime_and_events(snapshot: Mapping[str, Any] | None) -> tuple[AuditF
                     "runtime",
                     AuditStatus.PASS,
                     "Runtime status was returned by the API snapshot.",
-                    running=bool(data.get("running", False)) if isinstance(data, Mapping) else False,
+                    running=(
+                        bool(data.get("running", False)) if isinstance(data, Mapping) else False
+                    ),
                 )
             )
     else:

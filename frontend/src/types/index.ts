@@ -30,9 +30,10 @@ export interface GuardBounds {
 }
 
 export interface ExitRules {
-  take_profit_r_multiple: string;
-  stop_loss_atr_multiple: string;
-  invalidation: Condition[];
+  regime_invalidation: boolean;
+  r_multiple_min: string;
+  stop_atr_multiple: string;
+  max_hold_bars: number | null;
 }
 
 export interface StrategyGenome {
@@ -41,7 +42,7 @@ export interface StrategyGenome {
   title: string;
   hypothesis: string;
   evidence_refs: string[];
-  regime: string[];
+  regime: Condition[];
   guard: GuardBounds;
   entry: Condition[];
   exit: ExitRules;
@@ -107,10 +108,30 @@ export interface TradeReflection {
 }
 
 export interface BotStateStatus {
-  state: 'NORMAL' | 'RESEARCH_ACTIVE' | 'AUTONOMY_SUSPENDED' | 'QUARANTINE' | 'KILL_SWITCH_ACTIVE';
+  state:
+    | 'NORMAL'
+    | 'RESEARCH_ACTIVE'
+    | 'AUTONOMY_SUSPENDED'
+    | 'QUARANTINE'
+    | 'KILL_SWITCH_ACTIVE'
+    | 'BOOTING'
+    | 'DISARMED'
+    | 'PAPER_READY'
+    | 'LIVE_READ_ONLY'
+    | 'RUNNING_FLAT'
+    | 'RUNNING_OPEN'
+    | 'COOLDOWN'
+    | 'RISK_HALTED'
+    | 'DATA_HALTED'
+    | 'RECOVERY_REQUIRED'
+    | 'EMERGENCY_STOPPED';
   full_autonomy: boolean;
-  daily_loss_percent: number;
-  daily_loss_limit: number;
-  circuit_breaker_tripped: boolean;
+  autonomy_revoked_reason?: string | null;
+  daily_loss_percent: number | null;
+  daily_loss_limit: number | null;
+  circuit_breaker_tripped: boolean | null;
   active_genome_id: string;
+  paused?: boolean;
+  has_position?: boolean;
+  degraded_reasons?: string[];
 }

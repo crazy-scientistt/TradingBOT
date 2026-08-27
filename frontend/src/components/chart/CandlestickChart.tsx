@@ -19,10 +19,12 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({ candles }) =
   const volumeHeight = 55;
   const mainChartHeight = height - bottomAxisHeight - volumeHeight - 12;
 
-  const minPrice = 2476.0;
-  const maxPrice = 2534.0;
-  const priceRange = maxPrice - minPrice;
-  const maxVolume = 10.0;
+  const lows = candles.map((c) => c.low);
+  const highs = candles.map((c) => c.high);
+  const minPrice = lows.length ? Math.min(...lows) : 0;
+  const maxPrice = highs.length ? Math.max(...highs) : 0;
+  const priceRange = maxPrice - minPrice || 1;
+  const maxVolume = Math.max(...candles.map((c) => c.volume), 1);
 
   const currentCandle = hoverIndex !== null ? candles[hoverIndex] : candles[candles.length - 1];
   const lastCandle = candles[candles.length - 1];
@@ -42,19 +44,16 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({ candles }) =
     return volTop + (volumeHeight - h);
   };
 
-  const ema20Path = candles.reduce((acc, c, idx) => {
-    const x = getX(idx);
-    const y = getY(c.ema20);
-    return idx === 0 ? `M ${x} ${y}` : `${acc} L ${x} ${y}`;
-  }, '');
+  const safeEmaPoints = (field: 'ema20' | 'ema50'): string => candles
+    .map((c, idx) => ({ v: c[field], idx }))
+    .filter((p) => p.v != null)
+    .map((p) => ({ x: getX(p.idx), y: getY(p.v as number) }))
+    .reduce((acc, p, i) => (i === 0 ? 'M ' + p.x + ' ' + p.y : acc + ' L ' + p.x + ' ' + p.y), '');
 
-  const ema50Path = candles.reduce((acc, c, idx) => {
-    const x = getX(idx);
-    const y = getY(c.ema50);
-    return idx === 0 ? `M ${x} ${y}` : `${acc} L ${x} ${y}`;
-  }, '');
+  const ema20Path = safeEmaPoints('ema20');
+  const ema50Path = safeEmaPoints('ema50');
 
-  const priceLevels = [2530.00, 2520.00, 2510.00, 2500.00, 2490.00, 2480.00];
+  const priceLevels = Array.from({ length: 6 }, (_, i) => minPrice + (priceRange * i) / 5);
 
   const timeTicks = [
     { label: '18:00', idx: 4 },
@@ -100,7 +99,6 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({ candles }) =
             <span>H <span style={{ color: '#d1d5db' }}>{currentCandle.high.toFixed(2)}</span></span>
             <span>L <span style={{ color: '#d1d5db' }}>{currentCandle.low.toFixed(2)}</span></span>
             <span>C <span style={{ color: '#22c55e', fontWeight: 600 }}>{currentCandle.close.toFixed(2)}</span></span>
-            <span style={{ color: '#22c55e', fontWeight: 600 }}>+1.50 (+0.06%)</span>
           </div>
 
           {/* Indicators Legend */}
@@ -113,10 +111,10 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({ candles }) =
             marginTop: '3px'
           }}>
             <span style={{ color: '#38bdf8', fontWeight: 500 }}>
-              EMA 20 <span style={{ color: '#38bdf8' }}>{currentCandle.ema20.toFixed(2)}</span>
+              EMA 20 <span style={{ color: '#38bdf8' }}>{currentCandle.ema20 != null ? currentCandle.ema20.toFixed(2) : '—'}</span>
             </span>
             <span style={{ color: '#f59e0b', fontWeight: 500 }}>
-              EMA 50 <span style={{ color: '#f59e0b' }}>{currentCandle.ema50.toFixed(2)}</span>
+              EMA 50 <span style={{ color: '#f59e0b' }}>{currentCandle.ema50 != null ? currentCandle.ema50.toFixed(2) : '—'}</span>
             </span>
           </div>
         </div>

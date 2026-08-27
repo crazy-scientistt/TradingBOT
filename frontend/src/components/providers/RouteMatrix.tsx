@@ -1,7 +1,6 @@
 import React from 'react';
 import { Cpu, Zap, Key, ShieldCheck, RefreshCw } from 'lucide-react';
 import { AIProvider, ProviderRoute } from '../../types';
-import { mockProviders, mockRoutes } from '../../data/mockData';
 import { useBot } from '../../context/BotContext';
 
 interface RouteMatrixProps {
@@ -24,8 +23,8 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
     // Isolated test environment
   }
 
-  const providers = propProviders || (botContext ? botContext.providers : mockProviders);
-  const routes = propRoutes || (botContext ? botContext.routes : mockRoutes);
+  const providers = propProviders || (botContext ? botContext.providers : []);
+  const routes = propRoutes || (botContext ? botContext.routes : []);
 
   const handleRouteChange = (role: 'decision' | 'context' | 'hermes', provider: string) => {
     if (propOnChange) {

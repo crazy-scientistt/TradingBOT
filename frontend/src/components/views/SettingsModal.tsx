@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, ShieldCheck, Key, Save, X } from 'lucide-react';
-import { api } from '../../api/client';
+import { Settings, ShieldCheck, X } from 'lucide-react';
+import { api, EffectiveSettings } from '../../api/client';
 import { useBot } from '../../context/BotContext';
 
 interface SettingsModalProps {
@@ -9,32 +9,26 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const { addToast, isPaperMode, toggleMode } = useBot();
-  const [settings, setSettings] = useState<any>({
-    environment: 'production',
-    mode: 'paper',
-    symbol: 'PAXGUSDT',
-    paper_starting_balance: '100',
-    paper_risk_per_trade: '0.005',
-    taker_fee_rate: '0.001',
-    slippage_rate: '0.0002',
-    max_spread_rate: '0.0015',
-    research_backtest_max_per_day: 8,
-    research_web_calls_max_per_day: 50,
-  });
+  const { isPaperMode } = useBot();
+  const [settings, setSettings] = useState<EffectiveSettings | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
-      api.getSettings().then(setSettings).catch(() => {});
+      setLoading(true);
+      setError(null);
+      setSettings(null);
+      api.getSettings()
+        .then(setSettings)
+        .catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load effective configuration'))
+        .finally(() => setLoading(false));
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    addToast('success', 'Settings Saved', 'Configuration updated successfully');
-    onClose();
-  };
+  const riskPerTrade = settings ? Number(settings.paper_risk_per_trade) : Number.NaN;
 
   return (
     <div
@@ -99,43 +93,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             <label style={{ fontSize: '12px', fontWeight: 600, color: '#9498a4' }}>
               Execution Mode
             </label>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button
-                type="button"
-                onClick={() => !isPaperMode && toggleMode()}
-                style={{
-                  flex: 1,
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  border: isPaperMode ? '1px solid #f0b90b' : '1px solid #22242a',
-                  backgroundColor: isPaperMode ? 'rgba(240, 185, 11, 0.1)' : '#141518',
-                  color: isPaperMode ? '#f0b90b' : '#9498a4',
-                  fontWeight: 600,
-                  fontSize: '12.5px',
-                  cursor: 'pointer',
-                }}
-              >
-                Paper Mode ($100 Virtual)
-              </button>
-              <button
-                type="button"
-                onClick={() => isPaperMode && toggleMode()}
-                style={{
-                  flex: 1,
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  border: !isPaperMode ? '1px solid #10b981' : '1px solid #22242a',
-                  backgroundColor: !isPaperMode ? 'rgba(16, 185, 129, 0.1)' : '#141518',
-                  color: !isPaperMode ? '#10b981' : '#9498a4',
-                  fontWeight: 600,
-                  fontSize: '12.5px',
-                  cursor: 'pointer',
-                }}
-              >
-                Live Capability Mode
-              </button>
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: '1px solid rgba(240, 185, 11, 0.45)',
+                backgroundColor: 'rgba(240, 185, 11, 0.08)',
+                color: '#f0b90b',
+                fontWeight: 600,
+                fontSize: '12.5px',
+              }}
+            >
+              {isPaperMode ? 'Paper mode (server-controlled)' : 'Live mode reported by server (read-only)'}
             </div>
           </div>
+
+          {loading && <div role="status" style={{ color: '#9498a4', fontSize: '12px' }}>Loading effective configuration…</div>}
+          {error && <div role="alert" style={{ color: '#fca5a5', fontSize: '12px' }}>{error}</div>}
 
           {/* Risk Limits */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
@@ -143,7 +117,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Risk Per Trade</label>
               <input
                 type="text"
-                value={`${(parseFloat(settings.paper_risk_per_trade || '0.005') * 100).toFixed(1)}%`}
+                value={Number.isFinite(riskPerTrade) ? `${(riskPerTrade * 100).toFixed(1)}%` : 'Not observed'}
                 readOnly
                 style={{
                   backgroundColor: '#141518',
@@ -160,7 +134,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Starting Balance</label>
               <input
                 type="text"
-                value={`$${settings.paper_starting_balance || '100'} USDT`}
+                value={settings ? `$${settings.paper_starting_balance} USDT` : 'Not observed'}
                 readOnly
                 style={{
                   backgroundColor: '#141518',
@@ -177,7 +151,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Daily Backtest Limit</label>
               <input
                 type="text"
-                value={`${settings.research_backtest_max_per_day || 8} backtests/day`}
+                value={settings ? `${settings.research_backtest_max_per_day} backtests/day` : 'Not observed'}
                 readOnly
                 style={{
                   backgroundColor: '#141518',
@@ -194,7 +168,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Daily Web Call Limit</label>
               <input
                 type="text"
-                value={`${settings.research_web_calls_max_per_day || 50} calls/day`}
+                value={settings ? `${settings.research_web_calls_max_per_day} calls/day` : 'Not observed'}
                 readOnly
                 style={{
                   backgroundColor: '#141518',
@@ -256,24 +230,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           >
             Close
           </button>
-          <button
-            onClick={handleSave}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              padding: '8px 16px',
-              backgroundColor: '#f0b90b',
-              color: '#000',
-              fontWeight: 700,
-              border: 'none',
-              borderRadius: '6px',
-              fontSize: '12.5px',
-              cursor: 'pointer',
-            }}
-          >
-            <Save size={14} /> Save Configuration
-          </button>
+          <span style={{ color: '#676b78', fontSize: '11.5px', alignSelf: 'center' }}>
+            Read-only · restart with approved server configuration changes
+          </span>
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { api } from '../api/client';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { api, AgentEvent, PreflightResponse, StatusResponse } from '../api/client';
 import {
   KpiMetrics,
   Candle,
@@ -17,21 +17,6 @@ import {
   TradeReflection,
   BotStateStatus,
 } from '../types';
-import {
-  mockKpiData,
-  mockCandles,
-  mockPosition,
-  mockPipelineSteps,
-  mockLiveContext,
-  mockRiskHealth,
-  mockEquityHistory,
-  mockGenomes,
-  mockProviders,
-  mockRoutes,
-  mockQuota,
-  mockReflections,
-  mockBotState,
-} from '../data/mockData';
 
 export interface ToastMessage {
   id: string;
@@ -41,15 +26,38 @@ export interface ToastMessage {
   timestamp: string;
 }
 
-interface BotContextType {
-  // Global App State
+export interface DataStatus {
+  loading: boolean;
+  error: string | null;
+  degraded: boolean;
+  lastUpdatedAt: string | null;
+}
+
+export interface RuntimeStatus {
+  state: string | null;
+  running: boolean;
+  paused: boolean;
+  halted: boolean;
+  marketVerified: boolean;
+  marketSource: string | null;
+  degradedReasons: string[];
+}
+
+export interface BotContextType {
   botRunning: boolean;
   isPaperMode: boolean;
   selectedPair: string;
   activeGenomeId: string;
   systemHealthy: boolean;
+  runtimeStatus: RuntimeStatus | null;
+  preflight: PreflightResponse | null;
+  agentEvents: AgentEvent[];
+  dataStatus: DataStatus;
+  loading: boolean;
+  error: string | null;
+  degraded: boolean;
 
-  // Real-time Overview Data
+  // Values remain null/empty until the API observes them; no mock values are seeded.
   kpi: KpiMetrics;
   candles: Candle[];
   quote: { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string };
@@ -58,8 +66,6 @@ interface BotContextType {
   liveContext: NewsItem[];
   riskHealth: HealthStatusItem[];
   equityHistory: EquityDataPoint[];
-
-  // Subsystem Entities
   genomes: StrategyGenome[];
   providers: AIProvider[];
   routes: ProviderRoute[];
@@ -67,14 +73,16 @@ interface BotContextType {
   reflections: TradeReflection[];
   botState: BotStateStatus;
 
-  // Toasts
   toasts: ToastMessage[];
   addToast: (type: ToastMessage['type'], title: string, message?: string) => void;
   removeToast: (id: string) => void;
 
-  // Actions
-  toggleBot: () => Promise<void>;
-  toggleMode: () => void;
+  // Paper-first actions
+  startPaperTrading: () => Promise<void>;
+  pauseTrading: () => Promise<void>;
+  emergencyStop: () => Promise<void>;
+
+  // Existing advanced actions
   setSelectedPair: (pair: string) => void;
   refreshAll: () => Promise<void>;
   promoteGenome: (genomeId: string) => Promise<void>;
@@ -88,35 +96,104 @@ interface BotContextType {
 
 const BotContext = createContext<BotContextType | null>(null);
 
+const sectionData = <T,>(section: { data: T; availability?: string } | T | null | undefined): T | null => {
+  if (section === null || section === undefined) return null;
+  if (typeof section === 'object' && section !== null && 'data' in section) {
+    return (section as { data: T }).data ?? null;
+  }
+  return section as T;
+};
+
+const sectionIsDegraded = (section: unknown): boolean => {
+  if (!section || typeof section !== 'object' || !('availability' in section)) return false;
+  return (section as { availability?: string }).availability !== 'available';
+};
+
+const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateStatus | null): RuntimeStatus | null => {
+  if (!status && !botState) return null;
+  const state = botState?.state ?? status?.bot_state ?? null;
+  const degradedReasons = [
+    ...(status?.degraded_reasons ?? []),
+    ...(botState && 'degraded_reasons' in botState && Array.isArray(botState.degraded_reasons)
+      ? botState.degraded_reasons
+      : []),
+  ];
+  return {
+    state,
+    running: status?.bot_running ?? false,
+    paused: Boolean(botState && 'paused' in botState && botState.paused),
+    halted: Boolean(botState?.circuit_breaker_tripped),
+    marketVerified: Boolean(status?.market_verified),
+    marketSource: status?.market_source ?? null,
+    degradedReasons: [...new Set(degradedReasons.map(String))],
+  };
+};
+
+const isRenderableKpi = (value: KpiMetrics | null): value is KpiMetrics => {
+  if (!value) return false;
+  return [
+    value.equity,
+    value.equityChangePercent,
+    value.cash,
+    value.totalPnl,
+    value.totalPnlChangePercent,
+    value.maxDrawdown,
+    value.liveSpread,
+  ].every((item) => typeof item === 'number' && Number.isFinite(item));
+};
+
+const isRenderablePosition = (value: PositionDetails | null): value is PositionDetails => {
+  if (!value) return false;
+  return [value.entry, value.stop, value.target, value.riskPercent].every(
+    (item) => typeof item === 'number' && Number.isFinite(item),
+  );
+};
+
+const isRenderableQuote = (
+  value: { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string } | null,
+): value is { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string } => {
+  if (!value) return false;
+  return [value.bid, value.ask, value.spread, value.spread_rate].every(
+    (item) => typeof item === 'number' && Number.isFinite(item),
+  );
+};
+
 export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [botRunning, setBotRunning] = useState<boolean>(false);
-  const [isPaperMode, setIsPaperMode] = useState<boolean>(true);
-  const [selectedPair, setSelectedPair] = useState<string>('PAXG / USDT');
-  const [activeGenomeId, setActiveGenomeId] = useState<string>('trend-pullback-v1');
-  const [systemHealthy, setSystemHealthy] = useState<boolean>(true);
+  const [botRunning, setBotRunning] = useState(false);
+  const [isPaperMode, setIsPaperMode] = useState(true);
+  const [selectedPair, setSelectedPair] = useState('PAXG / USDT');
+  const [activeGenomeId, setActiveGenomeId] = useState<string>(null as unknown as string);
+  const [systemHealthy, setSystemHealthy] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
+  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
 
-  const [kpi, setKpi] = useState<KpiMetrics>(mockKpiData);
-  const [candles, setCandles] = useState<Candle[]>(mockCandles);
-  const [quote, setQuote] = useState({
-    bid: 2500.2,
-    ask: 2500.5,
-    spread: 0.3,
-    spread_rate: 0.00012,
-    observed_at: new Date().toISOString(),
+  const [kpi, setKpi] = useState<KpiMetrics>(null as unknown as KpiMetrics);
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [quote, setQuote] = useState<{
+    bid: number;
+    ask: number;
+    spread: number;
+    spread_rate: number;
+    observed_at: string;
+  }>(null as unknown as { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string });
+  const [position, setPosition] = useState<PositionDetails>(null as unknown as PositionDetails);
+  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
+  const [liveContext, setLiveContext] = useState<NewsItem[]>([]);
+  const [riskHealth, setRiskHealth] = useState<HealthStatusItem[]>([]);
+  const [equityHistory, setEquityHistory] = useState<EquityDataPoint[]>([]);
+  const [genomes, setGenomes] = useState<StrategyGenome[]>([]);
+  const [providers, setProviders] = useState<AIProvider[]>([]);
+  const [routes, setRoutes] = useState<ProviderRoute[]>([]);
+  const [quota, setQuota] = useState<ResearchQuota>(null as unknown as ResearchQuota);
+  const [reflections, setReflections] = useState<TradeReflection[]>([]);
+  const [botState, setBotState] = useState<BotStateStatus>(null as unknown as BotStateStatus);
+  const [dataStatus, setDataStatus] = useState<DataStatus>({
+    loading: true,
+    error: null,
+    degraded: false,
+    lastUpdatedAt: null,
   });
-  const [position, setPosition] = useState<PositionDetails>(mockPosition);
-  const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>(mockPipelineSteps);
-  const [liveContext, setLiveContext] = useState<NewsItem[]>(mockLiveContext);
-  const [riskHealth, setRiskHealth] = useState<HealthStatusItem[]>(mockRiskHealth);
-  const [equityHistory, setEquityHistory] = useState<EquityDataPoint[]>(mockEquityHistory);
-
-  const [genomes, setGenomes] = useState<StrategyGenome[]>(mockGenomes);
-  const [providers, setProviders] = useState<AIProvider[]>(mockProviders);
-  const [routes, setRoutes] = useState<ProviderRoute[]>(mockRoutes);
-  const [quota, setQuota] = useState<ResearchQuota>(mockQuota);
-  const [reflections, setReflections] = useState<TradeReflection[]>(mockReflections);
-  const [botState, setBotState] = useState<BotStateStatus>(mockBotState);
-
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = useCallback((type: ToastMessage['type'], title: string, message?: string) => {
@@ -128,252 +205,300 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: new Date().toLocaleTimeString(),
     };
     setToasts((prev) => [newToast, ...prev.slice(0, 4)]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== newToast.id));
-    }, 5000);
+    window.setTimeout(() => setToasts((prev) => prev.filter((toast) => toast.id !== newToast.id)), 5000);
   }, []);
 
   const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
   }, []);
 
   const refreshAll = useCallback(async () => {
+    setDataStatus((previous) => ({ ...previous, loading: true, error: null }));
     try {
-      // 1. Health & Status
-      const [healthRes, statusRes] = await Promise.allSettled([
-        api.getHealth(),
-        api.getStatus(),
+      const snapshot = await api.getDashboard();
+      const status = sectionData(snapshot.status);
+      const kpiData = sectionData(snapshot.kpi);
+      const quoteData = sectionData(snapshot.quote);
+      const positionData = sectionData(snapshot.position);
+      const botStateData = sectionData(snapshot.botState);
+      const allSections = [
+        snapshot.status,
+        snapshot.kpi,
+        snapshot.quote,
+        snapshot.candles,
+        snapshot.position,
+        snapshot.equity,
+        snapshot.context,
+        snapshot.genomes,
+        snapshot.providers,
+        snapshot.routes,
+        snapshot.quota,
+        snapshot.reflections,
+        snapshot.botState,
+        snapshot.agentEvents,
+        snapshot.promotionCanary,
+      ];
+
+      setSystemHealthy(snapshot.health?.status === 'ok');
+      setBotRunning(Boolean(status?.bot_running));
+      setIsPaperMode(status?.mode !== 'live');
+      setActiveGenomeId((status?.active_genome_id ?? botStateData?.active_genome_id) as string);
+      setRuntimeStatus(runtimeFromSnapshot(status, botStateData));
+      setPreflight(snapshot.preflight ?? null);
+      setKpi((isRenderableKpi(kpiData) ? kpiData : null) as unknown as KpiMetrics);
+      setQuote((isRenderableQuote(quoteData) ? quoteData : null) as { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string });
+      setCandles(sectionData(snapshot.candles) ?? []);
+      setPosition((isRenderablePosition(positionData?.position ?? null) ? positionData?.position : null) as unknown as PositionDetails);
+      setPipelineSteps(positionData?.pipelineSteps ?? []);
+      setEquityHistory(sectionData(snapshot.equity) ?? []);
+      setLiveContext(sectionData(snapshot.context) ?? []);
+      setGenomes(sectionData(snapshot.genomes) ?? []);
+      setProviders(sectionData(snapshot.providers) ?? []);
+      setRoutes(sectionData(snapshot.routes) ?? []);
+      setQuota(sectionData(snapshot.quota) as ResearchQuota);
+      setReflections(sectionData(snapshot.reflections) ?? []);
+      setBotState((botStateData && typeof botStateData.state === 'string' ? botStateData : null) as unknown as BotStateStatus);
+      setAgentEvents((sectionData(snapshot.agentEvents) ?? []).slice(0, 30));
+
+      const runtime = runtimeFromSnapshot(status, botStateData);
+      setRiskHealth([
+        {
+          id: 'database',
+          label: `Database: ${snapshot.health?.database ?? 'unknown'}`,
+          status: snapshot.health?.database === 'ok' ? 'OK' : 'ERROR',
+          icon: 'database',
+        },
+        {
+          id: 'market',
+          label: status?.market_verified ? 'Verified market data' : 'Market data unavailable',
+          status: status?.market_verified ? 'OK' : 'WARNING',
+          icon: 'lease',
+        },
+        {
+          id: 'runtime',
+          label: runtime?.state ? `Runtime: ${runtime.state}` : 'Runtime unavailable',
+          status: runtime?.state ? 'OK' : 'ERROR',
+          icon: 'gemini',
+        },
       ]);
-
-      if (healthRes.status === 'fulfilled') {
-        setSystemHealthy(healthRes.value.status === 'ok');
-        setRiskHealth([
-          {
-            id: '1',
-            label: `Database: ${healthRes.value.database || 'ok'}`,
-            status: healthRes.value.database === 'ok' ? 'OK' : 'ERROR',
-            icon: 'database',
-          },
-          {
-            id: '2',
-            label: 'Single Execution Lease',
-            status: 'OK',
-            icon: 'lease',
-          },
-          {
-            id: '3',
-            label: 'OpenCodex / Gemini 3.7 Route',
-            status: 'OK',
-            icon: 'gemini',
-          },
-          {
-            id: '4',
-            label: 'Hermes Research Agent',
-            status: 'OK',
-            icon: 'hermes',
-          },
-        ]);
-      }
-
-      if (statusRes.status === 'fulfilled') {
-        setBotRunning(statusRes.value.bot_running);
-        if (statusRes.value.active_genome_id) {
-          setActiveGenomeId(statusRes.value.active_genome_id);
-        }
-      }
-
-      // 2. Overview Live Metrics
-      const [kpiRes, posRes, quoteRes, candlesRes, eqRes, ctxRes] = await Promise.allSettled([
-        api.getKpi(),
-        api.getPosition(),
-        api.getMarketQuote('PAXGUSDT'),
-        api.getMarketCandles('PAXGUSDT', '15m', 50),
-        api.getEquityCurve(),
-        api.getLiveContext(),
-      ]);
-
-      if (kpiRes.status === 'fulfilled') setKpi(kpiRes.value);
-      if (posRes.status === 'fulfilled') {
-        setPosition(posRes.value.position);
-        setPipelineSteps(posRes.value.pipelineSteps);
-      }
-      if (quoteRes.status === 'fulfilled') setQuote(quoteRes.value);
-      if (candlesRes.status === 'fulfilled' && candlesRes.value.length > 0) {
-        setCandles(candlesRes.value);
-      }
-      if (eqRes.status === 'fulfilled') setEquityHistory(eqRes.value);
-      if (ctxRes.status === 'fulfilled') setLiveContext(ctxRes.value);
-
-      // 3. Subsystem Entities
-      const [genomesRes, provRes, routesRes, quotaRes, refRes, stateRes] = await Promise.allSettled([
-        api.getGenomes(),
-        api.getProviders(),
-        api.getRoutes(),
-        api.getQuota(),
-        api.getReflections(),
-        api.getBotState(),
-      ]);
-
-      if (genomesRes.status === 'fulfilled' && genomesRes.value.length > 0) setGenomes(genomesRes.value);
-      if (provRes.status === 'fulfilled') setProviders(provRes.value);
-      if (routesRes.status === 'fulfilled' && routesRes.value.length > 0) setRoutes(routesRes.value);
-      if (quotaRes.status === 'fulfilled') setQuota(quotaRes.value);
-      if (refRes.status === 'fulfilled' && refRes.value.length > 0) setReflections(refRes.value);
-      if (stateRes.status === 'fulfilled') setBotState(stateRes.value);
-    } catch (err: any) {
-      console.warn('Live API poll fallback:', err);
+      setDataStatus({
+        loading: false,
+        error: null,
+        degraded: allSections.some(sectionIsDegraded) || !snapshot.preflight?.ready,
+        lastUpdatedAt: snapshot.generated_at ?? new Date().toISOString(),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to reach the trading service';
+      setDataStatus((previous) => ({ ...previous, loading: false, error: message, degraded: true }));
     }
   }, []);
 
-  // Initial load and polling ticker
   useEffect(() => {
-    refreshAll();
-    const interval = setInterval(refreshAll, 4000);
-    return () => clearInterval(interval);
+    void refreshAll();
+    const interval = window.setInterval(() => void refreshAll(), 4000);
+    const disposeStream =
+      typeof EventSource === 'undefined'
+        ? () => undefined
+        : api.streamAgentEvents({
+            onSnapshot: (events) => setAgentEvents(events.slice(0, 30)),
+            onEvent: (event) => setAgentEvents((previous) => [event, ...previous.filter((item) => item.event_id !== event.event_id)].slice(0, 30)),
+            onOpen: () => setDataStatus((previous) => ({
+              ...previous,
+              error: previous.error?.startsWith('Disconnected from the agent event stream') ? null : previous.error,
+            })),
+            onError: (error) => setDataStatus((previous) => ({ ...previous, degraded: true, error: error.message })),
+          });
+    return () => {
+      window.clearInterval(interval);
+      disposeStream();
+    };
   }, [refreshAll]);
 
-  // Actions
-  const toggleBot = async () => {
-    try {
-      if (botRunning) {
-        await api.stopBot();
-        setBotRunning(false);
-        addToast('info', 'Trading Bot Stopped', 'Coordinator loop paused');
-      } else {
-        await api.startBot();
-        setBotRunning(true);
-        addToast('success', 'Trading Bot Started', 'Scanning 15m closed candles on PAXG/USDT');
-      }
-    } catch (err: any) {
-      addToast('error', 'Bot Action Failed', err.message);
+  const startPaperTrading = useCallback(async () => {
+    if (!preflight) {
+      addToast('info', 'Preflight still loading', 'Wait for the server checks before starting paper trading.');
+      return;
     }
-  };
-
-  const toggleMode = () => {
-    setIsPaperMode(!isPaperMode);
-    addToast('info', 'Mode Switched', !isPaperMode ? 'Switched to Paper Mode ($100 balance)' : 'Switched to Live Mode');
-  };
-
-  const promoteGenome = async (genomeId: string) => {
-    try {
-      const res = await api.promoteGenome(genomeId);
-      setActiveGenomeId(genomeId);
-      addToast('success', 'Strategy Promoted', `Genome ${genomeId} is now the active trading strategy`);
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Promotion Failed', err.message);
+    if (!preflight.ready) {
+      const details = preflight.checks.filter((check) => check.status === 'fail').map((check) => `${check.label}: ${check.detail}`).join(' ');
+      addToast('error', 'Paper trading blocked by preflight', details || 'Resolve the blocking checks before starting.');
+      return;
     }
-  };
-
-  const triggerHermesStep = async () => {
     try {
-      const res = await api.triggerHermesStep();
-      addToast('success', 'Hermes Reasoning Step Complete', `Generated candidate ${res.candidate.genome_id}`);
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Hermes Step Failed', err.message);
+      await api.startBot();
+      addToast('success', 'Paper trading started', 'New entries will be evaluated from verified closed candles.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Paper trading could not start', error instanceof Error ? error.message : 'The server rejected the start request.');
+      await refreshAll();
     }
-  };
+  }, [addToast, preflight, refreshAll]);
 
-  const updateRoute = async (role: 'decision' | 'context' | 'hermes', provider: string) => {
+  const pauseTrading = useCallback(async () => {
+    try {
+      await api.pauseBot();
+      addToast('info', 'New entries paused', 'Protective monitoring continues for any open paper position.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Pause request failed', error instanceof Error ? error.message : 'The server rejected the pause request.');
+    }
+  }, [addToast, refreshAll]);
+
+  const emergencyStop = useCallback(async () => {
+    try {
+      await api.stopBot();
+      addToast('warning', 'Emergency stop engaged', 'Paper positions are closed and the runtime remains halted until reset.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Emergency stop failed', error instanceof Error ? error.message : 'The server rejected the emergency stop.');
+    }
+  }, [addToast, refreshAll]);
+
+  const promoteGenome = useCallback(async (genomeId: string) => {
+    try {
+      await api.promoteGenome(genomeId);
+      addToast('success', 'Strategy promoted', `Genome ${genomeId} is now the active strategy.`);
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Promotion failed', error instanceof Error ? error.message : 'The server rejected the promotion.');
+    }
+  }, [addToast, refreshAll]);
+
+  const triggerHermesStep = useCallback(async () => {
+    try {
+      const result = await api.triggerHermesStep();
+      addToast('success', 'Hermes reasoning step complete', `Candidate ${result.candidate_genome_id ?? result.candidate?.genome_id ?? 'created'}.`);
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Hermes step failed', error instanceof Error ? error.message : 'The server rejected the research request.');
+    }
+  }, [addToast, refreshAll]);
+
+  const updateRoute = useCallback(async (role: 'decision' | 'context' | 'hermes', provider: string) => {
     try {
       await api.setRoute(role, provider);
-      addToast('success', 'Route Updated', `Assigned ${provider} to ${role} role`);
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Route Update Failed', err.message);
+      addToast('success', 'Route updated', `Assigned ${provider} to ${role}.`);
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Route update failed', error instanceof Error ? error.message : 'The server rejected the route update.');
     }
-  };
+  }, [addToast, refreshAll]);
 
-  const probeLatencies = async () => {
+  const probeLatencies = useCallback(async () => {
     try {
-      const res = await api.probeProviders();
-      setProviders(res);
-      addToast('info', 'Latencies Probed', 'Live response times updated');
-    } catch (err: any) {
-      addToast('error', 'Probe Failed', err.message);
+      setProviders(await api.probeProviders());
+      addToast('info', 'Provider probes complete', 'Latency results reflect the latest server probes.');
+    } catch (error) {
+      addToast('error', 'Provider probe failed', error instanceof Error ? error.message : 'The server rejected the probe request.');
     }
-  };
+  }, [addToast]);
 
-  const triggerKillSwitch = async () => {
-    try {
-      await api.triggerKillSwitch();
-      setBotRunning(false);
-      addToast('warning', 'EMERGENCY KILL SWITCH ENGAGED', 'All positions closed, trading halted');
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Kill Switch Failed', err.message);
-    }
-  };
-
-  const revokeAutonomy = async () => {
+  const revokeAutonomy = useCallback(async () => {
     try {
       await api.revokeAutonomy();
-      addToast('warning', 'Autonomy Suspended', 'Human approval now required for all mutations');
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Action Failed', err.message);
+      addToast('warning', 'Autonomy suspended', 'Human approval is required for mutations.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Autonomy action failed', error instanceof Error ? error.message : 'The server rejected the request.');
     }
-  };
+  }, [addToast, refreshAll]);
 
-  const revertBaseline = async () => {
+  const revertBaseline = useCallback(async () => {
     try {
       await api.revertBaseline();
-      setActiveGenomeId('trend-pullback-v1');
-      addToast('success', 'Reverted to Baseline', 'Promoted safe trend-pullback-v1 strategy');
-      refreshAll();
-    } catch (err: any) {
-      addToast('error', 'Revert Failed', err.message);
+      addToast('success', 'Reverted to baseline', 'The verified baseline strategy is active.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Baseline revert failed', error instanceof Error ? error.message : 'The server rejected the request.');
     }
-  };
+  }, [addToast, refreshAll]);
 
-  return (
-    <BotContext.Provider
-      value={{
-        botRunning,
-        isPaperMode,
-        selectedPair,
-        activeGenomeId,
-        systemHealthy,
-        kpi,
-        candles,
-        quote,
-        position,
-        pipelineSteps,
-        liveContext,
-        riskHealth,
-        equityHistory,
-        genomes,
-        providers,
-        routes,
-        quota,
-        reflections,
-        botState,
-        toasts,
-        addToast,
-        removeToast,
-        toggleBot,
-        toggleMode,
-        setSelectedPair,
-        refreshAll,
-        promoteGenome,
-        triggerHermesStep,
-        updateRoute,
-        probeLatencies,
-        triggerKillSwitch,
-        revokeAutonomy,
-        revertBaseline,
-      }}
-    >
-      {children}
-    </BotContext.Provider>
-  );
+  const value = useMemo<BotContextType>(() => ({
+    botRunning,
+    isPaperMode,
+    selectedPair,
+    activeGenomeId,
+    systemHealthy,
+    runtimeStatus,
+    preflight,
+    agentEvents,
+    dataStatus,
+    loading: dataStatus.loading,
+    error: dataStatus.error,
+    degraded: dataStatus.degraded,
+    kpi,
+    candles,
+    quote,
+    position,
+    pipelineSteps,
+    liveContext,
+    riskHealth,
+    equityHistory,
+    genomes,
+    providers,
+    routes,
+    quota,
+    reflections,
+    botState,
+    toasts,
+    addToast,
+    removeToast,
+    startPaperTrading,
+    pauseTrading,
+    emergencyStop,
+    setSelectedPair,
+    refreshAll,
+    promoteGenome,
+    triggerHermesStep,
+    updateRoute,
+    probeLatencies,
+    triggerKillSwitch: emergencyStop,
+    revokeAutonomy,
+    revertBaseline,
+  }), [
+    activeGenomeId,
+    addToast,
+    agentEvents,
+    botRunning,
+    botState,
+    candles,
+    dataStatus,
+    emergencyStop,
+    equityHistory,
+    genomes,
+    isPaperMode,
+    kpi,
+    liveContext,
+    pauseTrading,
+    pipelineSteps,
+    position,
+    preflight,
+    probeLatencies,
+    promoteGenome,
+    providers,
+    quote,
+    reflections,
+    refreshAll,
+    removeToast,
+    revertBaseline,
+    riskHealth,
+    routes,
+    runtimeStatus,
+    selectedPair,
+    startPaperTrading,
+    systemHealthy,
+    toasts,
+    triggerHermesStep,
+    updateRoute,
+    quota,
+    revokeAutonomy,
+  ]);
+
+  return <BotContext.Provider value={value}>{children}</BotContext.Provider>;
 };
 
 export const useBot = () => {
   const context = useContext(BotContext);
-  if (!context) {
-    throw new Error('useBot must be used within a BotProvider');
-  }
+  if (!context) throw new Error('useBot must be used within a BotProvider');
   return context;
 };

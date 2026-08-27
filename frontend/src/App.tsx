@@ -13,6 +13,7 @@ import { StrategyStudio } from './components/strategy/StrategyStudio';
 import { ResearchLab } from './components/research/ResearchLab';
 import { RouteMatrix } from './components/providers/RouteMatrix';
 import { EmergencyCockpit } from './components/risk/EmergencyCockpit';
+import { AgentActivity } from './components/agent/AgentActivity';
 
 import { MarketView } from './components/views/MarketView';
 import { ContextView } from './components/views/ContextView';
@@ -20,6 +21,63 @@ import { DecisionsView } from './components/views/DecisionsView';
 import { TradesView } from './components/views/TradesView';
 import { SettingsModal } from './components/views/SettingsModal';
 import { ToastContainer } from './components/common/ToastContainer';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+
+const DataNotice: React.FC<{ title: string; detail?: string }> = ({ title, detail }) => (
+  <div
+    role="status"
+    style={{
+      flex: 1,
+      minHeight: '140px',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '8px',
+      border: '1px solid #22242a',
+      borderRadius: '8px',
+      backgroundColor: '#0d0e12',
+      color: '#cbd5e1',
+      textAlign: 'center',
+      padding: '20px',
+    }}
+  >
+    <strong>{title}</strong>
+    {detail && <span style={{ color: '#9498a4', fontSize: '12px' }}>{detail}</span>}
+  </div>
+);
+
+const ConnectionBanner: React.FC = () => {
+  const { loading, error, degraded, dataStatus } = useBot();
+  if (!loading && !error && !degraded) return null;
+  const message = error
+    ? `Disconnected from live data: ${error}`
+    : loading
+      ? 'Connecting to the paper-trading service…'
+      : 'Live data is degraded. Values below are limited to observations returned by the service.';
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        margin: '8px 14px 0',
+        padding: '8px 12px',
+        borderRadius: '6px',
+        border: `1px solid ${error ? 'rgba(239, 68, 68, 0.45)' : 'rgba(240, 185, 11, 0.35)'}`,
+        backgroundColor: error ? 'rgba(239, 68, 68, 0.08)' : 'rgba(240, 185, 11, 0.08)',
+        color: error ? '#fca5a5' : '#f0b90b',
+        fontSize: '12px',
+      }}
+    >
+      {message}
+      {dataStatus.lastUpdatedAt && !loading && (
+        <span style={{ color: '#9498a4', marginLeft: '8px' }}>
+          Last snapshot: {new Date(dataStatus.lastUpdatedAt).toLocaleTimeString()}
+        </span>
+      )}
+    </div>
+  );
+};
 
 const MainDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Overview');
@@ -33,6 +91,9 @@ const MainDashboard: React.FC = () => {
     equityHistory,
     liveContext,
     riskHealth,
+    quote,
+    genomes,
+    botState,
   } = useBot();
 
   const handleSelectTab = (tab: string) => {
@@ -70,6 +131,7 @@ const MainDashboard: React.FC = () => {
       >
         {/* Top Header */}
         <TopHeader onOpenSettings={() => setIsSettingsOpen(true)} />
+        <ConnectionBanner />
 
         {/* Dashboard Body / Active Tab View */}
         <main
@@ -85,7 +147,11 @@ const MainDashboard: React.FC = () => {
           {activeTab === 'Overview' && (
             <>
               {/* Row 1: 5 KPI Cards */}
-              <KpiCardsRow data={kpi} />
+              {kpi ? (
+                <KpiCardsRow data={kpi} />
+              ) : (
+                <DataNotice title="Waiting for a real paper-account snapshot" detail="No equity, PnL, drawdown, or spread value has been observed yet." />
+              )}
 
               {/* Row 2: Middle Section - Chart (Left) + Open Position & Pipeline (Right) */}
               <div
@@ -96,11 +162,16 @@ const MainDashboard: React.FC = () => {
                   width: '100%',
                 }}
               >
-                <CandlestickChart candles={candles} />
-                <OpenPositionCard
-                  position={position}
-                  pipelineSteps={pipelineSteps}
-                />
+                {candles.length > 0 ? (
+                  <CandlestickChart candles={candles} />
+                ) : (
+                  <DataNotice title="Market candles unavailable" detail="The chart will appear after verified closed candles are ingested." />
+                )}
+                {position ? (
+                  <OpenPositionCard position={position} pipelineSteps={pipelineSteps} />
+                ) : (
+                  <DataNotice title="No open paper position" detail="The paper account is flat or has not produced a position snapshot." />
+                )}
               </div>
 
               {/* Row 3: Bottom Section - Equity Curve (Left) + Live Context (Middle) + Risk & Health (Right) */}
@@ -119,11 +190,12 @@ const MainDashboard: React.FC = () => {
             </>
           )}
 
-          {activeTab === 'Studio' && <StrategyStudio />}
+          {activeTab === 'Agent' && <AgentActivity />}
+          {activeTab === 'Studio' && (genomes.length > 0 ? <StrategyStudio /> : <DataNotice title="No strategy genomes observed" detail="The Strategy Studio remains read-only until the registry returns a real genome." />)}
           {activeTab === 'Hermes' && <ResearchLab />}
           {activeTab === 'Providers' && <RouteMatrix />}
-          {activeTab === 'Cockpit' && <EmergencyCockpit />}
-          {activeTab === 'Market' && <MarketView />}
+          {activeTab === 'Cockpit' && (botState ? <EmergencyCockpit /> : <DataNotice title="Runtime status unavailable" detail="Emergency controls are unavailable until the server reports runtime state." />)}
+          {activeTab === 'Market' && (quote && candles.length > 0 ? <MarketView /> : <DataNotice title="Market data unavailable" detail="This view does not fabricate quotes or candles while the feed is disconnected." />)}
           {activeTab === 'Context' && <ContextView />}
           {activeTab === 'Decisions' && <DecisionsView />}
           {activeTab === 'Trades' && <TradesView />}
@@ -144,9 +216,11 @@ const MainDashboard: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <BotProvider>
-      <MainDashboard />
-    </BotProvider>
+    <ErrorBoundary>
+      <BotProvider>
+        <MainDashboard />
+      </BotProvider>
+    </ErrorBoundary>
   );
 };
 

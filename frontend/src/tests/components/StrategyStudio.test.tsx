@@ -8,7 +8,7 @@ const baselineGenome: StrategyGenome = {
   title: 'Hourly Trend 15m Pullback Recovery',
   hypothesis: 'Trading in the direction of the 1h EMA50 slope during pullbacks produces positive expectancy.',
   evidence_refs: ['doc-trend-pullback-v1', 'report-dev-baseline'],
-  regime: ['trend', 'normal-volatility'],
+  regime: [],
   guard: {
     min_atr_rate: '0.0005',
     max_atr_rate: '0.0150',
@@ -27,15 +27,10 @@ const baselineGenome: StrategyGenome = {
     },
   ],
   exit: {
-    take_profit_r_multiple: '2.0',
-    stop_loss_atr_multiple: '1.5',
-    invalidation: [
-      {
-        left: 'consecutive_closes_below_ema50',
-        op: '>=',
-        right: 2,
-      },
-    ],
+    regime_invalidation: true,
+    r_multiple_min: '2.0',
+    stop_atr_multiple: '1.5',
+    max_hold_bars: null,
   },
   status: 'active',
 };

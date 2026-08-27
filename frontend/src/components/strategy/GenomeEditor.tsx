@@ -213,31 +213,34 @@ export const GenomeEditor: React.FC<GenomeEditorProps> = ({
               <Shield size={14} color="#ef4444" />
               <span style={{ fontSize: '12px', fontWeight: 600, color: '#e2e4e8' }}>Exit & Invalidation Rules</span>
             </div>
-            <div style={{ display: 'flex', gap: '14px', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', gap: '14px', marginBottom: '10px', flexWrap: 'wrap' }}>
               <div>
-                <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Take Profit</span>
+                <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Take-profit target (R multiple)</span>
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#10b981', fontFamily: 'monospace' }}>
-                  {genome.exit.take_profit_r_multiple} R
+                  {genome.exit.r_multiple_min ?? '—'} R
                 </span>
               </div>
               <div>
-                <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Stop Loss</span>
+                <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Stop-loss distance (× ATR)</span>
                 <span style={{ fontSize: '13px', fontWeight: 600, color: '#ef4444', fontFamily: 'monospace' }}>
-                  {genome.exit.stop_loss_atr_multiple} ATR
+                  {genome.exit.stop_atr_multiple ?? '—'} ATR
                 </span>
               </div>
+              <div>
+                <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Regime invalidation</span>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: genome.exit.regime_invalidation ? '#f0b90b' : '#9498a4', fontFamily: 'monospace' }}>
+                  {genome.exit.regime_invalidation ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              {genome.exit.max_hold_bars != null && (
+                <div>
+                  <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Max bars held</span>
+                  <span style={{ fontSize: '13px', fontWeight: 600, color: '#e2e4e8', fontFamily: 'monospace' }}>
+                    {genome.exit.max_hold_bars}
+                  </span>
+                </div>
+              )}
             </div>
-            <ConditionBuilder
-              conditions={genome.exit.invalidation}
-              onChange={(updated) =>
-                onChange &&
-                onChange({
-                  ...genome,
-                  exit: { ...genome.exit, invalidation: updated },
-                })
-              }
-              disabled={readOnly}
-            />
           </div>
         </div>
       )}

@@ -9,7 +9,6 @@ import {
 } from 'lucide-react';
 import { StrategyGenome, BacktestPerformance } from '../../types';
 import { GenomeEditor } from './GenomeEditor';
-import { mockGenomes } from '../../data/mockData';
 import { useBot } from '../../context/BotContext';
 import { api } from '../../api/client';
 
@@ -31,51 +30,33 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
     // Isolated test environment
   }
 
-  const genomesList = initialGenomes || (botContext && botContext.genomes.length > 0 ? botContext.genomes : mockGenomes);
+  const genomesList = initialGenomes || (botContext ? botContext.genomes : []);
   const [genomes, setGenomes] = useState<StrategyGenome[]>(genomesList);
   const activeId = propActiveGenomeId || (botContext ? botContext.activeGenomeId : 'trend-pullback-v1');
   const [selectedId, setSelectedId] = useState<string>(activeId);
   const [isRunningBacktest, setIsRunningBacktest] = useState(false);
   const [backtestMetrics, setBacktestMetrics] = useState<BacktestPerformance | null>(null);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
 
-  const activeGenome = genomes.find((g) => g.genome_id === activeId) || genomes[0] || mockGenomes[0];
+  const activeGenome = genomes.find((g) => g.genome_id === activeId) || genomes[0];
   const selectedGenome = genomes.find((g) => g.genome_id === selectedId) || activeGenome;
-  const isCandidate = selectedGenome.genome_id !== activeGenome.genome_id;
+  const isCandidate = selectedGenome && activeGenome && selectedGenome.genome_id !== activeGenome.genome_id;
 
   const handleRunBacktest = async () => {
     setIsRunningBacktest(true);
+    setBacktestError(null);
     try {
       const res = await api.runBacktest(selectedGenome);
       setBacktestMetrics(res);
       if (botContext) {
         botContext.addToast('success', 'Backtest Complete', `Simulated ${res.trade_count} trades`);
       }
-    } catch {
-      // Fallback performance for tests or offline
-      setBacktestMetrics({
-        net_pnl: '+24.50',
-        gross_pnl: '+28.20',
-        fee_drag: '3.70',
-        net_return: '+24.5%',
-        annualized_return: '+38.2%',
-        trade_count: 42,
-        win_rate: '57.1%',
-        profit_factor: '1.85',
-        maximum_drawdown: '4.8%',
-        sharpe_ratio: '2.14',
-        sortino_ratio: '3.20',
-        calmar_ratio: '7.95',
-      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Backtest failed. The server may need more verified candle data.';
+      setBacktestError(msg);
+      if (botContext) botContext.addToast('error', 'Backtest failed', msg);
     } finally {
       setIsRunningBacktest(false);
-    }
-  };
-
-  const handlePromote = (genomeId: string) => {
-    if (propOnPromote) {
-      propOnPromote(genomeId);
-    } else if (botContext) {
-      botContext.promoteGenome(genomeId);
     }
   };
 
@@ -87,8 +68,9 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
       if (botContext) {
         botContext.addToast('success', 'Genome Saved', `Saved configuration for ${updated.genome_id}`);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      if (botContext) botContext.addToast('error', 'Save failed', msg);
     }
   };
 
@@ -167,27 +149,6 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
             {isRunningBacktest ? 'Simulating Engine...' : 'Run Backtest'}
           </button>
 
-          {isCandidate && selectedGenome.status !== 'active' && (
-            <button
-              type="button"
-              onClick={() => handlePromote(selectedGenome.genome_id)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '8px 14px',
-                backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                color: '#10b981',
-                border: '1px solid rgba(16, 185, 129, 0.4)',
-                fontWeight: 600,
-                fontSize: '13px',
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              <CheckCircle size={14} /> Promote Candidate
-            </button>
-          )}
         </div>
       </div>
 
@@ -340,7 +301,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 <div style={{ backgroundColor: '#121418', padding: '8px 10px', borderRadius: '6px' }}>
                   <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Profit Factor</span>
                   <span style={{ fontSize: '14px', fontWeight: 700, color: '#60a5fa' }}>
-                    {backtestMetrics.profit_factor || '1.85'}
+                    {backtestMetrics.profit_factor || '—'}
                   </span>
                 </div>
                 <div style={{ backgroundColor: '#121418', padding: '8px 10px', borderRadius: '6px' }}>
@@ -352,7 +313,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 <div style={{ backgroundColor: '#121418', padding: '8px 10px', borderRadius: '6px' }}>
                   <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Sharpe Ratio</span>
                   <span style={{ fontSize: '14px', fontWeight: 700, color: '#a78bfa' }}>
-                    {backtestMetrics.sharpe_ratio || '2.14'}
+                    {backtestMetrics.sharpe_ratio || '—'}
                   </span>
                 </div>
                 <div style={{ backgroundColor: '#121418', padding: '8px 10px', borderRadius: '6px' }}>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronDown, Bell, Settings, Play, Square, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { ChevronDown, Bell, Settings, Play, Square } from 'lucide-react';
 import { useBot } from '../../context/BotContext';
 
 interface TopHeaderProps {
@@ -8,13 +8,14 @@ interface TopHeaderProps {
 
 export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
   const {
-    botRunning,
     isPaperMode,
+    runtimeStatus,
     selectedPair,
     setSelectedPair,
-    toggleBot,
-    toggleMode,
+    startPaperTrading,
+    pauseTrading,
     systemHealthy,
+    degraded,
     addToast,
   } = useBot();
 
@@ -50,15 +51,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
     >
       {/* Left side: Mode Pill + Pair Selector + Bot Run Toggle */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}>
-        {/* Paper Mode Pill */}
-        <button
-          onClick={toggleMode}
+        {/* Paper mode is an explicit, non-interactive safety boundary. */}
+        <span
           className="badge-paper"
           style={{
-            cursor: 'pointer',
-            border: isPaperMode ? '1px solid rgba(240, 185, 11, 0.45)' : '1px solid rgba(16, 185, 129, 0.45)',
-            backgroundColor: isPaperMode ? 'rgba(240, 185, 11, 0.08)' : 'rgba(16, 185, 129, 0.08)',
-            color: isPaperMode ? '#f0b90b' : '#10b981',
+            border: '1px solid rgba(240, 185, 11, 0.45)',
+            backgroundColor: 'rgba(240, 185, 11, 0.08)',
+            color: '#f0b90b',
             padding: '5px 12px',
             borderRadius: '4px',
             fontSize: '11px',
@@ -66,10 +65,10 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
             letterSpacing: '0.06em',
             transition: 'all 0.15s ease',
           }}
-          title="Click to Switch Trading Mode"
+          title="Live capability is not exposed by this dashboard"
         >
-          {isPaperMode ? 'PAPER MODE ($100)' : 'LIVE CAPABILITY'}
-        </button>
+          {isPaperMode ? 'PAPER MODE' : 'LIVE MODE (READ-ONLY)'}
+        </span>
 
         {/* Pair Selector Dropdown */}
         <div style={{ position: 'relative' }}>
@@ -141,32 +140,33 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
 
         {/* Start / Stop Trading Bot Button */}
         <button
-          onClick={toggleBot}
+          onClick={runtimeStatus?.running && !runtimeStatus.paused ? pauseTrading : startPaperTrading}
+          aria-label={runtimeStatus?.running && !runtimeStatus.paused ? 'Pause new entries' : 'Start paper trading'}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
             padding: '5px 12px',
             borderRadius: '4px',
-            border: botRunning ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(16, 185, 129, 0.4)',
-            backgroundColor: botRunning ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
-            color: botRunning ? '#ef4444' : '#10b981',
+            border: runtimeStatus?.running && !runtimeStatus.paused ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(16, 185, 129, 0.4)',
+            backgroundColor: runtimeStatus?.running && !runtimeStatus.paused ? 'rgba(239, 68, 68, 0.12)' : 'rgba(16, 185, 129, 0.12)',
+            color: runtimeStatus?.running && !runtimeStatus.paused ? '#ef4444' : '#10b981',
             fontSize: '11.5px',
             fontWeight: 700,
             cursor: 'pointer',
             transition: 'all 0.15s ease',
           }}
-          title={botRunning ? 'Click to Stop Autonomous Loop' : 'Click to Start Autonomous Loop'}
+          title={runtimeStatus?.running && !runtimeStatus.paused ? 'Pause new paper entries' : 'Start paper trading'}
         >
-          {botRunning ? (
+          {runtimeStatus?.running && !runtimeStatus.paused ? (
             <>
               <Square size={11} fill="#ef4444" />
-              <span>BOT RUNNING (15m)</span>
+              <span>PAUSE NEW ENTRIES</span>
             </>
           ) : (
             <>
               <Play size={11} fill="#10b981" />
-              <span>START AUTONOMOUS BOT</span>
+              <span>START PAPER TRADING</span>
             </>
           )}
         </button>
@@ -181,12 +181,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
               width: '7px',
               height: '7px',
               borderRadius: '50%',
-              backgroundColor: systemHealthy ? '#22c55e' : '#ef4444',
-              boxShadow: systemHealthy ? '0 0 8px #22c55e' : '0 0 8px #ef4444',
+              backgroundColor: systemHealthy && !degraded ? '#22c55e' : '#ef4444',
+              boxShadow: systemHealthy && !degraded ? '0 0 8px #22c55e' : '0 0 8px #ef4444',
             }}
           />
           <span style={{ fontSize: '12px', color: '#e2e4e8', fontWeight: 500 }}>
-            {systemHealthy ? 'System Healthy' : 'Degraded'}
+            {systemHealthy && !degraded ? 'System Healthy' : 'Degraded'}
           </span>
         </div>
 

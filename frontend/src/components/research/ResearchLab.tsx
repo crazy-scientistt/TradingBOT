@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { FlaskConical, Sparkles, BookOpen } from 'lucide-react';
 import { ResearchQuota, TradeReflection } from '../../types';
-import { mockQuota, mockReflections } from '../../data/mockData';
 import { useBot } from '../../context/BotContext';
 
 interface ResearchLabProps {
@@ -24,8 +23,8 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
     // Isolated test environment
   }
 
-  const quota = propQuota || (botContext ? botContext.quota : mockQuota);
-  const reflections = propReflections || (botContext ? botContext.reflections : mockReflections);
+  const quota = propQuota || (botContext ? botContext.quota : null);
+  const reflections = propReflections || (botContext ? botContext.reflections : []);
   const [internalRunning, setInternalRunning] = useState(false);
   const isRunning = propIsRunning !== undefined ? propIsRunning : internalRunning;
 
