@@ -17,8 +17,10 @@ services:
 
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      # The backend image also builds the frontend and installs the root project;
+      # its context therefore has to be the repository root.
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: goldguard-backend
     restart: unless-stopped
     ports:

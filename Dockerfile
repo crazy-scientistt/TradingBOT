@@ -17,6 +17,8 @@ RUN apt-get update && \
 
 # Python dependencies
 COPY pyproject.toml ./
+# Hatchling needs the package source present while resolving the local project.
+COPY backend/goldguard ./backend/goldguard
 RUN pip install --no-cache-dir .
 
 # Application code
