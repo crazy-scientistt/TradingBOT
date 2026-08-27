@@ -188,6 +188,7 @@ def test_dashboard_snapshot_covers_every_polled_section(client: TestClient) -> N
         "botState",
         "agentEvents",
         "preflight",
+        "promotionCanary",
     ):
         assert section in body, f"{section} missing from the dashboard snapshot"
 
@@ -410,3 +411,40 @@ def test_bot_state_exposes_canary_and_drives_controller_from_ledger(
     assert observed[0].drawdown == 0
     assert observed[0].error_count == 0
     assert observed[0].trades == 0
+
+
+def test_legacy_genome_promote_endpoint_cannot_bypass_controller(client: TestClient) -> None:
+    response = client.post("/api/genomes/promote", json={"genome_id": "anything"})
+    assert response.status_code == 409
+    assert "PromotionController" in response.text
+
+
+def test_canary_endpoint_is_enveloped_and_truthful_when_empty(client: TestClient) -> None:
+    body = _envelope(client.get("/api/promotion/canary"))
+    assert body["data"]["status"] == "none"
+
+
+def test_durable_runtime_error_triggers_canary_rollback_via_endpoint(client: TestClient) -> None:
+    from goldguard.web import app as app_module
+
+    assert app_module._promotion_repo is not None
+    assert app_module._genome_repo is not None
+    assert app_module._ledger_repo is not None
+    baseline = app_module._genome_repo.get_active_genome()
+    assert baseline is not None
+    candidate = baseline.model_copy(
+        update={"genome_id": "runtime-error-canary", "parent_id": baseline.genome_id}
+    )
+    app_module._genome_repo.save_genome(candidate, origin="hermes", status="active")
+    app_module._promotion_repo.open_canary(
+        genome_id=candidate.genome_id,
+        promotion_id="promotion-error-test",
+        baseline_genome_id=baseline.genome_id,
+        baseline_hash="baseline-hash",
+    )
+    for index in range(3):
+        app_module._ledger_repo.record_runtime_error(f"exchange tick failed {index}")
+
+    body = _envelope(client.get("/api/promotion/canary"))["data"]
+    assert body["status"] == "rolled_back"
+    assert "CANARY_ERROR_BUDGET_EXCEEDED" in body["rollback_reason"]

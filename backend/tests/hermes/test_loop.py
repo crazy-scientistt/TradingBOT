@@ -291,6 +291,7 @@ def _loop(
     controller: PromotionController | None = None,
     engine: object | None = None,
     harness: object | None = None,
+    max_backtests: int = 10,
 ) -> HermesResearchLoop:
     genome_repo = GenomeRepository(database)
     if genome_repo.get_active_genome() is None:
@@ -310,7 +311,7 @@ def _loop(
         memory_bank=MemoryBank(ReflectionRepository(database)),
         autonomy_repo=AutonomyRepository(database),
         promotion_controller=controller,
-        config=HermesLoopConfig(max_backtest_calls=10),
+        config=HermesLoopConfig(max_backtest_calls=max_backtests),
     )
 
 
@@ -440,3 +441,22 @@ async def test_a_rejected_candidate_is_reported_not_promoted(database: Database)
 
     assert result.status == "promotion_rejected"
     assert result.gate_results["reasons"] == ["STOP_WIDENED"]
+
+
+@pytest.mark.asyncio
+async def test_autonomy_revoked_during_proposal_prevents_candidate_persistence(
+    database: Database,
+) -> None:
+    autonomy = AutonomyRepository(database)
+
+    class RevokingGenerator:
+        async def propose(self, **kwargs):  # type: ignore[no-untyped-def]
+            autonomy.revoke("operator revoked while Hermes was thinking")
+            return trend_pullback_v1().model_copy(update={"genome_id": "race-candidate"})
+
+    loop = _loop(database, http_client=httpx.AsyncClient())
+    loop.proposal_generator = RevokingGenerator()  # type: ignore[assignment]
+    result = await loop.step(candles_15m=generate_market_data(num_days=10))
+    assert result.status == "autonomy_revoked"
+    assert GenomeRepository(database).get_genome("race-candidate") is None
+

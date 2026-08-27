@@ -437,6 +437,22 @@ class LedgerRepository:
             ).fetchone()
         return int(row["count"]) if row is not None else 0
 
+    def record_runtime_error(self, detail: str, *, occurred_at: datetime | None = None) -> str:
+        """Persist one runtime failure so restart-safe canary budgets can observe it."""
+        identifier = str(uuid4())
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO system_health_events(" 
+                "id, component, status, details_json, occurred_at) "
+                "VALUES (?, 'trading_runtime', 'error', ?, ?)",
+                (
+                    identifier,
+                    canonical_json({"error": detail}),
+                    (occurred_at or datetime.now(UTC)).isoformat(),
+                ),
+            )
+        return identifier
+
     def latest_context_snapshot(self) -> dict[str, Any] | None:
         """Most recent persisted context snapshot with its sources, or None."""
         with self.database.connect() as connection:

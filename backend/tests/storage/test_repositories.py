@@ -302,3 +302,13 @@ def test_a_profitable_day_reports_no_loss_rate(
     assert measured.rolling_24h_loss_rate == Decimal("0")
     assert measured.peak_drawdown_rate == Decimal("0")
     assert measured.consecutive_losses == 0
+
+
+def test_runtime_errors_are_durable_and_counted_since_a_boundary(
+    database: Database, repository: LedgerRepository
+) -> None:
+    boundary = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    repository.record_runtime_error(
+        "market tick failed", occurred_at=boundary + timedelta(minutes=1)
+    )
+    assert repository.count_runtime_errors_since(boundary) == 1

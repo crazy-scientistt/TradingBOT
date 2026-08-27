@@ -9,7 +9,7 @@ widen a stop, loosen a data-quality guard, or promote past a failed gate.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
@@ -57,6 +57,7 @@ class ShadowEvidence:
     net_pnl: Decimal
     trades: int
     slippage_acceptable: bool
+    candidate_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,14 @@ class PromotionController:
         self._engine = engine
         self._harness = harness
         self._canary = canary_config or CanaryConfig()
+        self._backtest_budget: Callable[[], bool] | None = None
+
+    def set_backtest_budget(self, callback: Callable[[], bool] | None) -> None:
+        self._backtest_budget = callback
+
+    def _consume_backtest(self) -> None:
+        if self._backtest_budget is not None and not self._backtest_budget():
+            raise RuntimeError("backtest quota exhausted")
 
     # -- promotion -----------------------------------------------------------------
 
@@ -185,6 +194,20 @@ class PromotionController:
             return reject(
                 ("AUTONOMY_REVOKED",),
                 f"autonomy is revoked: {state['revoked_reason'] or 'no reason recorded'}",
+            )
+
+        if (
+            dataset.shadow.candidate_id is not None
+            and dataset.shadow.candidate_id != candidate.genome_id
+        ):
+            return reject(
+                ("SHADOW_EVIDENCE_MISMATCH",),
+                "shadow evidence belongs to another candidate",
+            )
+        if dataset.dataset_id.startswith("app:") and dataset.shadow.candidate_id is None:
+            return reject(
+                ("SHADOW_EVIDENCE_UNBOUND",),
+                "paper shadow evidence is not candidate-bound",
             )
 
         allowed, churn_reason = self._pipeline.can_promote_to_active()
@@ -255,6 +278,7 @@ class PromotionController:
         gates: list[GateResult] = []
         candles = dataset.candles_15m
 
+        self._consume_backtest()
         dev_run = self._engine.run(candidate, candles)
         dev = self._pipeline.evaluate_dev_gate(
             candidate.genome_id,
@@ -266,6 +290,7 @@ class PromotionController:
         if not dev.passed:
             return gates
 
+        self._consume_backtest()
         walk_forward = self._harness.evaluate(
             genome=candidate,
             candles_15m=candles,
@@ -284,6 +309,7 @@ class PromotionController:
         # ponytail: a second walk-forward pass re-runs the windows to reach the sealed
         # partition. Promotion runs at most once a day, so the cost is irrelevant; split
         # the sealed evaluation out of the harness if that ever stops being true.
+        self._consume_backtest()
         sealed = self._harness.evaluate(
             genome=candidate,
             candles_15m=candles,

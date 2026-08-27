@@ -250,6 +250,13 @@ class TradingRuntime:
         )
 
     def process_closed_candle(self, candle: Candle, quote: Quote) -> DecisionOutcome:
+        try:
+            return self._process_closed_candle(candle, quote)
+        except Exception as exc:
+            self._ledger_repo.record_runtime_error(str(exc))
+            raise
+
+    def _process_closed_candle(self, candle: Candle, quote: Quote) -> DecisionOutcome:
         self._latest_quote = quote
         if self._halted:
             return DecisionOutcome(False, "RUNTIME_HALTED", ("RUNTIME_HALTED",))
@@ -308,6 +315,13 @@ class TradingRuntime:
         return outcome
 
     def process_quote(self, quote: Quote) -> ExitOutcome | None:
+        try:
+            return self._process_quote(quote)
+        except Exception as exc:
+            self._ledger_repo.record_runtime_error(str(exc))
+            raise
+
+    def _process_quote(self, quote: Quote) -> ExitOutcome | None:
         self._latest_quote = quote
         outcome = self._coordinator.monitor_open_position(quote)
         if outcome is None or outcome.closed_trade is None:

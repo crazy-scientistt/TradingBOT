@@ -323,6 +323,25 @@ def test_short_shadow_run_blocks_promotion(env: _Env) -> None:
     assert env.promotions.get_open_canary() is None
 
 
+def test_unbound_shadow_evidence_fails_closed_for_application_dataset(env: _Env) -> None:
+    candidate = _candidate()
+    env.genomes.save_genome(candidate, origin="hermes", status="candidate")
+    dataset = EvidenceDataset(
+        dataset_id="app:binance-rest:observed",
+        verified=True,
+        candles_15m=(),
+        shadow=ShadowEvidence(
+            days=30,
+            net_pnl=Decimal("10"),
+            trades=50,
+            slippage_acceptable=True,
+        ),
+    )
+    decision = env.controller.evaluate(candidate, dataset, env.baseline)
+    assert decision.promoted is False
+    assert "SHADOW_EVIDENCE_UNBOUND" in decision.rejection_reasons
+
+
 def test_holdout_failure_quarantines_the_candidate(tmp_path) -> None:
     environment = _env(tmp_path, holdout=_report(net_return="-0.03"))
     candidate = _candidate()

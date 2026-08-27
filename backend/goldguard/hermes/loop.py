@@ -101,12 +101,8 @@ class HermesResearchLoop:
             )
 
         # 1. Budget and Quota check
-        allowed = self.quota_repo.consume_backtest(
-            date_str=date_str,
-            max_limit=self.config.max_backtest_calls,
-        )
         usage = self.quota_repo.get_usage(date_str)
-        if not allowed:
+        if usage[0] >= self.config.max_backtest_calls:
             return LoopIterationResult(
                 iteration_id=iteration_id,
                 status="quota_exhausted",
@@ -137,6 +133,57 @@ class HermesResearchLoop:
                 gate_results={"error": str(exc)},
             )
 
+        # Autonomy may be revoked while the awaited proposal call is in flight.
+        # Re-check before any durable candidate mutation.
+        if self.autonomy_repo is not None and not self.autonomy_repo.is_full_autonomy():
+            state = self.autonomy_repo.state()
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="autonomy_revoked",
+                quota_used=usage,
+                gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
+            )
+
+        if self.promotion_controller is not None and dataset is not None:
+            set_budget = getattr(self.promotion_controller, "set_backtest_budget", None)
+            if callable(set_budget):
+                set_budget(
+                    lambda: self.quota_repo.consume_backtest(
+                        date_str=date_str, max_limit=self.config.max_backtest_calls
+                    )
+                )
+            self.genome_repo.save_genome(candidate_genome, origin="hermes", status="candidate")
+            cand_id = candidate_genome.genome_id
+            decision = self.promotion_controller.evaluate(candidate_genome, dataset, parent)
+            fresh_usage = self.quota_repo.get_usage(date_str)
+            if not decision.promoted:
+                self._record_failure()
+                return LoopIterationResult(
+                    iteration_id=iteration_id,
+                    status="promotion_rejected",
+                    candidate_genome_id=cand_id,
+                    gate_results={
+                        **decision.gate_reports,
+                        "reasons": list(decision.rejection_reasons),
+                    },
+                    quota_used=fresh_usage,
+                    circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
+                )
+            self.consecutive_failures = 0
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="promoted",
+                candidate_genome_id=cand_id,
+                gate_results={
+                    **decision.gate_reports,
+                    "promoted_by": decision.promoted_by,
+                    "promotion_id": decision.promotion_id,
+                    "stage": decision.stage,
+                },
+                quota_used=fresh_usage,
+                circuit_breaker_tripped=False,
+            )
+
         # 4. Persist candidate in repository
         self.genome_repo.save_genome(candidate_genome, origin="hermes", status="candidate")
         cand_id = candidate_genome.genome_id
@@ -145,6 +192,15 @@ class HermesResearchLoop:
         dev_end = len(candles_15m) * 70 // 100
         dev_candles = candles_15m[: max(dev_end, 30)]
 
+        if not self.quota_repo.consume_backtest(
+            date_str=date_str, max_limit=self.config.max_backtest_calls
+        ):
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="quota_exhausted",
+                candidate_genome_id=cand_id,
+                quota_used=self.quota_repo.get_usage(date_str),
+            )
         dev_bt = self.backtest_engine.run(candidate_genome, dev_candles)
         dev_res = self.promotion_pipeline.evaluate_dev_gate(
             genome_id=cand_id,
@@ -166,6 +222,15 @@ class HermesResearchLoop:
         val_end = dev_end + (len(candles_15m) * 15 // 100)
         active_candles = candles_15m[: max(val_end, 50)]
 
+        if not self.quota_repo.consume_backtest(
+            date_str=date_str, max_limit=self.config.max_backtest_calls
+        ):
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="quota_exhausted",
+                candidate_genome_id=cand_id,
+                quota_used=self.quota_repo.get_usage(date_str),
+            )
         wf_report = self.wf_harness.evaluate(
             genome=candidate_genome,
             candles_15m=active_candles,
@@ -197,40 +262,6 @@ class HermesResearchLoop:
         # ponytail: with a controller attached the dev/validation backtests run twice per
         # candidate — once here, once inside the controller. Promotion runs at most once a
         # day, so pass the screening results through if that ever stops being true.
-        if self.promotion_controller is not None and dataset is not None:
-            decision = self.promotion_controller.evaluate(candidate_genome, dataset, parent)
-            if not decision.promoted:
-                self._record_failure()
-                return LoopIterationResult(
-                    iteration_id=iteration_id,
-                    status="promotion_rejected",
-                    candidate_genome_id=cand_id,
-                    gate_results={
-                        "development": dev_res.metrics,
-                        "validation": val_res.metrics,
-                        **decision.gate_reports,
-                        "reasons": list(decision.rejection_reasons),
-                    },
-                    quota_used=usage,
-                    circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
-                )
-            self.consecutive_failures = 0
-            return LoopIterationResult(
-                iteration_id=iteration_id,
-                status="promoted",
-                candidate_genome_id=cand_id,
-                gate_results={
-                    "development": dev_res.metrics,
-                    "validation": val_res.metrics,
-                    **decision.gate_reports,
-                    "promoted_by": decision.promoted_by,
-                    "promotion_id": decision.promotion_id,
-                    "stage": decision.stage,
-                },
-                quota_used=usage,
-                circuit_breaker_tripped=False,
-            )
-
         # Success: reset consecutive failures
         self.consecutive_failures = 0
         return LoopIterationResult(

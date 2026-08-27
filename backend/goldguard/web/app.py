@@ -171,9 +171,9 @@ def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
     # insufficient evidence and therefore cannot pass the shadow gate.
     return EvidenceDataset(
         dataset_id=(
-            f"{market.source}:{market.observed_at.isoformat()}"
+            f"app:{market.source}:{market.observed_at.isoformat()}"
             if market.observed_at
-            else f"{market.source}:unobserved"
+            else f"app:{market.source}:unobserved"
         ),
         verified=market.verified,
         candles_15m=tuple(market.candles_15m),
@@ -1065,16 +1065,11 @@ async def save_genome(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/api/genomes/promote")
 async def promote_genome(payload: dict[str, str]) -> dict[str, Any]:
-    """Promote a candidate genome to active. Evidence gates live in the repository."""
-    repo = _require(_genome_repo, "genome repository")
-    genome_id = payload.get("genome_id")
-    if not genome_id:
-        raise HTTPException(status_code=400, detail="genome_id is required")
-    try:
-        repo.transition_genome_status(genome_id, new_status="active", promoted_by="human")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "promoted", "genome_id": genome_id, "new_status": "active"}
+    """Legacy route intentionally disabled; only PromotionController may activate."""
+    raise HTTPException(
+        status_code=409,
+        detail="direct genome promotion is disabled; PromotionController must run all four gates",
+    )
 
 
 def _decimal_or_none(value: Decimal | None, digits: str = "0.01") -> str | None:
@@ -1214,6 +1209,18 @@ async def list_reflections(namespace: str | None = None, limit: int = 100) -> di
         source="memory-bank",
         availability="available" if rows else "unavailable",
         detail=None if rows else "no trade has produced a reflection yet",
+    )
+
+
+@app.get("/api/promotion/canary")
+async def promotion_canary() -> dict[str, Any]:
+    """Current durable canary state, with rollback driven from measured ledger data."""
+    state = _observe_canary()
+    return _env(
+        state,
+        source="promotion-ledger",
+        availability="available" if state["status"] != "none" else "unavailable",
+        detail=None if state["status"] != "none" else "no promoted canary is recorded",
     )
 
 
@@ -1855,6 +1862,7 @@ _DASHBOARD_SECTIONS: tuple[tuple[str, Callable[[], Awaitable[Any]]], ...] = (
     ("botState", bot_state),
     ("agentEvents", agent_events),
     ("preflight", preflight),
+    ("promotionCanary", promotion_canary),
 )
 
 

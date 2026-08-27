@@ -271,6 +271,9 @@ class MarketIngestionService:
     def _record_failure(self, exc: Exception) -> None:
         self._failures += 1
         self._detail = f"market request failed: {exc}"
+        record_error = getattr(self._runtime, "record_runtime_error", None)
+        if callable(record_error):
+            record_error(str(exc))
         logger.warning("Market ingestion tick failed (%s): %s", self._failures, exc)
 
     @staticmethod
