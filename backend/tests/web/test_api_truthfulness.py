@@ -255,3 +255,158 @@ def test_emergency_stop_cannot_be_cleared_by_start(client: TestClient) -> None:
     response = client.post("/api/bot/start")
     assert response.status_code == 409
     assert "halted" in response.json()["detail"].lower()
+
+
+# --- autonomy is a durable kill switch ----------------------------------------
+
+
+def test_revoked_autonomy_survives_a_restart(tmp_path, monkeypatch) -> None:
+    """A revocation is a switch an operator threw. It must not come back on at boot."""
+    monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("GOLDGUARD_ENVIRONMENT", "test")
+    monkeypatch.setenv("GOLDGUARD_MARKET_INGESTION_ENABLED", "false")
+    monkeypatch.setenv("GOLDGUARD_GATEWAY_BASE_URL", "")
+    monkeypatch.setenv("OPENCODEX_BASE_URL", "")
+
+    import importlib
+
+    from goldguard.web import app as app_module
+
+    first = importlib.reload(app_module)
+    with TestClient(first.app) as client:
+        assert _envelope(client.get("/api/status"))["data"]["full_autonomy"] is True
+        revoked = client.post(
+            "/api/bot/revoke-autonomy",
+            json={"reason": "operator paused research during a drawdown"},
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json()["full_autonomy"] is False
+        assert client.post("/api/hermes/step").status_code == 409
+
+    restarted = importlib.reload(app_module)
+    with TestClient(restarted.app) as client:
+        state = _envelope(client.get("/api/bot/state"))["data"]
+        assert state["full_autonomy"] is False
+        assert state["autonomy_revoked_reason"] == "operator paused research during a drawdown"
+        assert client.post("/api/hermes/step").status_code == 409
+
+        restored = client.post("/api/bot/restore-autonomy")
+        assert restored.status_code == 200, restored.text
+        assert restored.json()["full_autonomy"] is True
+        assert _envelope(client.get("/api/status"))["data"]["full_autonomy"] is True
+
+
+def test_revoking_autonomy_requires_a_reason(client: TestClient) -> None:
+    """An unexplained kill switch is an unauditable one."""
+    response = client.post("/api/bot/revoke-autonomy", json={"reason": "   "})
+    assert response.status_code == 422
+
+
+# --- autonomous promotion wiring ----------------------------------------------
+
+
+def test_lifespan_constructs_hermes_loop_and_promotion_controller(client: TestClient) -> None:
+    from goldguard.web import app as app_module
+
+    assert app_module._hermes_loop is not None
+    assert app_module._promotion_controller is not None
+    assert app_module._hermes_loop.promotion_controller is app_module._promotion_controller
+
+
+def test_hermes_step_delegates_to_the_constructed_loop(client: TestClient, monkeypatch) -> None:
+    from decimal import Decimal
+
+    from goldguard.hermes.loop import LoopIterationResult
+    from goldguard.services.ingestion import MarketSnapshot
+    from goldguard.services.promotion_controller import EvidenceDataset, ShadowEvidence
+    from goldguard.web import app as app_module
+
+    calls: list[object] = []
+
+    class FakeLoop:
+        promotion_controller = app_module._promotion_controller
+
+        async def step(self, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(kwargs)
+            return LoopIterationResult(
+                iteration_id="hermes-test",
+                status="promoted_candidate",
+                candidate_genome_id="candidate-test",
+                quota_used=(1, 0),
+            )
+
+    monkeypatch.setattr(
+        app_module,
+        "_market",
+        lambda: MarketSnapshot(
+            availability="available",
+            source="test",
+            observed_at=None,
+            stale=False,
+            detail=None,
+            verified=True,
+            candles_15m=(),
+            candles_1h=(),
+            latest_quote=None,
+            filters=None,
+        ),
+    )
+    monkeypatch.setattr(app_module, "_hermes_loop", FakeLoop())
+    monkeypatch.setattr(
+        app_module,
+        "_hermes_dataset",
+        lambda market: EvidenceDataset(
+            dataset_id="test",
+            verified=True,
+            candles_15m=tuple(market.candles_15m),
+            shadow=ShadowEvidence(
+                days=0,
+                net_pnl=Decimal("0"),
+                trades=0,
+                slippage_acceptable=True,
+            ),
+        ),
+    )
+    response = client.post("/api/hermes/step")
+
+    assert response.status_code == 200, response.text
+    assert calls, "the route must invoke HermesResearchLoop.step"
+    assert response.json()["status"] == "promoted_candidate"
+
+
+def test_bot_state_exposes_canary_and_drives_controller_from_ledger(
+    client: TestClient, monkeypatch
+) -> None:
+    from goldguard.services.promotion_controller import CanaryEvent
+    from goldguard.strategy.genome import trend_pullback_v1
+    from goldguard.web import app as app_module
+
+    assert app_module._promotion_controller is not None
+    observed: list[CanaryEvent] = []
+
+    def observe(event: CanaryEvent):
+        observed.append(event)
+        return None
+
+    monkeypatch.setattr(app_module._promotion_controller, "on_canary_event", observe)
+    assert app_module._promotion_repo is not None
+    assert app_module._genome_repo is not None
+    baseline = app_module._genome_repo.get_active_genome() or trend_pullback_v1()
+    candidate = baseline.model_copy(
+        update={"genome_id": "canary-test", "parent_id": baseline.genome_id}
+    )
+    app_module._genome_repo.save_genome(candidate, origin="hermes", status="active")
+    app_module._promotion_repo.open_canary(
+        genome_id=candidate.genome_id,
+        promotion_id="promotion-test",
+        baseline_genome_id=baseline.genome_id,
+        baseline_hash="baseline-hash",
+    )
+    state = _envelope(client.get("/api/bot/state"))["data"]
+
+    assert "canary" in state
+    assert state["canary"]["status"] == "canary"
+    assert observed and observed[0].genome_id == candidate.genome_id
+    assert observed[0].drawdown == 0
+    assert observed[0].error_count == 0
+    assert observed[0].trades == 0

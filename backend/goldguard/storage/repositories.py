@@ -57,6 +57,20 @@ class ProviderRow:
     created_at: str
 
 
+@dataclass(frozen=True)
+class MeasuredRiskInputs:
+    """The risk engine's circuit-breaker inputs, measured from the ledger.
+
+    Frozen because the risk engine's decision must not be adjustable after measurement.
+    """
+
+    rolling_24h_loss_rate: Decimal
+    peak_drawdown_rate: Decimal
+    consecutive_losses: int
+    minutes_since_exit: int | None
+    trade_count: int
+
+
 class LedgerRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -351,6 +365,77 @@ class LedgerRepository:
             (Decimal(str(row["realized_pnl_text"] or "0")) for row in rows),
             start=Decimal("0"),
         )
+
+    def measure_risk_inputs(
+        self,
+        paper_account_id: str,
+        *,
+        equity: Decimal,
+        now: datetime | None = None,
+    ) -> MeasuredRiskInputs:
+        """Measure the risk engine's circuit-breaker inputs from recorded rows only.
+
+        Every value traces to a closed trade or an equity snapshot; nothing is estimated.
+        `minutes_since_exit` is None when no trade has ever closed, so the caller can tell
+        "there is no cooldown to serve" apart from "the cooldown has elapsed".
+        """
+        moment = now or datetime.now(UTC)
+        realized_24h = self.realized_pnl_since(paper_account_id, moment - timedelta(hours=24))
+        # The window's opening equity is the current equity backed out by the realized flow,
+        # which needs no snapshot at the exact window boundary to be exact.
+        window_open_equity = equity - realized_24h
+        loss_rate = Decimal("0")
+        if realized_24h < 0 and window_open_equity > 0:
+            loss_rate = -realized_24h / window_open_equity
+
+        peak = equity
+        for snapshot in self.list_equity_snapshots(paper_account_id):
+            peak = max(peak, Decimal(str(snapshot["equity_text"])))
+        drawdown = (peak - equity) / peak if peak > equity and peak > 0 else Decimal("0")
+
+        closed = sorted(
+            (
+                trade
+                for trade in self.list_trades(paper_account_id)
+                if str(trade["status"]) == "CLOSED" and trade["closed_at"]
+            ),
+            key=lambda trade: str(trade["closed_at"]),
+            reverse=True,
+        )
+        streak = 0
+        for trade in closed:
+            if Decimal(str(trade["realized_pnl_text"] or "0")) >= 0:
+                break
+            streak += 1
+
+        minutes_since_exit: int | None = None
+        if closed:
+            last_exit = datetime.fromisoformat(str(closed[0]["closed_at"]))
+            if last_exit.tzinfo is None:
+                last_exit = last_exit.replace(tzinfo=UTC)
+            minutes_since_exit = max(int((moment - last_exit).total_seconds() // 60), 0)
+
+        return MeasuredRiskInputs(
+            rolling_24h_loss_rate=loss_rate,
+            peak_drawdown_rate=drawdown,
+            consecutive_losses=streak,
+            minutes_since_exit=minutes_since_exit,
+            trade_count=len(closed),
+        )
+
+    def count_runtime_errors_since(self, since: datetime) -> int:
+        """Count durable runtime error health events after ``since``.
+
+        An empty table is a measured zero; no in-memory exception counter is promoted to
+        canary evidence because it would disappear on restart.
+        """
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM system_health_events "
+                "WHERE occurred_at >= ? AND lower(status) IN ('error', 'failed')",
+                (since.isoformat(),),
+            ).fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def latest_context_snapshot(self) -> dict[str, Any] | None:
         """Most recent persisted context snapshot with its sources, or None."""
@@ -882,6 +967,153 @@ class PromotionRepository:
                 (cutoff,),
             ).fetchone()
         return int(row[0]) if row else 0
+
+    def list_promotions(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                "SELECT promotion_id, genome_id, promoted_by, mode, gate_report_json, at "
+                "FROM promotions ORDER BY at DESC, rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        promotions: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            record["gate_report"] = json.loads(str(record.pop("gate_report_json")))
+            promotions.append(record)
+        return promotions
+
+    # -- canary observation --------------------------------------------------------
+
+    def open_canary(
+        self,
+        *,
+        genome_id: str,
+        promotion_id: str,
+        baseline_genome_id: str,
+        baseline_hash: str,
+    ) -> None:
+        """Record that ``genome_id`` is live under observation, and what to revert to."""
+        now = utc_now_iso()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO promotion_canary(
+                    genome_id, promotion_id, baseline_genome_id, baseline_hash,
+                    stage, rollback_reason, circuit_breaker_tripped, opened_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'canary', NULL, 0, ?, ?)
+                ON CONFLICT(genome_id) DO UPDATE SET
+                    promotion_id = excluded.promotion_id,
+                    baseline_genome_id = excluded.baseline_genome_id,
+                    baseline_hash = excluded.baseline_hash,
+                    stage = 'canary',
+                    rollback_reason = NULL,
+                    circuit_breaker_tripped = 0,
+                    updated_at = excluded.updated_at
+                """,
+                (genome_id, promotion_id, baseline_genome_id, baseline_hash, now, now),
+            )
+
+    def get_canary(self, genome_id: str) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM promotion_canary WHERE genome_id = ?",
+                (genome_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_open_canary(self) -> dict[str, Any] | None:
+        """The candidate still under observation, if any. At most one can be open."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM promotion_canary WHERE stage = 'canary' "
+                "ORDER BY opened_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_latest_canary(self) -> dict[str, Any] | None:
+        """Return the newest canary record, including a settled or rolled-back one."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM promotion_canary ORDER BY updated_at DESC, opened_at DESC LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def close_canary(
+        self,
+        genome_id: str,
+        *,
+        stage: str,
+        rollback_reason: str | None = None,
+        circuit_breaker_tripped: bool = False,
+    ) -> bool:
+        """Close an open canary. Returns False when it was already closed, so a repeated
+        rollback signal cannot revert the same candidate twice."""
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE promotion_canary
+                SET stage = ?, rollback_reason = ?, circuit_breaker_tripped = ?, updated_at = ?
+                WHERE genome_id = ? AND stage = 'canary'
+                """,
+                (
+                    stage,
+                    rollback_reason,
+                    1 if circuit_breaker_tripped else 0,
+                    utc_now_iso(),
+                    genome_id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+
+class AutonomyRepository:
+    """The durable autonomy kill switch.
+
+    Revoking autonomy blocks research mutation and automatic promotion. It is persisted
+    because a switch an operator threw must not come back on after a restart.
+    """
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def state(self) -> dict[str, Any]:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT full_autonomy, revoked_reason, updated_at FROM autonomy_state "
+                "WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            return {"full_autonomy": True, "revoked_reason": None, "updated_at": None}
+        return {
+            "full_autonomy": bool(row["full_autonomy"]),
+            "revoked_reason": row["revoked_reason"],
+            "updated_at": row["updated_at"],
+        }
+
+    def is_full_autonomy(self) -> bool:
+        return bool(self.state()["full_autonomy"])
+
+    def revoke(self, reason: str) -> None:
+        if not reason.strip():
+            raise ValueError("revoking autonomy requires a reason")
+        self._write(full_autonomy=False, reason=reason)
+
+    def restore(self) -> None:
+        self._write(full_autonomy=True, reason=None)
+
+    def _write(self, *, full_autonomy: bool, reason: str | None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO autonomy_state(singleton, full_autonomy, revoked_reason, updated_at)
+                VALUES (1, ?, ?, ?)
+                ON CONFLICT(singleton) DO UPDATE SET
+                    full_autonomy = excluded.full_autonomy,
+                    revoked_reason = excluded.revoked_reason,
+                    updated_at = excluded.updated_at
+                """,
+                (1 if full_autonomy else 0, reason, utc_now_iso()),
+            )
 
 
 class QuotaRepository:

@@ -176,21 +176,14 @@ def configure_verified_market(runtime: TradingRuntime) -> tuple[Candle, Quote]:
     return candle, quote
 
 
-def test_web_runtime_requires_explicit_verified_market_inputs_before_start(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("GOLDGUARD_ENVIRONMENT", "test")
-    monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
+def test_runtime_requires_explicit_verified_market_inputs_before_start(tmp_path) -> None:
+    """Start is refused until ingestion has verified real candles. No network here: the
+    invariant is the runtime's, not the ingester's."""
+    runtime, _ = build_runtime(tmp_path)
 
-    import goldguard.web.app as web_module
-
-    web_app = importlib.reload(web_module)
-    with TestClient(web_app.app):
-        runtime = web_app.get_trading_runtime()
-        assert runtime.status().market_verified is False
-        with pytest.raises(RuntimeError, match="verified market inputs"):
-            runtime.start()
+    assert runtime.status().market_verified is False
+    with pytest.raises(RuntimeError, match="verified market inputs"):
+        runtime.start()
 
 
 def test_runtime_processes_closed_candle_once_and_persists_decision_records(tmp_path) -> None:

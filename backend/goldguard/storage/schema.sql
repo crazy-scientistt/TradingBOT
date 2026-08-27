@@ -317,6 +317,31 @@ CREATE TABLE IF NOT EXISTS promotions (
     at TEXT NOT NULL
 );
 
+-- One row per promoted candidate under canary observation. Survives restart so a bot that
+-- crashes mid-canary still knows which baseline to roll back to and why it stopped.
+CREATE TABLE IF NOT EXISTS promotion_canary (
+    genome_id TEXT PRIMARY KEY REFERENCES genomes(genome_id),
+    promotion_id TEXT NOT NULL,
+    baseline_genome_id TEXT NOT NULL REFERENCES genomes(genome_id),
+    baseline_hash TEXT NOT NULL,
+    stage TEXT NOT NULL CHECK (stage IN ('canary', 'confirmed', 'rolled_back')),
+    rollback_reason TEXT,
+    circuit_breaker_tripped INTEGER NOT NULL DEFAULT 0,
+    opened_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Autonomy is a kill switch, so it is durable: a revocation must not evaporate on restart.
+CREATE TABLE IF NOT EXISTS autonomy_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    full_autonomy INTEGER NOT NULL DEFAULT 1,
+    revoked_reason TEXT,
+    updated_at TEXT NOT NULL
+);
+
+INSERT OR IGNORE INTO autonomy_state(singleton, full_autonomy, updated_at)
+VALUES (1, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+
 CREATE TABLE IF NOT EXISTS research_quota (
     date TEXT PRIMARY KEY,
     backtests_used INTEGER NOT NULL DEFAULT 0,

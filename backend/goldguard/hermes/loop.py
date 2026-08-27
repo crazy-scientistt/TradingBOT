@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from uuid import uuid4
 
 from goldguard.backtest.engine import BacktestEngine
@@ -12,12 +12,23 @@ from goldguard.hermes.generator import (
     StrategyProposalGenerator,
 )
 from goldguard.memory.engine import MemoryBank
+from goldguard.services.promotion_controller import EvidenceDataset, PromotionDecision
 from goldguard.storage.repositories import (
+    AutonomyRepository,
     GenomeRepository,
     QuotaRepository,
 )
-from goldguard.strategy.genome import trend_pullback_v1
+from goldguard.strategy.genome import StrategyGenome, trend_pullback_v1
 from goldguard.strategy.promotion import PromotionPipeline
+
+
+class PromotionJudge(Protocol):
+    def evaluate(
+        self,
+        candidate: StrategyGenome,
+        dataset: EvidenceDataset,
+        baseline: StrategyGenome,
+    ) -> PromotionDecision: ...
 
 
 @dataclass(frozen=True)
@@ -51,6 +62,8 @@ class HermesResearchLoop:
         genome_repo: GenomeRepository,
         quota_repo: QuotaRepository,
         memory_bank: MemoryBank,
+        autonomy_repo: AutonomyRepository | None = None,
+        promotion_controller: PromotionJudge | None = None,
         config: HermesLoopConfig | None = None,
     ) -> None:
         self.proposal_generator = proposal_generator
@@ -60,6 +73,8 @@ class HermesResearchLoop:
         self.genome_repo = genome_repo
         self.quota_repo = quota_repo
         self.memory_bank = memory_bank
+        self.autonomy_repo = autonomy_repo
+        self.promotion_controller = promotion_controller
         self.config = config or HermesLoopConfig()
         self.consecutive_failures = 0
 
@@ -68,11 +83,22 @@ class HermesResearchLoop:
         *,
         candles_15m: Sequence[Candle],
         market_summary: str = "",
+        dataset: EvidenceDataset | None = None,
         now: datetime | None = None,
     ) -> LoopIterationResult:
         current_time = now or datetime.now(UTC)
         date_str = current_time.strftime("%Y-%m-%d")
         iteration_id = f"hermes-loop-{uuid4().hex[:8]}"
+
+        # 0. Autonomy kill switch. Checked before the quota so a revoked bot spends nothing.
+        if self.autonomy_repo is not None and not self.autonomy_repo.is_full_autonomy():
+            state = self.autonomy_repo.state()
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="autonomy_revoked",
+                quota_used=self.quota_repo.get_usage(date_str),
+                gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
+            )
 
         # 1. Budget and Quota check
         allowed = self.quota_repo.consume_backtest(
@@ -163,6 +189,46 @@ class HermesResearchLoop:
                 },
                 quota_used=usage,
                 circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
+            )
+
+        # Success on the screening gates. The loop itself may never promote: when a
+        # controller is attached it is the sole authority, re-running the full gate
+        # sequence (including the sealed holdout) and opening the canary.
+        # ponytail: with a controller attached the dev/validation backtests run twice per
+        # candidate — once here, once inside the controller. Promotion runs at most once a
+        # day, so pass the screening results through if that ever stops being true.
+        if self.promotion_controller is not None and dataset is not None:
+            decision = self.promotion_controller.evaluate(candidate_genome, dataset, parent)
+            if not decision.promoted:
+                self._record_failure()
+                return LoopIterationResult(
+                    iteration_id=iteration_id,
+                    status="promotion_rejected",
+                    candidate_genome_id=cand_id,
+                    gate_results={
+                        "development": dev_res.metrics,
+                        "validation": val_res.metrics,
+                        **decision.gate_reports,
+                        "reasons": list(decision.rejection_reasons),
+                    },
+                    quota_used=usage,
+                    circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
+                )
+            self.consecutive_failures = 0
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="promoted",
+                candidate_genome_id=cand_id,
+                gate_results={
+                    "development": dev_res.metrics,
+                    "validation": val_res.metrics,
+                    **decision.gate_reports,
+                    "promoted_by": decision.promoted_by,
+                    "promotion_id": decision.promotion_id,
+                    "stage": decision.stage,
+                },
+                quota_used=usage,
+                circuit_breaker_tripped=False,
             )
 
         # Success: reset consecutive failures

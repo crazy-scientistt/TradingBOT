@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -162,3 +163,142 @@ def test_provider_routes_and_active_view(database: Database) -> None:
     routes = prov_repo.get_active_routes()
     assert routes["decision"].model == "google-antigravity/gemini-3.7-flash"
     assert routes["decision"].version == 2
+
+
+def _equity_snapshot(
+    database: Database,
+    *,
+    account_id: str,
+    equity: str,
+    observed_at: datetime,
+) -> None:
+    """Write one equity snapshot, mirroring the runtime's own insert."""
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO equity_snapshots(id, paper_account_id, equity_text, cash_text, observed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (f"eq-{observed_at.isoformat()}", account_id, equity, equity, observed_at.isoformat()),
+        )
+
+
+def _close_trade(
+    database: Database,
+    *,
+    account_id: str,
+    trade_id: str,
+    realized_pnl: str,
+    closed_at: datetime,
+) -> None:
+    """Write one CLOSED paper trade, mirroring the runtime's own inserts."""
+    order_id = f"order-{trade_id}"
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO orders(
+                id, mode, paper_account_id, client_order_id, side,
+                quantity_text, status, created_at
+            ) VALUES (?, 'paper', ?, ?, 'BUY', '0.01', 'FILLED', ?)
+            """,
+            (order_id, account_id, f"cid-{trade_id}", closed_at.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO trades(
+                id, mode, paper_account_id, entry_order_id, status,
+                realized_pnl_text, opened_at, closed_at
+            ) VALUES (?, 'paper', ?, ?, 'CLOSED', ?, ?, ?)
+            """,
+            (
+                trade_id,
+                account_id,
+                order_id,
+                realized_pnl,
+                (closed_at - timedelta(hours=1)).isoformat(),
+                closed_at.isoformat(),
+            ),
+        )
+
+
+def test_risk_inputs_are_measured_from_the_ledger(
+    database: Database,
+    repository: LedgerRepository,
+) -> None:
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    account = repository.create_paper_session(Decimal("100"))
+    _equity_snapshot(
+        database,
+        account_id=account,
+        equity="100",
+        observed_at=now - timedelta(hours=23),
+    )
+    # Two losses today after a win: the streak must count only the trailing losses.
+    _close_trade(
+        database,
+        account_id=account,
+        trade_id="t1",
+        realized_pnl="4.00",
+        closed_at=now - timedelta(hours=20),
+    )
+    _close_trade(
+        database,
+        account_id=account,
+        trade_id="t2",
+        realized_pnl="-3.00",
+        closed_at=now - timedelta(hours=6),
+    )
+    _close_trade(
+        database,
+        account_id=account,
+        trade_id="t3",
+        realized_pnl="-2.00",
+        closed_at=now - timedelta(minutes=30),
+    )
+
+    measured = repository.measure_risk_inputs(account, equity=Decimal("99"), now=now)
+
+    # 24h realized pnl is -1.00 against a 100.00 window-opening equity.
+    assert measured.rolling_24h_loss_rate == Decimal("0.01")
+    assert measured.peak_drawdown_rate == Decimal("0.01")
+    assert measured.consecutive_losses == 2
+    assert measured.minutes_since_exit == 30
+
+
+def test_risk_inputs_on_a_fresh_account_block_nothing(repository: LedgerRepository) -> None:
+    account = repository.create_paper_session(Decimal("100"))
+
+    measured = repository.measure_risk_inputs(account, equity=Decimal("100"))
+
+    assert measured.rolling_24h_loss_rate == Decimal("0")
+    assert measured.peak_drawdown_rate == Decimal("0")
+    assert measured.consecutive_losses == 0
+    # No exit has happened, so there is no cooldown to serve.
+    assert measured.minutes_since_exit is None
+
+
+def test_a_profitable_day_reports_no_loss_rate(
+    database: Database,
+    repository: LedgerRepository,
+) -> None:
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=UTC)
+    account = repository.create_paper_session(Decimal("100"))
+    _equity_snapshot(
+        database,
+        account_id=account,
+        equity="100",
+        observed_at=now - timedelta(hours=5),
+    )
+    _close_trade(
+        database,
+        account_id=account,
+        trade_id="win",
+        realized_pnl="7.50",
+        closed_at=now - timedelta(hours=2),
+    )
+
+    measured = repository.measure_risk_inputs(account, equity=Decimal("107.50"), now=now)
+
+    assert measured.rolling_24h_loss_rate == Decimal("0")
+    assert measured.peak_drawdown_rate == Decimal("0")
+    assert measured.consecutive_losses == 0

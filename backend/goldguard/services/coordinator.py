@@ -228,7 +228,13 @@ class TradingCoordinator:
                 ai_assessment=ai_assessment,
             )
 
-        # Deterministic Risk Sizing Gate
+        # Deterministic Risk Sizing Gate. The loss, drawdown, streak and cooldown inputs are
+        # measured from the ledger — a constant here would silently disable four breakers.
+        measured = self.ledger_repo.measure_risk_inputs(
+            account_scope,
+            equity=self.broker.cash,
+            now=closed_at,
+        )
         risk_context = RiskContext(
             equity=self.broker.cash,
             available_cash=self.broker.cash,
@@ -236,10 +242,16 @@ class TradingCoordinator:
             atr=Decimal(str(features.atr14)),
             fee_rate=Decimal("0.001"),
             filters=self.filters,
-            rolling_24h_loss_rate=Decimal("0"),
-            peak_drawdown_rate=Decimal("0"),
-            consecutive_losses=0,
-            minutes_since_exit=120,
+            rolling_24h_loss_rate=measured.rolling_24h_loss_rate,
+            peak_drawdown_rate=measured.peak_drawdown_rate,
+            consecutive_losses=measured.consecutive_losses,
+            # No trade has ever closed, so no cooldown applies: report the boundary itself
+            # rather than inventing an elapsed time.
+            minutes_since_exit=(
+                measured.minutes_since_exit
+                if measured.minutes_since_exit is not None
+                else self.risk_engine.settings.cooldown_minutes
+            ),
             open_positions=1 if self.broker.position is not None else 0,
             data_healthy=features.sufficient_history and features.contiguous,
             spread_acceptable=features.spread_rate <= 0.0015,

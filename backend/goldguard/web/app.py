@@ -25,33 +25,46 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, StringConstraints
 
 from goldguard.ai.decision import DecisionVetoEngine
 from goldguard.backtest.engine import BacktestEngine, FrictionConfig
+from goldguard.backtest.walk_forward import WalkForwardHarness
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
 from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
+from goldguard.hermes.generator import StrategyProposalGenerator
+from goldguard.hermes.loop import HermesResearchLoop
+from goldguard.memory.engine import MemoryBank
 from goldguard.observability.events import AgentEvent
 from goldguard.providers.client import GatewayClient
 from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
 from goldguard.services.ingestion import MarketIngestionService, MarketSnapshot
+from goldguard.services.promotion_controller import (
+    CanaryEvent,
+    EvidenceDataset,
+    PromotionController,
+    ShadowEvidence,
+)
 from goldguard.services.runtime import TradingRuntime
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
+    AutonomyRepository,
+    EvaluationRepository,
     GenomeRepository,
     LedgerRepository,
     MarketCandleRepository,
+    PromotionRepository,
     ProviderRepository,
     QuotaRepository,
     ReflectionRepository,
@@ -67,6 +80,7 @@ from goldguard.strategy.indicators import (
     median_volume_ratio,
     rsi_wilder,
 )
+from goldguard.strategy.promotion import PromotionPipeline
 from goldguard.strategy.runtime import GenomeRuntime
 
 logger = logging.getLogger("goldguard.web")
@@ -95,7 +109,11 @@ _backtest_engine: BacktestEngine | None = None
 _bot_state_machine: StateMachine | None = None
 _ingestion: MarketIngestionService | None = None
 _provider_http_client: httpx.AsyncClient | None = None
-_full_autonomy: bool = True
+_autonomy_repo: AutonomyRepository | None = None
+_promotion_repo: PromotionRepository | None = None
+_promotion_controller: PromotionController | None = None
+_hermes_loop: HermesResearchLoop | None = None
+_hermes_http_client: httpx.AsyncClient | None = None
 
 # Probe results live in memory only: the providers table has no latency column, and a
 # latency measured in a previous process is not a fact about this one.
@@ -114,6 +132,115 @@ def _get_db() -> Database:
 
 def get_trading_runtime() -> TradingRuntime:
     return _require(_trading_runtime, "trading runtime")
+
+
+def _autonomy_state() -> dict[str, Any]:
+    """Durable autonomy state. Fails closed: an uninitialised store reads as revoked."""
+    if _autonomy_repo is None:
+        return {
+            "full_autonomy": False,
+            "revoked_reason": "autonomy store is not initialised",
+            "updated_at": None,
+        }
+    return _autonomy_repo.state()
+
+
+def _is_full_autonomy() -> bool:
+    return bool(_autonomy_state()["full_autonomy"])
+
+
+def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
+    """Build Hermes evidence from verified candles and the durable paper ledger."""
+    ledger = _require(_ledger_repo, "ledger repository")
+    account = _paper_account_id()
+    trades = ledger.list_trades(account) if account else []
+    closed = [trade for trade in trades if str(trade["status"]) == "CLOSED"]
+    net_pnl = sum(
+        (Decimal(str(trade["realized_pnl_text"] or "0")) for trade in closed),
+        Decimal("0"),
+    )
+    opened = [
+        datetime.fromisoformat(str(trade["opened_at"]))
+        for trade in closed
+        if trade["opened_at"]
+    ]
+    shadow_days = 0
+    if opened:
+        shadow_days = max((datetime.now(UTC) - min(opened)).days, 0)
+    # Slippage is only accepted when paper fills exist to measure; an empty history is
+    # insufficient evidence and therefore cannot pass the shadow gate.
+    return EvidenceDataset(
+        dataset_id=(
+            f"{market.source}:{market.observed_at.isoformat()}"
+            if market.observed_at
+            else f"{market.source}:unobserved"
+        ),
+        verified=market.verified,
+        candles_15m=tuple(market.candles_15m),
+        shadow=ShadowEvidence(
+            days=shadow_days,
+            net_pnl=net_pnl,
+            trades=len(closed),
+            slippage_acceptable=bool(closed),
+        ),
+    )
+
+
+def _observe_canary() -> dict[str, Any]:
+    """Drive rollback from measured, durable paper data and return current state."""
+    if _promotion_repo is None:
+        return {"status": "none"}
+    canary = _promotion_repo.get_open_canary()
+    if canary is None:
+        canary = _promotion_repo.get_latest_canary()
+        if canary is None:
+            return {"status": "none"}
+        return {
+            "status": str(canary["stage"]),
+            "genome_id": str(canary["genome_id"]),
+            "baseline_genome_id": str(canary["baseline_genome_id"]),
+            "baseline_hash": str(canary["baseline_hash"]),
+            "rollback_reason": canary["rollback_reason"],
+            "circuit_breaker_tripped": bool(canary["circuit_breaker_tripped"]),
+        }
+    account = _paper_account_id()
+    if _ledger_repo is None or account is None:
+        return {
+            "status": str(canary["stage"]),
+            "genome_id": str(canary["genome_id"]),
+            "baseline_genome_id": str(canary["baseline_genome_id"]),
+            "baseline_hash": str(canary["baseline_hash"]),
+            "rollback_reason": canary["rollback_reason"],
+            "circuit_breaker_tripped": bool(canary["circuit_breaker_tripped"]),
+        }
+    quote = _market().latest_quote
+    equity = _broker.equity(quote) if _broker is not None and quote is not None else (
+        _broker.cash if _broker is not None else Decimal("0")
+    )
+    measured = _ledger_repo.measure_risk_inputs(account, equity=equity)
+    opened_at = datetime.fromisoformat(str(canary["opened_at"]))
+    error_count = _ledger_repo.count_runtime_errors_since(opened_at)
+    if _promotion_controller is not None:
+        _promotion_controller.on_canary_event(
+            CanaryEvent(
+                genome_id=str(canary["genome_id"]),
+                drawdown=measured.peak_drawdown_rate,
+                error_count=error_count,
+                trades=measured.trade_count,
+            )
+        )
+        canary = _promotion_repo.get_canary(str(canary["genome_id"])) or canary
+    return {
+        "status": str(canary["stage"]),
+        "genome_id": str(canary["genome_id"]),
+        "baseline_genome_id": str(canary["baseline_genome_id"]),
+        "baseline_hash": str(canary["baseline_hash"]),
+        "rollback_reason": canary["rollback_reason"],
+        "circuit_breaker_tripped": bool(canary["circuit_breaker_tripped"]),
+        "drawdown": str(measured.peak_drawdown_rate),
+        "error_count": error_count,
+        "trades": measured.trade_count,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +320,14 @@ def _paper_account_id() -> str | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _settings, _db, _genome_repo, _ledger_repo, _candle_repo
-    global _quota_repo, _provider_repo, _reflection_repo
+    global _quota_repo, _provider_repo, _reflection_repo, _autonomy_repo, _promotion_repo
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
-    global _ingestion, _provider_http_client
+    global _ingestion, _provider_http_client, _hermes_http_client
+    global _promotion_controller, _hermes_loop
+
+    _promotion_controller = None
+    _hermes_loop = None
+    _hermes_http_client = None
 
     try:
         _settings = Settings()
@@ -231,6 +363,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _provider_repo = ProviderRepository(_db)
         _reflection_repo = ReflectionRepository(_db)
         _candle_repo = MarketCandleRepository(_db)
+        _autonomy_repo = AutonomyRepository(_db)
+        _promotion_repo = PromotionRepository(_db)
 
         if _genome_repo.get_active_genome() is None:
             baseline = trend_pullback_v1()
@@ -326,6 +460,62 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             market_verified=False,
         )
 
+    # Hermes and promotion are built from the same durable repositories as the runtime.
+    # The loop receives verified market data at each step; it never manufactures a series.
+    if (
+        _db is not None
+        and _genome_repo is not None
+        and _quota_repo is not None
+        and _reflection_repo is not None
+        and _promotion_repo is not None
+        and _autonomy_repo is not None
+        and _backtest_engine is not None
+    ):
+        _hermes_http_client = httpx.AsyncClient()
+        hermes_gateway = GatewayClient(
+            base_url=_settings.gateway_base_url or "http://127.0.0.1:9",
+            auth_token=(
+                _settings.gateway_data_token.get_secret_value()
+                if _settings.gateway_data_token is not None
+                else None
+            ),
+            http_client=_hermes_http_client,
+        )
+        pipeline = PromotionPipeline(
+            genome_repo=_genome_repo,
+            eval_repo=EvaluationRepository(_db),
+            promotion_repo=_promotion_repo,
+        )
+        _promotion_controller = PromotionController(
+            pipeline=pipeline,
+            genome_repo=_genome_repo,
+            promotion_repo=_promotion_repo,
+            autonomy_repo=_autonomy_repo,
+            engine=_backtest_engine,
+            harness=WalkForwardHarness(
+                FrictionConfig(
+                    commission_rate=_settings.taker_fee_rate,
+                    slippage_rate=_settings.slippage_rate,
+                )
+            ),
+        )
+        _hermes_loop = HermesResearchLoop(
+            proposal_generator=StrategyProposalGenerator(hermes_gateway),
+            backtest_engine=_backtest_engine,
+            wf_harness=WalkForwardHarness(
+                FrictionConfig(
+                    commission_rate=_settings.taker_fee_rate,
+                    slippage_rate=_settings.slippage_rate,
+                )
+            ),
+            promotion_pipeline=pipeline,
+            genome_repo=_genome_repo,
+            quota_repo=_quota_repo,
+            memory_bank=MemoryBank(_reflection_repo),
+            autonomy_repo=_autonomy_repo,
+            promotion_controller=_promotion_controller,
+        )
+
     if _trading_runtime is not None and _candle_repo is not None:
         _ingestion = MarketIngestionService(
             settings=_settings,
@@ -342,6 +532,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _trading_runtime.shutdown()
     if _provider_http_client is not None:
         await _provider_http_client.aclose()
+    if _hermes_http_client is not None:
+        await _hermes_http_client.aclose()
     logger.info("GoldGuard shutdown complete")
 
 
@@ -406,12 +598,13 @@ async def app_status() -> dict[str, Any]:
             "symbol": settings.symbol,
             "bot_running": runtime_status.running if runtime_status else False,
             "bot_state": runtime_status.state.value if runtime_status else None,
-            "full_autonomy": _full_autonomy,
+            "full_autonomy": _is_full_autonomy(),
             "active_genome_id": active_genome.genome_id if active_genome else None,
             "paper_balance": str(_broker.cash) if _broker else None,
             "live_enabled": settings.live_capability_enabled,
             "market_source": market.source,
             "market_verified": market.verified,
+            "canary": _observe_canary(),
             "degraded_reasons": list(runtime_status.degraded_reasons) if runtime_status else [],
         },
         source="runtime",
@@ -980,49 +1173,34 @@ async def get_quota() -> dict[str, Any]:
 
 @app.post("/api/hermes/step")
 async def hermes_step() -> dict[str, Any]:
-    """Derive one bounded candidate genome from the active strategy."""
-    quota = _require(_quota_repo, "quota repository")
-    genomes = _require(_genome_repo, "genome repository")
-    settings = _require(_settings, "settings")
-    if not _full_autonomy:
+    """Run one autonomous Hermes iteration against verified market evidence."""
+    loop = _require(_hermes_loop, "Hermes research loop")
+    _require(_settings, "settings")
+    if not _is_full_autonomy():
         raise HTTPException(
             status_code=409,
             detail="autonomy is revoked; re-enable autonomy before running research steps",
         )
-
-    today = datetime.now(UTC).strftime("%Y-%m-%d")
-    if not quota.consume_backtest(today, settings.research_backtest_max_per_day):
-        raise HTTPException(status_code=429, detail="Daily backtest quota exhausted")
-    quota.consume_web_call(today, settings.research_web_calls_max_per_day)
-
-    active = genomes.get_active_genome() or trend_pullback_v1()
-    parent_hash = genome_hash(active)
-    candidate_id = f"hermes-{parent_hash[:8]}-{today}"
-    candidate = StrategyGenome(
-        genome_id=candidate_id,
-        parent_id=active.genome_id,
-        title="Hermes candidate",
-        hypothesis="Derived from the active genome; awaiting evidence before promotion.",
-        evidence_refs=(f"parent:{parent_hash}", f"quota:{today}"),
-        regime=active.regime,
-        guard=active.guard,
-        entry=active.entry,
-        exit=active.exit,
+    market = _market()
+    if not market.verified:
+        raise HTTPException(
+            status_code=409,
+            detail="Hermes requires verified market candles; ingestion has not supplied them",
+        )
+    dataset = _hermes_dataset(market)
+    result = await loop.step(
+        candles_15m=market.candles_15m,
+        market_summary=market.detail or "",
+        dataset=dataset,
+        now=datetime.now(UTC),
     )
-    genomes.save_genome(candidate, origin="hermes", status="candidate")
-
-    backtests, web_calls = quota.get_usage(today)
     return {
-        "status": "candidate_registered",
-        "candidate": candidate.model_dump(mode="json"),
-        "candidate_hash": genome_hash(candidate),
-        "quota": {
-            "date": today,
-            "backtests_used": backtests,
-            "backtests_limit": settings.research_backtest_max_per_day,
-            "web_calls_used": web_calls,
-            "web_calls_limit": settings.research_web_calls_max_per_day,
-        },
+        "status": result.status,
+        "iteration_id": result.iteration_id,
+        "candidate_genome_id": result.candidate_genome_id,
+        "gate_results": _jsonable(result.gate_results),
+        "quota_used": list(result.quota_used),
+        "circuit_breaker_tripped": result.circuit_breaker_tripped,
     }
 
 
@@ -1316,11 +1494,13 @@ async def bot_state() -> dict[str, Any]:
         return _env(
             {
                 "state": None,
-                "full_autonomy": _full_autonomy,
+                "full_autonomy": _is_full_autonomy(),
+                "autonomy_revoked_reason": _autonomy_state()["revoked_reason"],
                 "daily_loss_percent": None,
                 "daily_loss_limit": daily_limit,
                 "circuit_breaker_tripped": None,
                 "active_genome_id": active_genome.genome_id if active_genome else None,
+                "canary": _observe_canary(),
             },
             availability="unavailable",
             source="runtime",
@@ -1343,11 +1523,13 @@ async def bot_state() -> dict[str, Any]:
     return _env(
         {
             "state": runtime_status.state.value,
-            "full_autonomy": _full_autonomy,
+            "full_autonomy": _is_full_autonomy(),
+            "autonomy_revoked_reason": _autonomy_state()["revoked_reason"],
             "daily_loss_percent": loss_percent,
             "daily_loss_limit": daily_limit,
             "circuit_breaker_tripped": runtime_status.halted,
             "active_genome_id": active_genome.genome_id if active_genome else None,
+            "canary": _observe_canary(),
             "paused": runtime_status.paused,
             "has_position": runtime_status.has_position,
             "degraded_reasons": list(runtime_status.degraded_reasons),
@@ -1435,13 +1617,28 @@ async def trigger_kill_switch() -> dict[str, str]:
     return await stop_bot()
 
 
+class AutonomyRevokeRequest(BaseModel):
+    """A kill switch needs an auditable reason, so a blank one is rejected at the boundary."""
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=4, max_length=280)]
+
+
 @app.post("/api/bot/revoke-autonomy")
-async def revoke_autonomy() -> dict[str, Any]:
-    """Suspend autonomous research; human approval is required for new candidates."""
-    global _full_autonomy
-    _full_autonomy = False
-    logger.info("Autonomous research suspended — human approval mode active")
-    return {"status": "autonomy_revoked", "full_autonomy": False}
+async def revoke_autonomy(request: AutonomyRevokeRequest) -> dict[str, Any]:
+    """Suspend autonomous research and promotion. Durable: it survives a restart."""
+    repo = _require(_autonomy_repo, "autonomy store")
+    repo.revoke(request.reason)
+    logger.info("Autonomy revoked - %s", request.reason)
+    return {"status": "autonomy_revoked", "full_autonomy": False, "reason": request.reason}
+
+
+@app.post("/api/bot/restore-autonomy")
+async def restore_autonomy() -> dict[str, Any]:
+    """Re-enable autonomous research and promotion. Does not clear an emergency stop."""
+    repo = _require(_autonomy_repo, "autonomy store")
+    repo.restore()
+    logger.info("Autonomy restored")
+    return {"status": "autonomy_restored", "full_autonomy": True}
 
 
 @app.post("/api/bot/revert-baseline")
