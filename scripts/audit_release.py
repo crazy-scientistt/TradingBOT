@@ -538,7 +538,7 @@ def audit_api_snapshot(snapshot: Mapping[str, Any]) -> tuple[AuditFinding, ...]:
         # Runtime/configuration sections can legitimately carry static safety
         # fields while their live observation is unavailable.  Value-bearing
         # market, ledger, context, and event sections must be empty instead.
-        static_sections = {"botState", "status", "settings"}
+        static_sections = {"status", "settings"}
         if (
             availability == "unavailable"
             and name not in static_sections
@@ -593,22 +593,51 @@ def audit_runtime_and_events(snapshot: Mapping[str, Any] | None) -> tuple[AuditF
     # heartbeat and must not be treated as one.
     runtime_payload = snapshot.get("botStatus") or snapshot.get("botState")
     if isinstance(runtime_payload, Mapping):
+        availability = str(runtime_payload.get("availability", "")).lower()
         data = runtime_payload.get("data", runtime_payload)
-        findings.append(
-            _finding(
-                "runtime",
-                AuditStatus.PASS,
-                "Runtime status was returned by the API snapshot.",
-                running=bool(data.get("running", False)) if isinstance(data, Mapping) else False,
+        if availability == "unavailable":
+            detail = runtime_payload.get("detail", "")
+            findings.append(
+                _finding(
+                    "runtime",
+                    AuditStatus.DEGRADED if str(detail).strip() else AuditStatus.BLOCKED,
+                    "Runtime status is unavailable in the API snapshot"
+                    + (f": {detail}" if detail else "")
+                    + ". The runtime has not initialised a live observation.",
+                    availability=availability,
+                    runtime_detail=detail,
+                )
             )
-        )
+        else:
+            findings.append(
+                _finding(
+                    "runtime",
+                    AuditStatus.PASS,
+                    "Runtime status was returned by the API snapshot.",
+                    running=bool(data.get("running", False)) if isinstance(data, Mapping) else False,
+                )
+            )
     else:
         findings.append(
             _finding("runtime", AuditStatus.DEGRADED, "API snapshot has no runtime status section.")
         )
     events_payload = snapshot.get("agentEvents")
+    events_availability = (
+        str(events_payload.get("availability", "")).lower()
+        if isinstance(events_payload, Mapping)
+        else ""
+    )
     events = events_payload.get("data") if isinstance(events_payload, Mapping) else None
-    if isinstance(events, list) and len(events) <= 30:
+    if events_availability == "unavailable":
+        findings.append(
+            _finding(
+                "event_stream",
+                AuditStatus.DEGRADED,
+                "Agent event stream is unavailable in the API snapshot.",
+                availability=events_availability,
+            )
+        )
+    elif isinstance(events, list) and len(events) <= 30:
         findings.append(
             _finding(
                 "event_stream",
