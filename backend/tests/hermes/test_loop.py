@@ -460,3 +460,36 @@ async def test_autonomy_revoked_during_proposal_prevents_candidate_persistence(
     assert result.status == "autonomy_revoked"
     assert GenomeRepository(database).get_genome("race-candidate") is None
 
+
+@pytest.mark.asyncio
+async def test_hermes_validation_failure_reports_quota_after_evaluation(database: Database) -> None:
+    """A quota-consuming validation evaluation must be reflected in the result."""
+    candles = generate_market_data(num_days=10)
+    transport = _gateway_returning(VALID_PROPOSAL)
+
+    class ValidationFailHarness(_StubHarness):
+        def evaluate(self, **kwargs):  # type: ignore[no-untyped-def]
+            report = super().evaluate(**kwargs)
+            return report.__class__(
+                **{
+                    **report.__dict__,
+                    "wfe": Decimal("0.10"),
+                }
+            )
+
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        loop = _loop(
+            database,
+            http_client=http_client,
+            engine=_StubEngine(),
+            harness=ValidationFailHarness(),
+            max_backtests=10,
+        )
+        result = await loop.step(
+            candles_15m=candles,
+            now=datetime(2026, 8, 26, 12, tzinfo=UTC),
+        )
+
+    assert result.status == "val_failed"
+    assert QuotaRepository(database).get_usage("2026-08-26") == (2, 0)
+    assert result.quota_used == (2, 0)

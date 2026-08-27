@@ -1011,6 +1011,11 @@ class PromotionRepository:
         """Record that ``genome_id`` is live under observation, and what to revert to."""
         now = utc_now_iso()
         with self.database.transaction() as connection:
+            existing = connection.execute(
+                "SELECT genome_id FROM promotion_canary WHERE stage = 'canary' LIMIT 1"
+            ).fetchone()
+            if existing is not None and str(existing["genome_id"]) != genome_id:
+                raise ValueError("another canary is already open")
             connection.execute(
                 """
                 INSERT INTO promotion_canary(
@@ -1028,6 +1033,85 @@ class PromotionRepository:
                 """,
                 (genome_id, promotion_id, baseline_genome_id, baseline_hash, now, now),
             )
+
+    def activate_with_canary(
+        self,
+        *,
+        genome_id: str,
+        promotion_id: str,
+        baseline_genome_id: str,
+        baseline_hash: str,
+        promoted_by: str,
+        mode: str,
+        gate_report: dict[str, Any],
+    ) -> str:
+        """Atomically activate a candidate, record its canary, and record promotion.
+
+        The transaction rechecks the durable autonomy switch while holding the database
+        write lock. A revocation that wins the race therefore leaves both genome status and
+        canary state untouched, while a concurrent activation cannot create two open canaries.
+        """
+        now = utc_now_iso()
+        cutoff = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        with self.database.transaction() as connection:
+            autonomy = connection.execute(
+                "SELECT full_autonomy, revoked_reason FROM autonomy_state WHERE singleton = 1"
+            ).fetchone()
+            if autonomy is not None and not bool(autonomy["full_autonomy"]):
+                reason = autonomy["revoked_reason"] or "no reason recorded"
+                raise ValueError(f"AUTONOMY_REVOKED: autonomy is revoked: {reason}")
+
+            promotion_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM promotions WHERE at >= ?", (cutoff,)
+            ).fetchone()
+            if promotion_count is not None and int(promotion_count["count"]) >= 1:
+                raise ValueError("PROMOTION_CHURN_HALT: promotion churn guard is active")
+
+            candidate = connection.execute(
+                "SELECT status FROM genomes WHERE genome_id = ?", (genome_id,)
+            ).fetchone()
+            if candidate is None:
+                raise ValueError(f"genome {genome_id} not found")
+
+            existing = connection.execute(
+                "SELECT genome_id FROM promotion_canary WHERE stage = 'canary' LIMIT 1"
+            ).fetchone()
+            if existing is not None and str(existing["genome_id"]) != genome_id:
+                raise ValueError("another canary is already open")
+
+            connection.execute(
+                "UPDATE genomes SET status = 'archived' "
+                "WHERE status = 'active' AND genome_id != ?",
+                (genome_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO promotion_canary(
+                    genome_id, promotion_id, baseline_genome_id, baseline_hash,
+                    stage, rollback_reason, circuit_breaker_tripped, opened_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'canary', NULL, 0, ?, ?)
+                """,
+                (genome_id, promotion_id, baseline_genome_id, baseline_hash, now, now),
+            )
+            connection.execute(
+                "UPDATE genomes SET status = 'active' WHERE genome_id = ?", (genome_id,)
+            )
+            connection.execute(
+                """
+                INSERT INTO promotions(
+                    promotion_id, genome_id, promoted_by, mode, gate_report_json, at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    promotion_id,
+                    genome_id,
+                    promoted_by,
+                    mode,
+                    canonical_json(gate_report),
+                    now,
+                ),
+            )
+        return promotion_id
 
     def get_canary(self, genome_id: str) -> dict[str, Any] | None:
         with self.database.connect() as connection:

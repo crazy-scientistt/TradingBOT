@@ -106,7 +106,7 @@ class HermesResearchLoop:
             return LoopIterationResult(
                 iteration_id=iteration_id,
                 status="quota_exhausted",
-                quota_used=usage,
+                quota_used=self.quota_repo.get_usage(date_str),
             )
 
         # 2. Identify parent genome & pull reflections
@@ -128,7 +128,7 @@ class HermesResearchLoop:
             return LoopIterationResult(
                 iteration_id=iteration_id,
                 status="proposal_rejected",
-                quota_used=usage,
+                quota_used=self.quota_repo.get_usage(date_str),
                 circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
                 gate_results={"error": str(exc)},
             )
@@ -140,7 +140,7 @@ class HermesResearchLoop:
             return LoopIterationResult(
                 iteration_id=iteration_id,
                 status="autonomy_revoked",
-                quota_used=usage,
+                quota_used=self.quota_repo.get_usage(date_str),
                 gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
             )
 
@@ -214,7 +214,7 @@ class HermesResearchLoop:
                 status="dev_failed",
                 candidate_genome_id=cand_id,
                 gate_results={"development": dev_res.metrics, "reasons": dev_res.failure_reasons},
-                quota_used=usage,
+                quota_used=self.quota_repo.get_usage(date_str),
                 circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
             )
 
@@ -252,7 +252,7 @@ class HermesResearchLoop:
                     "validation": val_res.metrics,
                     "reasons": val_res.failure_reasons,
                 },
-                quota_used=usage,
+                quota_used=self.quota_repo.get_usage(date_str),
                 circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
             )
 
@@ -269,7 +269,7 @@ class HermesResearchLoop:
             status="promoted_candidate",
             candidate_genome_id=cand_id,
             gate_results={"development": dev_res.metrics, "validation": val_res.metrics},
-            quota_used=usage,
+            quota_used=self.quota_repo.get_usage(date_str),
             circuit_breaker_tripped=False,
         )
 

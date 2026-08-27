@@ -40,6 +40,18 @@ _MARKET_SOURCE_URL = (
     "https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints"
 )
 
+_RUNTIME_ERROR_RECORDED_ATTR = "_goldguard_runtime_error_recorded"
+
+
+def is_runtime_error_recorded(error: BaseException) -> bool:
+    """Return whether the same exception instance already has a durable error row."""
+    return bool(getattr(error, _RUNTIME_ERROR_RECORDED_ATTR, False))
+
+
+def mark_runtime_error_recorded(error: BaseException) -> None:
+    """Mark an exception instance after its durable error row has been written."""
+    setattr(error, _RUNTIME_ERROR_RECORDED_ATTR, True)
+
 
 @dataclass(frozen=True)
 class RuntimeStatus:
@@ -253,8 +265,14 @@ class TradingRuntime:
         try:
             return self._process_closed_candle(candle, quote)
         except Exception as exc:
-            self._ledger_repo.record_runtime_error(str(exc))
+            if not is_runtime_error_recorded(exc):
+                self.record_runtime_error(str(exc))
+                mark_runtime_error_recorded(exc)
             raise
+
+    def record_runtime_error(self, detail: str) -> str:
+        """Persist a root runtime/ingestion failure exactly once."""
+        return self._ledger_repo.record_runtime_error(detail)
 
     def _process_closed_candle(self, candle: Candle, quote: Quote) -> DecisionOutcome:
         self._latest_quote = quote
@@ -318,7 +336,9 @@ class TradingRuntime:
         try:
             return self._process_quote(quote)
         except Exception as exc:
-            self._ledger_repo.record_runtime_error(str(exc))
+            if not is_runtime_error_recorded(exc):
+                self.record_runtime_error(str(exc))
+                mark_runtime_error_recorded(exc)
             raise
 
     def _process_quote(self, quote: Quote) -> ExitOutcome | None:

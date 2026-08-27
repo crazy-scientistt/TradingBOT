@@ -432,3 +432,50 @@ def test_canary_thresholds_cannot_be_widened_at_runtime() -> None:
     config = CanaryConfig(max_drawdown=Decimal("0.02"), max_errors=1)
     with pytest.raises((AttributeError, TypeError)):
         config.max_drawdown = Decimal("0.50")  # type: ignore[misc]
+
+
+def test_autonomy_revoked_during_activation_cannot_leave_active_candidate_without_canary(
+    tmp_path,
+) -> None:
+    database = Database(tmp_path / "activation-race.db")
+    database.migrate()
+    genomes = GenomeRepository(database)
+    promotions = PromotionRepository(database)
+    autonomy = AutonomyRepository(database)
+    pipeline = PromotionPipeline(
+        genome_repo=genomes,
+        eval_repo=EvaluationRepository(database),
+        promotion_repo=promotions,
+    )
+    baseline = trend_pullback_v1()
+    candidate = _candidate(genome_id="race-candidate")
+    genomes.save_genome(baseline, origin="baseline", status="active")
+    genomes.save_genome(candidate, origin="hermes", status="shadow")
+
+    class RevokingAutonomy(AutonomyRepository):
+        def __init__(self, database):
+            super().__init__(database)
+            self.calls = 0
+
+        def is_full_autonomy(self) -> bool:
+            self.calls += 1
+            if self.calls >= 3:
+                autonomy.revoke("operator revoked during activation")
+                return False
+            return True
+
+    controller = PromotionController(
+        pipeline=pipeline,
+        genome_repo=genomes,
+        promotion_repo=promotions,
+        autonomy_repo=RevokingAutonomy(database),
+        engine=_StubEngine(_report()),
+        harness=_StubHarness(),
+    )
+
+    decision = controller.evaluate(candidate, _dataset(), baseline)
+
+    assert decision.promoted is False
+    assert "AUTONOMY_REVOKED" in decision.rejection_reasons
+    assert genomes.get_genome_status(candidate.genome_id) == "shadow"
+    assert promotions.get_open_canary() is None

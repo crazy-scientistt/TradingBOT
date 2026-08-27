@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -11,7 +12,7 @@ from goldguard.domain.models import Candle, Quote
 from goldguard.market.binance import SymbolFilters
 from goldguard.services.ingestion import MarketIngestionService
 from goldguard.storage.database import Database
-from goldguard.storage.repositories import MarketCandleRepository
+from goldguard.storage.repositories import LedgerRepository, MarketCandleRepository
 
 FILTERS = SymbolFilters(
     tick_size=Decimal("0.01"),
@@ -81,11 +82,32 @@ class _StubRuntime:
     def configure_market_inputs(self, **kwargs: object) -> None:
         self.published.append(kwargs)
 
+    def record_runtime_error(self, detail: str) -> str:
+        return detail
+
     def process_closed_candle(self, *_: object) -> None:  # pragma: no cover - not exercised
         raise AssertionError("start() must not evaluate candles")
 
     def process_quote(self, *_: object) -> None:  # pragma: no cover - not exercised
         raise AssertionError("start() must not evaluate quotes")
+
+
+class _RuntimeThatRecordsBeforeRaising(_StubRuntime):
+    def __init__(self, database: Database) -> None:
+        super().__init__()
+        self._ledger = LedgerRepository(database)
+        self.recorded = asyncio.Event()
+
+    def record_runtime_error(self, detail: str) -> str:
+        identifier = self._ledger.record_runtime_error(detail)
+        self.recorded.set()
+        return identifier
+
+    def process_quote(self, *_: object) -> None:
+        error = RuntimeError("runtime quote evaluation failed")
+        self.record_runtime_error(str(error))
+        error._goldguard_runtime_error_recorded = True
+        raise error
 
 
 @pytest.fixture
@@ -152,3 +174,35 @@ async def test_disabled_ingestion_replays_persisted_candles_as_stale(candle_repo
     assert snapshot.stale is True
     assert snapshot.availability == "degraded"
     assert snapshot.source == "sqlite-market-candles"
+
+
+@pytest.mark.asyncio
+async def test_runtime_failure_is_recorded_once_across_runtime_and_ingestion(candle_repo) -> None:
+    runtime = _RuntimeThatRecordsBeforeRaising(candle_repo.database)
+    settings = Settings(
+        environment="test",
+        data_dir=candle_repo.database.path.parent,
+        market_ingestion_enabled=True,
+    )
+    service = MarketIngestionService(
+        settings=settings,
+        runtime=runtime,  # type: ignore[arg-type]
+        candle_repo=candle_repo,
+        client=_StubClient(),
+        poll_seconds=0.01,
+    )
+
+    await service.start()
+    await asyncio.wait_for(runtime.recorded.wait(), timeout=1)
+    for _ in range(100):
+        if service._failures:
+            break
+        await asyncio.sleep(0.001)
+    assert service._failures == 1
+    await service.aclose()
+
+    with candle_repo.database.connect() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM system_health_events WHERE component = 'trading_runtime'"
+        ).fetchone()[0]
+    assert count == 1

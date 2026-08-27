@@ -186,6 +186,22 @@ def test_runtime_requires_explicit_verified_market_inputs_before_start(tmp_path)
         runtime.start()
 
 
+def test_runtime_exposes_durable_runtime_error_endpoint(tmp_path) -> None:
+    runtime, database = build_runtime(tmp_path)
+
+    identifier = runtime.record_runtime_error("manual runtime failure")
+
+    assert identifier
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT component, status, details_json FROM system_health_events WHERE id = ?",
+            (identifier,),
+        ).fetchone()
+    assert row is not None
+    assert row["component"] == "trading_runtime"
+    assert row["status"] == "error"
+
+
 def test_runtime_processes_closed_candle_once_and_persists_decision_records(tmp_path) -> None:
     runtime, database = build_runtime(tmp_path)
     candle, quote = configure_verified_market(runtime)

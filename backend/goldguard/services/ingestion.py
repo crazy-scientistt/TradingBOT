@@ -20,7 +20,11 @@ from goldguard.config import Settings
 from goldguard.domain.models import Candle, Quote
 from goldguard.market.binance import BinancePublicClient, SymbolFilters
 from goldguard.market.history import verify_candles
-from goldguard.services.runtime import TradingRuntime
+from goldguard.services.runtime import (
+    TradingRuntime,
+    is_runtime_error_recorded,
+    mark_runtime_error_recorded,
+)
 from goldguard.storage.repositories import MarketCandleRepository
 
 logger = logging.getLogger("goldguard.ingestion")
@@ -271,9 +275,9 @@ class MarketIngestionService:
     def _record_failure(self, exc: Exception) -> None:
         self._failures += 1
         self._detail = f"market request failed: {exc}"
-        record_error = getattr(self._runtime, "record_runtime_error", None)
-        if callable(record_error):
-            record_error(str(exc))
+        if not is_runtime_error_recorded(exc):
+            self._runtime.record_runtime_error(str(exc))
+            mark_runtime_error_recorded(exc)
         logger.warning("Market ingestion tick failed (%s): %s", self._failures, exc)
 
     @staticmethod

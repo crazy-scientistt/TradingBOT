@@ -12,6 +12,7 @@ from goldguard.strategy.genome import StrategyGenome
 if TYPE_CHECKING:
     from goldguard.backtest.walk_forward import WalkForwardReport
     from goldguard.storage.repositories import (
+        AutonomyRepository,
         EvaluationRepository,
         GenomeRepository,
         PromotionRepository,
@@ -47,6 +48,18 @@ class PromotionRepoProtocol(Protocol):
         gate_report: dict[str, Any],
     ) -> None: ...
     def get_promotions_in_last_days(self, days: int = 7) -> int: ...
+
+    def activate_with_canary(
+        self,
+        *,
+        genome_id: str,
+        promotion_id: str,
+        baseline_genome_id: str,
+        baseline_hash: str,
+        promoted_by: str,
+        mode: str,
+        gate_report: dict[str, Any],
+    ) -> str: ...
 
 
 PromotionStage = Literal[
@@ -278,7 +291,34 @@ class PromotionPipeline:
         promoted_by: str = "hermes_autonomy",
         mode: str = "active",
         gate_report: dict[str, Any] | None = None,
+        promotion_id: str | None = None,
+        autonomy_repo: AutonomyRepository | None = None,
+        baseline_genome_id: str | None = None,
+        baseline_hash: str | None = None,
     ) -> str:
+        if mode == "canary":
+            can_promote, reason = self.can_promote_to_active()
+            if not can_promote:
+                raise ValueError(f"Cannot promote strategy: {reason}")
+            if autonomy_repo is not None and not autonomy_repo.is_full_autonomy():
+                state = autonomy_repo.state()
+                raise ValueError(
+                    "AUTONOMY_REVOKED: autonomy is revoked: "
+                    f"{state['revoked_reason'] or 'no reason recorded'}"
+                )
+            if baseline_genome_id is None or baseline_hash is None:
+                raise ValueError("baseline metadata required for canary activation")
+            promotion_id = promotion_id or f"prom-{uuid4().hex[:8]}"
+            return self.promotion_repo.activate_with_canary(
+                genome_id=genome_id,
+                promotion_id=promotion_id,
+                baseline_genome_id=baseline_genome_id,
+                baseline_hash=baseline_hash,
+                promoted_by=promoted_by,
+                mode=mode,
+                gate_report=gate_report or {"status": "promoted_to_active"},
+            )
+
         can_promote, reason = self.can_promote_to_active()
         if not can_promote:
             raise ValueError(f"Cannot promote strategy: {reason}")
@@ -288,7 +328,7 @@ class PromotionPipeline:
             self.genome_repo.update_status(current_active.genome_id, "archived")
 
         self.genome_repo.update_status(genome_id, "active")
-        promotion_id = f"prom-{uuid4().hex[:8]}"
+        promotion_id = promotion_id or f"prom-{uuid4().hex[:8]}"
         self.promotion_repo.record_promotion(
             promotion_id=promotion_id,
             genome_id=genome_id,

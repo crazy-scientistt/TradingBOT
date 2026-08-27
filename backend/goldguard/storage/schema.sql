@@ -330,6 +330,8 @@ CREATE TABLE IF NOT EXISTS promotion_canary (
     opened_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS one_open_promotion_canary
+ON promotion_canary(stage) WHERE stage = 'canary';
 
 -- Autonomy is a kill switch, so it is durable: a revocation must not evaporate on restart.
 CREATE TABLE IF NOT EXISTS autonomy_state (

@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Protocol
+from uuid import uuid4
 
 from goldguard.backtest.metrics import PerformanceReport
 from goldguard.domain.models import Candle
@@ -235,24 +236,33 @@ class PromotionController:
                 gate_reports=gate_reports,
             )
 
-        promotion_id = self._pipeline.promote_to_active(
-            candidate.genome_id,
-            promoted_by=PROMOTED_BY,
-            mode="canary",
-            gate_report={
-                "baseline_genome_id": baseline.genome_id,
-                "baseline_hash": baseline_hash,
-                "candidate_hash": candidate_hash,
-                "dataset_id": dataset.dataset_id,
-                "gates": gate_reports,
-            },
-        )
-        self._promotions.open_canary(
-            genome_id=candidate.genome_id,
-            promotion_id=promotion_id,
-            baseline_genome_id=baseline.genome_id,
-            baseline_hash=baseline_hash,
-        )
+        if not self._autonomy.is_full_autonomy():
+            state = self._autonomy.state()
+            return reject(("AUTONOMY_REVOKED",), f"autonomy is revoked: {state['revoked_reason']}")
+
+        promotion_id = f"prom-{uuid4().hex[:8]}"
+        try:
+            self._pipeline.promote_to_active(
+                candidate.genome_id,
+                promoted_by=PROMOTED_BY,
+                mode="canary",
+                promotion_id=promotion_id,
+                autonomy_repo=self._autonomy,
+                baseline_genome_id=baseline.genome_id,
+                baseline_hash=baseline_hash,
+                gate_report={
+                    "baseline_genome_id": baseline.genome_id,
+                    "baseline_hash": baseline_hash,
+                    "candidate_hash": candidate_hash,
+                    "dataset_id": dataset.dataset_id,
+                    "gates": gate_reports,
+                },
+            )
+        except ValueError as exc:
+            detail = str(exc)
+            if detail.startswith("AUTONOMY_REVOKED:"):
+                return reject(("AUTONOMY_REVOKED",), detail, gate_reports=gate_reports)
+            raise
         return PromotionDecision(
             promoted=True,
             stage="canary",

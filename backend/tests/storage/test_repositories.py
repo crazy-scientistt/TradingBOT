@@ -5,8 +5,10 @@ from decimal import Decimal
 import pytest
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
+    AutonomyRepository,
     GenomeRepository,
     LedgerRepository,
+    PromotionRepository,
     ProviderRepository,
     QuotaRepository,
 )
@@ -312,3 +314,55 @@ def test_runtime_errors_are_durable_and_counted_since_a_boundary(
         "market tick failed", occurred_at=boundary + timedelta(minutes=1)
     )
     assert repository.count_runtime_errors_since(boundary) == 1
+
+
+def test_promotion_repository_allows_only_one_open_canary(database: Database) -> None:
+    genomes = GenomeRepository(database)
+    promotions = PromotionRepository(database)
+    baseline = trend_pullback_v1()
+    first = baseline.model_copy(update={"genome_id": "canary-one"})
+    second = baseline.model_copy(update={"genome_id": "canary-two"})
+    genomes.save_genome(baseline, origin="baseline", status="active")
+    genomes.save_genome(first, origin="hermes", status="candidate")
+    genomes.save_genome(second, origin="hermes", status="candidate")
+
+    promotions.open_canary(
+        genome_id=first.genome_id,
+        promotion_id="prom-one",
+        baseline_genome_id=baseline.genome_id,
+        baseline_hash="baseline-hash",
+    )
+
+    with pytest.raises(ValueError, match="another canary is already open"):
+        promotions.open_canary(
+            genome_id=second.genome_id,
+            promotion_id="prom-two",
+            baseline_genome_id=baseline.genome_id,
+            baseline_hash="baseline-hash",
+        )
+    assert promotions.get_open_canary()["genome_id"] == first.genome_id
+
+
+def test_atomic_canary_activation_is_blocked_by_durable_autonomy_switch(database: Database) -> None:
+    genomes = GenomeRepository(database)
+    promotions = PromotionRepository(database)
+    autonomy = AutonomyRepository(database)
+    baseline = trend_pullback_v1()
+    candidate = baseline.model_copy(update={"genome_id": "blocked-candidate"})
+    genomes.save_genome(baseline, origin="baseline", status="active")
+    genomes.save_genome(candidate, origin="hermes", status="shadow")
+    autonomy.revoke("operator paused before activation")
+
+    with pytest.raises(ValueError, match="AUTONOMY_REVOKED"):
+        promotions.activate_with_canary(
+            genome_id=candidate.genome_id,
+            promotion_id="prom-blocked",
+            baseline_genome_id=baseline.genome_id,
+            baseline_hash="baseline-hash",
+            promoted_by="promotion_controller",
+            mode="canary",
+            gate_report={},
+        )
+
+    assert genomes.get_genome_status(candidate.genome_id) == "shadow"
+    assert promotions.get_open_canary() is None
