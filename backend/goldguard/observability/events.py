@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass, field
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -13,7 +14,7 @@ from uuid import uuid4
 
 
 class EventSink(Protocol):
-    def save(self, event: "AgentEvent") -> None: ...
+    def save(self, event: AgentEvent) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +46,7 @@ class AgentEvent:
         *,
         audit_worthy: bool = False,
         occurred_at: datetime | None = None,
-    ) -> "AgentEvent":
+    ) -> AgentEvent:
         when = occurred_at or datetime.now(UTC)
         if when.tzinfo is None:
             when = when.replace(tzinfo=UTC)
@@ -83,14 +84,10 @@ class EventBus:
             self._sink.save(event)
         for queue in tuple(self._subscribers):
             if queue.full():
-                try:
+                with suppress(asyncio.QueueEmpty):
                     queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    pass
-            try:
+            with suppress(asyncio.QueueFull):
                 queue.put_nowait(event)
-            except asyncio.QueueFull:
-                pass
 
     def recent(self, limit: int = 30) -> tuple[AgentEvent, ...]:
         if limit <= 0:
@@ -98,18 +95,14 @@ class EventBus:
         limit = min(limit, 30)
         cutoff = datetime.now(UTC) - self._routine_ttl
         events = [
-            event
-            for event in self._events
-            if event.audit_worthy or event.occurred_at >= cutoff
+            event for event in self._events if event.audit_worthy or event.occurred_at >= cutoff
         ]
         self._events.clear()
         self._events.extend(events)
         return tuple(events[-limit:])
 
     async def subscribe(self) -> AsyncIterator[AgentEvent]:
-        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(
-            maxsize=self._subscriber_queue_size
-        )
+        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=self._subscriber_queue_size)
         self._subscribers.add(queue)
         try:
             while True:

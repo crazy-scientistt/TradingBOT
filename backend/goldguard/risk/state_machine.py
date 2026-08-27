@@ -22,7 +22,7 @@ ALLOWED_TRANSITIONS: dict[BotState, frozenset[BotState]] = {
         {BotState.PAPER_READY, BotState.LIVE_READ_ONLY, BotState.RECOVERY_REQUIRED}
     ),
     BotState.PAPER_READY: frozenset(
-        {BotState.RUNNING_FLAT, BotState.DISARMED, BotState.DATA_HALTED}
+        {BotState.RUNNING_FLAT, BotState.RUNNING_OPEN, BotState.DISARMED, BotState.DATA_HALTED}
     ),
     BotState.LIVE_READ_ONLY: frozenset(
         {BotState.RUNNING_FLAT, BotState.DISARMED, BotState.RECOVERY_REQUIRED}
@@ -52,7 +52,13 @@ ALLOWED_TRANSITIONS: dict[BotState, frozenset[BotState]] = {
         }
     ),
     BotState.COOLDOWN: frozenset(
-        {BotState.RUNNING_FLAT, BotState.RISK_HALTED, BotState.DATA_HALTED, BotState.DISARMED}
+        {
+            BotState.RUNNING_FLAT,
+            BotState.RUNNING_OPEN,
+            BotState.RISK_HALTED,
+            BotState.DATA_HALTED,
+            BotState.DISARMED,
+        }
     ),
     BotState.RISK_HALTED: frozenset(
         {BotState.DISARMED, BotState.EMERGENCY_STOPPED, BotState.RECOVERY_REQUIRED}

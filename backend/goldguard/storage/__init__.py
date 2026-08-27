@@ -2,8 +2,8 @@
 
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
-    EvaluationRepository,
     AgentEventRepository,
+    EvaluationRepository,
     GenomeRepository,
     LedgerRepository,
     PaperSession,
@@ -15,8 +15,8 @@ from goldguard.storage.repositories import (
 )
 
 __all__ = [
-    "Database",
     "AgentEventRepository",
+    "Database",
     "EvaluationRepository",
     "GenomeRepository",
     "LedgerRepository",

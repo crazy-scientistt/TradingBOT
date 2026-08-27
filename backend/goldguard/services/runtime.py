@@ -2,26 +2,34 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import threading
+from concurrent.futures import Future
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
+from typing import Protocol, cast
 from uuid import uuid4
 
-from goldguard.ai.decision import DecisionVetoEngine
 from goldguard.ai.gemini import AiAssessment, DecisionRequest
-from goldguard.broker.base import ClosedPaperTrade, PaperFill
+from goldguard.broker.base import ClosedPaperTrade, PaperFill, PaperPosition
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
 from goldguard.context.models import ContextItem, ContextSnapshot, ContextSource
-from goldguard.context.playbook import ProfessionalChecklist
-from goldguard.domain.enums import BotState, ExitReason
-from goldguard.domain.models import Candle, Quote
+from goldguard.domain.enums import BotState, ExitReason, OrderSide
+from goldguard.domain.models import Candle, Quote, TradePlan
 from goldguard.market.binance import SymbolFilters
 from goldguard.observability.events import AgentEvent, EventBus
-from goldguard.risk.engine import RiskEngine
+from goldguard.risk.engine import RiskDecision, RiskEngine
 from goldguard.risk.state_machine import StateMachine
-from goldguard.services.coordinator import DecisionOutcome, ExitOutcome, TradingCoordinator
+from goldguard.services.coordinator import (
+    AiVetoGate,
+    ChecklistGate,
+    DecisionOutcome,
+    ExitOutcome,
+    TradingCoordinator,
+)
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import AgentEventRepository, GenomeRepository, LedgerRepository
 from goldguard.strategy.indicators import atr_wilder, ema_series, median_volume_ratio, rsi_wilder
@@ -40,11 +48,21 @@ class RuntimeStatus:
     halted: bool
     paper_account_id: str
     has_position: bool
+    market_verified: bool
+    market_source: str
+    degraded_reasons: tuple[str, ...]
+    rehydration_error: str | None
+
+
+class AsyncAiVetoGate(Protocol):
+    async def decide(self, request: DecisionRequest) -> AiAssessment: ...
 
 
 class _AsyncDecisionAdapter:
-    def __init__(self, engine: DecisionVetoEngine) -> None:
-        self._engine = engine
+    """Runs an async veto engine on a private loop so the sync coordinator can call it."""
+
+    def __init__(self, gate: AsyncAiVetoGate) -> None:
+        self._gate = gate
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -58,7 +76,9 @@ class _AsyncDecisionAdapter:
         self._loop.run_forever()
 
     def decide(self, request: DecisionRequest) -> AiAssessment:
-        future = asyncio.run_coroutine_threadsafe(self._engine.decide(request), self._loop)
+        future: Future[AiAssessment] = asyncio.run_coroutine_threadsafe(
+            self._gate.decide(request), self._loop
+        )
         return future.result(timeout=35)
 
     def close(self) -> None:
@@ -77,13 +97,15 @@ class TradingRuntime:
         ledger_repo: LedgerRepository,
         strategy_runtime: GenomeRuntime,
         risk_engine: RiskEngine,
-        filters: SymbolFilters,
+        filters: SymbolFilters | None,
         state_machine: StateMachine,
         candles_15m: list[Candle],
         candles_1h: list[Candle],
-        latest_quote: Quote,
-        checklist: ProfessionalChecklist | None = None,
-        ai_veto: DecisionVetoEngine | None = None,
+        latest_quote: Quote | None,
+        checklist: ChecklistGate | None = None,
+        ai_veto: AiVetoGate | AsyncAiVetoGate | None = None,
+        market_source: str = "startup-degraded",
+        market_verified: bool = False,
     ) -> None:
         self._database = database
         self._settings = settings
@@ -91,11 +113,14 @@ class TradingRuntime:
         self._ledger_repo = ledger_repo
         self._state_machine = state_machine
         self._filters = filters
-        self._candles_15m = candles_15m
-        self._candles_1h = candles_1h
+        self._candles_15m = list(candles_15m)
+        self._candles_1h = list(candles_1h)
         self._latest_quote = latest_quote
+        self._market_source = market_source
+        self._market_verified = market_verified
+        self._degraded_reasons: tuple[str, ...] = ()
         self._event_bus = EventBus(sink=AgentEventRepository(database))
-        self._ai_veto = _AsyncDecisionAdapter(ai_veto) if ai_veto is not None else None
+        self._ai_veto = self._wrap_ai_gate(ai_veto)
         self._coordinator = TradingCoordinator(
             broker=broker,
             genome_repo=genome_repo,
@@ -110,52 +135,75 @@ class TradingRuntime:
             self._ledger_repo.current_paper_session_id()
             or self._ledger_repo.create_paper_session(self._settings.paper_starting_balance)
         )
-        stored_state = self._load_state()
-        self._halted = stored_state is BotState.EMERGENCY_STOPPED
+        self._rehydration_error = self._rehydrate_broker_state()
+        self._state = BotState.PAPER_READY
         self._paused = False
-        if stored_state is None:
-            self._state = BotState.PAPER_READY
-        elif stored_state is BotState.BOOTING:
-            self._state = BotState.DISARMED
-        elif self._halted:
-            self._state = self._state_machine.on_restart(stored_state).to_state
-        elif stored_state is BotState.PAPER_READY:
-            self._state = BotState.PAPER_READY
-        else:
-            self._state = self._state_machine.on_restart(stored_state).to_state
-        if not self._halted:
-            self._persist_state()
+        self._halted = False
+        self._restore_runtime_state()
+        self._refresh_market_status()
+
+    def configure_market_inputs(
+        self,
+        *,
+        source: str,
+        verified: bool,
+        filters: SymbolFilters | None,
+        candles_15m: list[Candle],
+        candles_1h: list[Candle] | None = None,
+        latest_quote: Quote | None = None,
+    ) -> None:
+        self._market_source = source
+        self._market_verified = verified
+        self._filters = filters
+        self._coordinator.filters = filters
+        self._candles_15m = list(candles_15m)
+        self._candles_1h = (
+            list(candles_1h)
+            if candles_1h is not None
+            else self._aggregate_hourly_candles(self._candles_15m)
+        )
+        self._latest_quote = latest_quote
+        self._refresh_market_status()
 
     def start(self) -> None:
         if self._halted:
             raise RuntimeError("paper runtime is halted and requires manual reset")
+        if self._rehydration_error is not None:
+            raise RuntimeError(
+                f"persisted paper state cannot be reconstructed: {self._rehydration_error}"
+            )
+        if self._degraded_reasons:
+            joined = ", ".join(self._degraded_reasons)
+            raise RuntimeError(f"verified market inputs required before start: {joined}")
+
         self._paused = False
         if self._state is BotState.DISARMED:
-            self._state = self._state_machine.transition(
-                self._state,
-                BotState.PAPER_READY,
-                reason="PAPER_RUNTIME_READY",
-            ).to_state
-        target_state = BotState.RUNNING_OPEN if self._broker.position is not None else BotState.RUNNING_FLAT
-        self._state = self._state_machine.transition(
-            self._state,
-            target_state,
-            reason="PAPER_RUNTIME_STARTED",
-        ).to_state
-        self._persist_state()
+            self._transition_to(BotState.PAPER_READY, "PAPER_RUNTIME_READY")
+
+        target = (
+            BotState.RUNNING_OPEN if self._broker.position is not None else BotState.RUNNING_FLAT
+        )
+        reason = (
+            "PAPER_RUNTIME_RESUMED" if self._state is BotState.COOLDOWN else "PAPER_RUNTIME_STARTED"
+        )
+        self._transition_to(target, reason)
         self._publish_event(
             action="HOLD",
             reason="Paper runtime started",
             reason_codes=("RUNTIME_STARTED",),
-            payload={"state": self._state.value, "paper_account_id": self._paper_account_id},
+            payload={
+                "state": self._state.value,
+                "paper_account_id": self._paper_account_id,
+                "market_source": self._market_source,
+            },
         )
 
     def pause(self) -> None:
         if self._halted:
             return
         self._paused = True
-        self._state = BotState.COOLDOWN if self._broker.position is not None else BotState.DISARMED
-        self._persist_state()
+        target = BotState.COOLDOWN if self._broker.position is not None else BotState.DISARMED
+        self._transition_to(target, "PAPER_RUNTIME_PAUSED")
         self._publish_event(
             action="HOLD",
             reason="New paper entries paused",
@@ -165,6 +213,8 @@ class TradingRuntime:
 
     def stop(self) -> None:
         if self._broker.position is not None:
+            if self._latest_quote is None:
+                raise RuntimeError("latest quote unavailable for emergency paper exit")
             closed_trade = self._broker.exit_long(
                 self._latest_quote,
                 client_order_id=f"halt-{int(self._latest_quote.observed_at.timestamp())}",
@@ -174,8 +224,7 @@ class TradingRuntime:
             self._record_equity_snapshot(self._latest_quote)
         self._paused = False
         self._halted = True
-        self._state = BotState.EMERGENCY_STOPPED
-        self._persist_state()
+        self._transition_to(BotState.EMERGENCY_STOPPED, "EMERGENCY_STOP")
         self._publish_event(
             action="STOP",
             reason="Paper runtime halted",
@@ -187,21 +236,30 @@ class TradingRuntime:
     def status(self) -> RuntimeStatus:
         return RuntimeStatus(
             state=self._state,
-            running=self._state in (BotState.RUNNING_FLAT, BotState.RUNNING_OPEN, BotState.COOLDOWN),
+            running=self._state
+            in (BotState.RUNNING_FLAT, BotState.RUNNING_OPEN, BotState.COOLDOWN),
             paused=self._paused,
             halted=self._halted,
             paper_account_id=self._paper_account_id,
             has_position=self._broker.position is not None,
+            market_verified=not self._degraded_reasons and self._market_verified,
+            market_source=self._market_source,
+            degraded_reasons=self._degraded_reasons,
+            rehydration_error=self._rehydration_error,
         )
 
     def process_closed_candle(self, candle: Candle, quote: Quote) -> DecisionOutcome:
         self._latest_quote = quote
         if self._halted:
             return DecisionOutcome(False, "RUNTIME_HALTED", ("RUNTIME_HALTED",))
+        if self._rehydration_error is not None:
+            return DecisionOutcome(False, "RUNTIME_BLOCKED", ("RUNTIME_REHYDRATION_FAILED",))
         if self._state not in (BotState.RUNNING_FLAT, BotState.RUNNING_OPEN, BotState.COOLDOWN):
             return DecisionOutcome(False, "RUNTIME_NOT_RUNNING", ("RUNTIME_NOT_RUNNING",))
         if candle.timeframe != self._settings.entry_timeframe:
-            raise ValueError(f"expected {self._settings.entry_timeframe} candle, got {candle.timeframe}")
+            raise ValueError(
+                f"expected {self._settings.entry_timeframe} candle, got {candle.timeframe}"
+            )
         if not candle.closed:
             raise ValueError("runtime only accepts closed candles")
 
@@ -213,6 +271,11 @@ class TradingRuntime:
 
         features = self._build_feature_snapshot(quote)
         context_snapshot = self._build_context_snapshot(candle, quote, features)
+        context_snapshot_id = self._ledger_repo.save_context_snapshot(
+            snapshot=context_snapshot,
+            event_time=candle.close_time,
+            freshness="fresh" if features.quote_fresh else "stale",
+        )
         outcome = self._coordinator.scan_closed_candle(
             symbol=candle.symbol,
             closed_at=candle.close_time,
@@ -222,11 +285,21 @@ class TradingRuntime:
             account_scope=self._paper_account_id,
         )
 
+        if outcome.decision_chain_id is not None and outcome.ai_assessment is not None:
+            self._ledger_repo.save_ai_decision(
+                decision_chain_id=outcome.decision_chain_id,
+                context_snapshot_id=context_snapshot_id,
+                assessment=outcome.ai_assessment,
+            )
+        if outcome.decision_chain_id is not None and outcome.risk_decision is not None:
+            self._persist_risk_decision(outcome.decision_chain_id, outcome.risk_decision)
         if outcome.fill is not None:
             self._persist_entry(outcome.fill)
             self._record_equity_snapshot(quote)
         if outcome.closed_trade is not None:
-            self._persist_closed_trade(outcome.closed_trade, exit_fill=outcome.closed_trade.exit_fill)
+            self._persist_closed_trade(
+                outcome.closed_trade, exit_fill=outcome.closed_trade.exit_fill
+            )
             self._record_equity_snapshot(quote)
 
         self._sync_state_after_broker_change()
@@ -248,12 +321,49 @@ class TradingRuntime:
         return self._event_bus.recent(limit)
 
     def shutdown(self) -> None:
-        if self._ai_veto is not None:
+        if isinstance(self._ai_veto, _AsyncDecisionAdapter):
             self._ai_veto.close()
+
+    @staticmethod
+    def _wrap_ai_gate(ai_veto: AiVetoGate | AsyncAiVetoGate | None) -> AiVetoGate | None:
+        if ai_veto is None:
+            return None
+        if inspect.iscoroutinefunction(getattr(ai_veto, "decide", None)):
+            return _AsyncDecisionAdapter(cast(AsyncAiVetoGate, ai_veto))
+        return cast(AiVetoGate, ai_veto)
+
+    def _restore_runtime_state(self) -> None:
+        stored_state = self._load_state()
+        self._halted = stored_state is BotState.EMERGENCY_STOPPED
+        self._paused = stored_state is BotState.COOLDOWN
+        if stored_state is BotState.EMERGENCY_STOPPED:
+            self._state = BotState.EMERGENCY_STOPPED
+            return
+        if stored_state is None or stored_state in (
+            BotState.BOOTING,
+            BotState.PAPER_READY,
+            BotState.DISARMED,
+        ):
+            # ponytail: boot normalisation, not an operational move — state_transitions stays
+            # the audit trail of what the running bot did, so no row is written here.
+            self._state = BotState.PAPER_READY
+            self._persist_app_state()
+            return
+
+        transition = self._state_machine.on_restart(stored_state)
+        self._state = transition.to_state
+        self._persist_app_state()
+        self._ledger_repo.record_state_transition(
+            from_state=transition.from_state.value,
+            to_state=transition.to_state.value,
+            reason=transition.reason,
+        )
 
     def _load_state(self) -> BotState | None:
         with self._database.connect() as connection:
-            row = connection.execute("SELECT bot_state FROM app_state WHERE singleton = 1").fetchone()
+            row = connection.execute(
+                "SELECT bot_state FROM app_state WHERE singleton = 1"
+            ).fetchone()
         if row is None:
             return None
         try:
@@ -261,21 +371,141 @@ class TradingRuntime:
         except ValueError:
             return None
 
-    def _persist_state(self) -> None:
+    def _refresh_market_status(self) -> None:
+        reasons: list[str] = []
+        if not self._market_verified:
+            reasons.append("MARKET_NOT_VERIFIED")
+        if self._filters is None:
+            reasons.append("MARKET_FILTERS_UNAVAILABLE")
+        if len(self._candles_15m) < 50:
+            reasons.append("INSUFFICIENT_15M_HISTORY")
+        if len(self._candles_1h) < 50:
+            reasons.append("INSUFFICIENT_1H_HISTORY")
+        if self._latest_quote is None:
+            reasons.append("LATEST_QUOTE_UNAVAILABLE")
+        self._degraded_reasons = tuple(reasons)
+
+    def _persist_app_state(self) -> None:
         with self._database.transaction() as connection:
             connection.execute(
                 "UPDATE app_state SET bot_state = ? WHERE singleton = 1",
                 (self._state.value,),
             )
 
+    def _transition_to(self, target: BotState, reason: str) -> None:
+        current = self._state
+        if current is target:
+            self._persist_app_state()
+            return
+        transition = self._state_machine.transition(current, target, reason=reason)
+        self._state = transition.to_state
+        self._persist_app_state()
+        self._ledger_repo.record_state_transition(
+            from_state=transition.from_state.value,
+            to_state=transition.to_state.value,
+            reason=transition.reason,
+        )
+
     def _sync_state_after_broker_change(self) -> None:
         if self._halted:
-            self._state = BotState.EMERGENCY_STOPPED
-        elif self._broker.position is not None:
-            self._state = BotState.COOLDOWN if self._paused else BotState.RUNNING_OPEN
+            self._transition_to(BotState.EMERGENCY_STOPPED, "EMERGENCY_STOP")
+            return
+        if self._state not in (BotState.RUNNING_FLAT, BotState.RUNNING_OPEN, BotState.COOLDOWN):
+            # A disarmed/ready runtime still protects an inherited position, but closing it
+            # must never re-arm the bot for new entries.
+            return
+        if self._paused:
+            target = BotState.COOLDOWN if self._broker.position is not None else BotState.DISARMED
         else:
-            self._state = BotState.DISARMED if self._paused else BotState.RUNNING_FLAT
-        self._persist_state()
+            target = (
+                BotState.RUNNING_OPEN
+                if self._broker.position is not None
+                else BotState.RUNNING_FLAT
+            )
+        self._transition_to(target, "POSITION_STATUS_UPDATED")
+
+    def _rehydrate_broker_state(self) -> str | None:
+        session = self._ledger_repo.get_paper_session(self._paper_account_id)
+        if session is None:
+            return "current paper session missing"
+
+        trade_rows = self._ledger_repo.list_trades(self._paper_account_id)
+        snapshot = self._ledger_repo.latest_equity_snapshot(self._paper_account_id)
+        if trade_rows and snapshot is None:
+            return "latest equity snapshot missing"
+
+        if not trade_rows:
+            self._broker._cash = session.initial_balance
+            self._broker._position = None
+            self._broker._fills = []
+            self._broker._order_results = {}
+            return None
+
+        order_rows = self._ledger_repo.list_order_fills(self._paper_account_id)
+        fills_by_order: dict[str, PaperFill] = {}
+        order_client_ids: dict[str, str] = {}
+        ordered_fills: list[PaperFill] = []
+
+        for row in order_rows:
+            order_id = str(row["order_id"])
+            client_order_id = str(row["client_order_id"])
+            order_client_ids[order_id] = client_order_id
+            if row["fill_id"] is None:
+                continue
+            fill = PaperFill(
+                client_order_id=client_order_id,
+                side=OrderSide(str(row["side"])),
+                quantity=Decimal(str(row["quantity_text"])),
+                price=Decimal(str(row["price_text"])),
+                fee=Decimal(str(row["fee_text"])),
+                filled_at=datetime.fromisoformat(str(row["occurred_at"])),
+            )
+            fills_by_order[order_id] = fill
+            ordered_fills.append(fill)
+
+        order_results: dict[str, PaperFill | ClosedPaperTrade] = {}
+        open_position: PaperPosition | None = None
+        ordered_fills.sort(key=lambda fill: fill.filled_at)
+
+        for trade in trade_rows:
+            entry_fill = fills_by_order.get(str(trade["entry_order_id"]))
+            if entry_fill is None:
+                return f"entry fill missing for trade {trade['id']}"
+            order_results[entry_fill.client_order_id] = entry_fill
+            if str(trade["status"]) == "CLOSED":
+                exit_order_id = str(trade["exit_order_id"])
+                exit_fill = fills_by_order.get(exit_order_id)
+                if exit_fill is None:
+                    return f"exit fill missing for trade {trade['id']}"
+                exit_client_order_id = order_client_ids.get(exit_order_id)
+                if exit_client_order_id is None:
+                    return f"exit order missing for trade {trade['id']}"
+                order_results[exit_client_order_id] = ClosedPaperTrade(
+                    entry_fill=entry_fill,
+                    exit_fill=exit_fill,
+                    exit_reason=self._infer_exit_reason(exit_client_order_id),
+                    realized_pnl=Decimal(str(trade["realized_pnl_text"] or "0")),
+                )
+                continue
+
+            plan_payload = self._ledger_repo.load_trade_plan(
+                paper_account_id=self._paper_account_id,
+                opened_at=str(trade["opened_at"]),
+            )
+            if plan_payload is None:
+                return f"trade plan missing for open trade {trade['id']}"
+            open_position = PaperPosition(
+                plan=TradePlan.model_validate(plan_payload),
+                entry_fill=entry_fill,
+            )
+
+        self._broker._cash = (
+            Decimal(str(snapshot["cash_text"])) if snapshot else session.initial_balance
+        )
+        self._broker._position = open_position
+        self._broker._fills = ordered_fills
+        self._broker._order_results = order_results
+        return None
 
     def _upsert_candle(self, candle: Candle) -> None:
         duplicate = next(
@@ -291,7 +521,16 @@ class TradingRuntime:
             self._candles_15m.sort(key=lambda current: current.close_time)
         else:
             self._candles_15m[duplicate] = candle
-        self._candles_1h[:] = self._aggregate_hourly_candles(self._candles_15m)
+        if not self._candles_1h:
+            self._candles_1h = self._aggregate_hourly_candles(self._candles_15m)
+        elif len(self._candles_15m) >= 4 and len(self._candles_15m) % 4 == 0:
+            next_hour = self._aggregate_hour_from_batch(self._candles_15m[-4:])
+            if next_hour is not None:
+                if self._candles_1h and self._candles_1h[-1].close_time == next_hour.close_time:
+                    self._candles_1h[-1] = next_hour
+                elif not self._candles_1h or self._candles_1h[-1].close_time < next_hour.close_time:
+                    self._candles_1h.append(next_hour)
+        self._refresh_market_status()
 
     def _build_feature_snapshot(self, quote: Quote) -> FeatureSnapshot:
         candles_15m = self._candles_15m[-250:]
@@ -318,9 +557,7 @@ class TradingRuntime:
         previous_rsi = rsi_values[-2] if len(rsi_values) >= 2 else None
         current_rsi = rsi_values[-1] if rsi_values else None
         volume_ratio = (
-            median_volume_ratio(volume_values_15m, 20)
-            if len(volume_values_15m) >= 20
-            else 0.0
+            median_volume_ratio(volume_values_15m, 20) if len(volume_values_15m) >= 20 else 0.0
         )
         quote_fresh = abs((quote.observed_at - latest.close_time).total_seconds()) <= 120
 
@@ -332,21 +569,16 @@ class TradingRuntime:
             previous_rsi14=previous_rsi if previous_rsi is not None else 50.0,
             rsi14=current_rsi if current_rsi is not None else 50.0,
             atr14=atr14 if atr14 is not None else float(latest.high - latest.low),
-            atr_rate=(
-                (atr14 / float(latest.close))
-                if atr14 is not None and float(latest.close) > 0
-                else 0.0
-            ),
+            atr_rate=(atr14 / float(latest.close))
+            if atr14 is not None and float(latest.close) > 0
+            else 0.0,
             volume_ratio=volume_ratio,
             spread_rate=float(quote.spread_rate),
             latest_close_1h=close_values_1h[-1] if close_values_1h else float(latest.close),
             ema50_1h=ema50_1h,
             ema200_1h=ema200_1h,
             ema50_slope_1h=(ema50_1h - prior_ema50_1h) / 5 if close_values_1h else 0.0,
-            consecutive_closes_below_ema50=self._consecutive_closes_below_ema50(
-                candles_15m,
-                ema50,
-            ),
+            consecutive_closes_below_ema50=self._consecutive_closes_below_ema50(candles_15m, ema50),
             sufficient_history=len(candles_15m) >= 50 and len(candles_1h) >= 50,
             contiguous=self._is_contiguous(candles_15m[-50:], timedelta(minutes=15)),
             quote_fresh=quote_fresh,
@@ -372,7 +604,7 @@ class TradingRuntime:
                     summary=(
                         f"Closed {candle.symbol} candle at {candle.close_time.isoformat()} "
                         f"with spread rate {float(quote.spread_rate):0.6f}; "
-                        f"{'history is contiguous' if features.contiguous else 'history gap detected'}."
+                        f"{'contiguous history' if features.contiguous else 'history gap'}."
                     ),
                     driver="market-data",
                     direction="neutral",
@@ -388,25 +620,31 @@ class TradingRuntime:
     @staticmethod
     def _aggregate_hourly_candles(candles_15m: list[Candle]) -> list[Candle]:
         hourly: list[Candle] = []
-        for start in range(0, len(candles_15m) - 3, 4):
+        for start in range(0, len(candles_15m), 4):
             batch = candles_15m[start : start + 4]
-            if any(candle.timeframe != "15m" for candle in batch):
-                continue
-            hourly.append(
-                Candle(
-                    symbol=batch[0].symbol,
-                    timeframe="1h",
-                    open_time=batch[0].open_time,
-                    close_time=batch[-1].close_time,
-                    open=batch[0].open,
-                    high=max(candle.high for candle in batch),
-                    low=min(candle.low for candle in batch),
-                    close=batch[-1].close,
-                    volume=sum((candle.volume for candle in batch), Decimal("0")),
-                    closed=True,
-                )
-            )
+            if len(batch) < 4:
+                break
+            hour = TradingRuntime._aggregate_hour_from_batch(batch)
+            if hour is not None:
+                hourly.append(hour)
         return hourly
+
+    @staticmethod
+    def _aggregate_hour_from_batch(batch: list[Candle]) -> Candle | None:
+        if len(batch) != 4:
+            return None
+        return Candle(
+            symbol=batch[0].symbol,
+            timeframe="1h",
+            open_time=batch[0].open_time,
+            close_time=batch[-1].close_time,
+            open=batch[0].open,
+            high=max(candle.high for candle in batch),
+            low=min(candle.low for candle in batch),
+            close=batch[-1].close,
+            volume=sum((candle.volume for candle in batch), Decimal("0")),
+            closed=True,
+        )
 
     @staticmethod
     def _consecutive_closes_below_ema50(candles: list[Candle], ema50: list[float]) -> int:
@@ -422,10 +660,20 @@ class TradingRuntime:
     def _is_contiguous(candles: list[Candle], expected_gap: timedelta) -> bool:
         if len(candles) <= 1:
             return True
-        for previous, current in zip(candles, candles[1:], strict=True):
+        for previous, current in pairwise(candles):
             if current.open_time - previous.open_time != expected_gap:
                 return False
         return True
+
+    def _persist_risk_decision(self, decision_chain_id: str, risk_decision: RiskDecision) -> None:
+        self._ledger_repo.save_risk_decision(
+            decision_chain_id=decision_chain_id,
+            approved=risk_decision.approved,
+            details={
+                "reason_codes": risk_decision.reason_codes,
+                "plan": risk_decision.plan.model_dump(mode="json") if risk_decision.plan else None,
+            },
+        )
 
     def _persist_entry(self, fill: PaperFill) -> None:
         order_id = self._stable_id("order", fill.client_order_id)
@@ -435,7 +683,8 @@ class TradingRuntime:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO orders(
-                    id, mode, paper_account_id, client_order_id, side, quantity_text, status, created_at
+                    id, mode, paper_account_id, client_order_id, side,
+                    quantity_text, status, created_at
                 ) VALUES (?, 'paper', ?, ?, ?, ?, 'FILLED', ?)
                 """,
                 (
@@ -449,7 +698,9 @@ class TradingRuntime:
             )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO fills(id, order_id, price_text, quantity_text, fee_text, occurred_at)
+                INSERT OR IGNORE INTO fills(
+                    id, order_id, price_text, quantity_text, fee_text, occurred_at
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -479,7 +730,8 @@ class TradingRuntime:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO orders(
-                    id, mode, paper_account_id, client_order_id, side, quantity_text, status, created_at
+                    id, mode, paper_account_id, client_order_id, side,
+                    quantity_text, status, created_at
                 ) VALUES (?, 'paper', ?, ?, ?, ?, 'FILLED', ?)
                 """,
                 (
@@ -493,7 +745,9 @@ class TradingRuntime:
             )
             connection.execute(
                 """
-                INSERT OR IGNORE INTO fills(id, order_id, price_text, quantity_text, fee_text, occurred_at)
+                INSERT OR IGNORE INTO fills(
+                    id, order_id, price_text, quantity_text, fee_text, occurred_at
+                )
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -538,7 +792,9 @@ class TradingRuntime:
         with self._database.transaction() as connection:
             connection.execute(
                 """
-                INSERT INTO equity_snapshots(id, paper_account_id, equity_text, cash_text, observed_at)
+                INSERT INTO equity_snapshots(
+                    id, paper_account_id, equity_text, cash_text, observed_at
+                )
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (
@@ -557,14 +813,21 @@ class TradingRuntime:
         outcome: DecisionOutcome,
         features: FeatureSnapshot | None,
     ) -> None:
-        action = "BUY" if outcome.fill is not None else "SELL" if outcome.closed_trade is not None else "HOLD"
-        payload = {
+        action = (
+            "BUY"
+            if outcome.fill is not None
+            else "SELL"
+            if outcome.closed_trade is not None
+            else "HOLD"
+        )
+        payload: dict[str, object] = {
             "symbol": candle.symbol,
             "timeframe": candle.timeframe,
             "candle_close_time": candle.close_time.isoformat(),
             "paper_account_id": self._paper_account_id,
             "spread_rate": float(quote.spread_rate),
             "state": self._state.value,
+            "market_source": self._market_source,
         }
         if features is not None:
             payload["features"] = {
@@ -593,6 +856,7 @@ class TradingRuntime:
                 "observed_at": quote.observed_at.isoformat(),
                 "bid": str(quote.bid),
                 "state": self._state.value,
+                "market_source": self._market_source,
             },
             audit_worthy=True,
         )
@@ -619,3 +883,15 @@ class TradingRuntime:
     def _stable_id(self, kind: str, client_order_id: str) -> str:
         material = f"{kind}|{self._paper_account_id}|{client_order_id}"
         return hashlib.sha256(material.encode()).hexdigest()
+
+    @staticmethod
+    def _infer_exit_reason(client_order_id: str) -> ExitReason:
+        if client_order_id.startswith("sl-"):
+            return ExitReason.STOP_LOSS
+        if client_order_id.startswith("tp-"):
+            return ExitReason.TAKE_PROFIT
+        if client_order_id.startswith("halt-"):
+            return ExitReason.EMERGENCY
+        if client_order_id.startswith("exit-"):
+            return ExitReason.REGIME_INVALIDATION
+        return ExitReason.AI_RISK_REDUCTION

@@ -4,9 +4,9 @@ from decimal import Decimal
 from typing import Protocol
 
 from goldguard.ai.gemini import AiAssessment, DecisionRequest
+from goldguard.broker.base import Broker, ClosedPaperTrade, PaperFill
 from goldguard.context.models import ContextSnapshot
 from goldguard.context.playbook import ChecklistInputs, ChecklistResult
-from goldguard.broker.base import Broker, ClosedPaperTrade, PaperFill
 from goldguard.domain.enums import AiDecision, CandidateAction, ChecklistAction, ExitReason
 from goldguard.domain.models import Quote, TradePlan
 from goldguard.market.binance import SymbolFilters
@@ -21,9 +21,12 @@ class DecisionOutcome:
     executed: bool
     action: str
     reason_codes: tuple[str, ...]
+    decision_chain_id: str | None = None
     plan: TradePlan | None = None
     fill: PaperFill | None = None
     closed_trade: ClosedPaperTrade | None = None
+    ai_assessment: AiAssessment | None = None
+    risk_decision: RiskDecision | None = None
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,7 @@ class TradingCoordinator:
         risk_engine: RiskEngine,
         checklist: ChecklistGate | None,
         ai_veto: AiVetoGate | None,
-        filters: SymbolFilters,
+        filters: SymbolFilters | None,
         lease_name: str = "coordinator_worker",
     ) -> None:
         self.broker = broker
@@ -89,7 +92,7 @@ class TradingCoordinator:
             return DecisionOutcome(False, "ALREADY_PROCESSED", ("IDEMPOTENT_SKIP",))
 
         # Record idempotent decision chain in ledger
-        self.ledger_repo.record_decision_chain(
+        decision_chain_id = self.ledger_repo.record_decision_chain(
             mode="paper",
             account_scope=account_scope,
             symbol=symbol,
@@ -119,6 +122,7 @@ class TradingCoordinator:
                     True,
                     "EXIT_TRIGGERED",
                     eval_result.reason_codes,
+                    decision_chain_id=decision_chain_id,
                     closed_trade=closed_trade,
                 )
 
@@ -129,7 +133,12 @@ class TradingCoordinator:
         eval_result = self.runtime.evaluate(active_genome, features, has_position=False)
         if eval_result.action is not CandidateAction.ENTRY_CANDIDATE:
             self._processed_candles.add(candle_key)
-            return DecisionOutcome(False, "NO_ACTION", eval_result.reason_codes)
+            return DecisionOutcome(
+                False,
+                "NO_ACTION",
+                eval_result.reason_codes,
+                decision_chain_id=decision_chain_id,
+            )
 
         # Evidence & Professional Checklist Gate
         if self.checklist is not None:
@@ -139,7 +148,9 @@ class TradingCoordinator:
                 ChecklistInputs(
                     context=context_snapshot,
                     now=quote.observed_at,
-                    data_healthy=features.sufficient_history and features.contiguous and features.quote_fresh,
+                    data_healthy=features.sufficient_history
+                    and features.contiguous
+                    and features.quote_fresh,
                     exchange_normal=True,
                     liquidity_acceptable=features.spread_rate <= 0.0015,
                     regime_clear=True,
@@ -152,9 +163,15 @@ class TradingCoordinator:
             )
             if checklist_result.action is not ChecklistAction.PASS:
                 self._processed_candles.add(candle_key)
-                return DecisionOutcome(False, "CHECKLIST_HELD", checklist_result.reason_codes)
+                return DecisionOutcome(
+                    False,
+                    "CHECKLIST_HELD",
+                    checklist_result.reason_codes,
+                    decision_chain_id=decision_chain_id,
+                )
 
         # AI Veto Gate
+        ai_assessment: AiAssessment | None = None
         if self.ai_veto is not None:
             ai_assessment = self.ai_veto.decide(
                 DecisionRequest(
@@ -182,7 +199,9 @@ class TradingCoordinator:
                     },
                     context={
                         "content_hash": context_snapshot.content_hash if context_snapshot else "",
-                        "conflict_level": context_snapshot.conflict_level if context_snapshot else "UNKNOWN",
+                        "conflict_level": context_snapshot.conflict_level
+                        if context_snapshot
+                        else "UNKNOWN",
                         "source_count": len(context_snapshot.sources) if context_snapshot else 0,
                         "item_count": len(context_snapshot.items) if context_snapshot else 0,
                     },
@@ -191,7 +210,23 @@ class TradingCoordinator:
             )
             if ai_assessment.decision is not AiDecision.APPROVE_ENTRY:
                 self._processed_candles.add(candle_key)
-                return DecisionOutcome(False, "AI_VETO_REJECTED", ai_assessment.reason_codes)
+                return DecisionOutcome(
+                    False,
+                    "AI_VETO_REJECTED",
+                    ai_assessment.reason_codes,
+                    decision_chain_id=decision_chain_id,
+                    ai_assessment=ai_assessment,
+                )
+
+        if self.filters is None:
+            self._processed_candles.add(candle_key)
+            return DecisionOutcome(
+                False,
+                "MARKET_FILTERS_UNAVAILABLE",
+                ("MARKET_FILTERS_UNAVAILABLE",),
+                decision_chain_id=decision_chain_id,
+                ai_assessment=ai_assessment,
+            )
 
         # Deterministic Risk Sizing Gate
         risk_context = RiskContext(
@@ -220,7 +255,14 @@ class TradingCoordinator:
         risk_decision: RiskDecision = self.risk_engine.plan_entry(risk_context)
         if not risk_decision.approved or risk_decision.plan is None:
             self._processed_candles.add(candle_key)
-            return DecisionOutcome(False, "RISK_REJECTED", risk_decision.reason_codes)
+            return DecisionOutcome(
+                False,
+                "RISK_REJECTED",
+                risk_decision.reason_codes,
+                decision_chain_id=decision_chain_id,
+                ai_assessment=ai_assessment,
+                risk_decision=risk_decision,
+            )
 
         # Execute entry fill on broker
         fill = self.broker.open_long(
@@ -233,8 +275,11 @@ class TradingCoordinator:
             True,
             "ENTRY_FILLED",
             ("PAPER_ENTRY_FILLED",),
+            decision_chain_id=decision_chain_id,
             plan=risk_decision.plan,
             fill=fill,
+            ai_assessment=ai_assessment,
+            risk_decision=risk_decision,
         )
 
     def monitor_open_position(self, quote: Quote) -> ExitOutcome | None:

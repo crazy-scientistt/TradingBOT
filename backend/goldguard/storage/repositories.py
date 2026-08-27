@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from goldguard.storage.database import Database
 from goldguard.observability.events import AgentEvent
+from goldguard.storage.database import Database
 from goldguard.strategy.genome import StrategyGenome, genome_hash
+
+if TYPE_CHECKING:
+    from goldguard.ai.gemini import AiAssessment
+    from goldguard.context.models import ContextSnapshot
 
 
 def utc_now_iso() -> str:
@@ -93,6 +97,20 @@ class LedgerRepository:
             for row in rows
         ]
 
+    def get_paper_session(self, session_id: str) -> PaperSession | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT id, initial_balance_text, created_at FROM paper_accounts WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return PaperSession(
+            identifier=str(row["id"]),
+            initial_balance=Decimal(str(row["initial_balance_text"])),
+            created_at=str(row["created_at"]),
+        )
+
     def save_settings_version(self, version: str, payload: dict[str, Any]) -> str:
         encoded = canonical_json(payload)
         identifier = hashlib.sha256(f"{version}\n{encoded}".encode()).hexdigest()
@@ -113,6 +131,24 @@ class LedgerRepository:
             )
         if cursor.lastrowid is None:
             raise RuntimeError("audit insert returned no identifier")
+        return int(cursor.lastrowid)
+
+    def record_state_transition(
+        self,
+        *,
+        from_state: str,
+        to_state: str,
+        reason: str,
+        occurred_at: str | None = None,
+    ) -> int:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                "INSERT INTO state_transitions(from_state, to_state, reason, occurred_at) "
+                "VALUES (?, ?, ?, ?)",
+                (from_state, to_state, reason, occurred_at or utc_now_iso()),
+            )
+        if cursor.lastrowid is None:
+            raise RuntimeError("state transition insert returned no identifier")
         return int(cursor.lastrowid)
 
     def record_decision_chain(
@@ -149,6 +185,200 @@ class LedgerRepository:
         if row is None:
             raise RuntimeError("decision count returned no row")
         return int(row[0])
+
+    def save_context_snapshot(
+        self,
+        *,
+        snapshot: "ContextSnapshot",
+        event_time: datetime | None = None,
+        freshness: str,
+    ) -> str:
+        identifier = snapshot.content_hash
+        summary = {
+            "fetched_at": snapshot.fetched_at.isoformat(),
+            "conflict_level": snapshot.conflict_level,
+            "prompt_injection_suspected": snapshot.prompt_injection_suspected,
+            "items": [
+                {
+                    "summary": item.summary,
+                    "driver": item.driver,
+                    "direction": item.direction,
+                    "severity": item.severity,
+                    "published_at": item.published_at.isoformat() if item.published_at else None,
+                    "source_indexes": list(item.source_indexes),
+                    "contradictory": item.contradictory,
+                }
+                for item in snapshot.items
+            ],
+        }
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO context_snapshots(
+                    id, fetched_at, event_time, freshness, conflict_level,
+                    content_hash, summary_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    snapshot.fetched_at.isoformat(),
+                    event_time.isoformat() if event_time else None,
+                    freshness,
+                    snapshot.conflict_level,
+                    snapshot.content_hash,
+                    canonical_json(summary),
+                ),
+            )
+            for index, source in enumerate(snapshot.sources):
+                source_id = hashlib.sha256(
+                    f"{identifier}|{index}|{source.url}".encode()
+                ).hexdigest()
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO context_sources(
+                        id, context_snapshot_id, url, title, published_at, source_tier
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_id,
+                        identifier,
+                        source.url,
+                        source.title,
+                        source.published_at.isoformat() if source.published_at else None,
+                        source.tier,
+                    ),
+                )
+        return identifier
+
+    def save_ai_decision(
+        self,
+        *,
+        decision_chain_id: str,
+        context_snapshot_id: str | None,
+        assessment: "AiAssessment",
+    ) -> str:
+        identifier = hashlib.sha256(f"ai|{decision_chain_id}".encode()).hexdigest()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_decisions(
+                    id, decision_chain_id, context_snapshot_id, decision,
+                    confidence, reason_codes_json, prompt_hash, model, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    decision_chain_id,
+                    context_snapshot_id,
+                    assessment.decision.value,
+                    assessment.confidence,
+                    canonical_json(assessment.reason_codes),
+                    assessment.prompt_hash,
+                    assessment.model,
+                    utc_now_iso(),
+                ),
+            )
+        return identifier
+
+    def save_risk_decision(
+        self,
+        *,
+        decision_chain_id: str,
+        approved: bool,
+        details: dict[str, Any],
+    ) -> str:
+        identifier = hashlib.sha256(f"risk|{decision_chain_id}".encode()).hexdigest()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO risk_decisions(
+                    id, decision_chain_id, approved, details_json, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    identifier,
+                    decision_chain_id,
+                    1 if approved else 0,
+                    canonical_json(details),
+                    utc_now_iso(),
+                ),
+            )
+        return identifier
+
+    def latest_equity_snapshot(self, paper_account_id: str) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM equity_snapshots
+                WHERE paper_account_id = ?
+                ORDER BY observed_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (paper_account_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_order_fills(self, paper_account_id: str) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    o.id AS order_id,
+                    o.client_order_id,
+                    o.side,
+                    o.status,
+                    o.created_at AS order_created_at,
+                    f.id AS fill_id,
+                    f.price_text,
+                    f.quantity_text,
+                    f.fee_text,
+                    f.occurred_at
+                FROM orders o
+                LEFT JOIN fills f ON f.order_id = o.id
+                WHERE o.paper_account_id = ?
+                ORDER BY f.occurred_at ASC, o.created_at ASC
+                """,
+                (paper_account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_trades(self, paper_account_id: str) -> list[dict[str, Any]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM trades
+                WHERE paper_account_id = ?
+                ORDER BY opened_at ASC, id ASC
+                """,
+                (paper_account_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def load_trade_plan(
+        self,
+        *,
+        paper_account_id: str,
+        opened_at: str,
+    ) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT rd.details_json
+                FROM risk_decisions rd
+                INNER JOIN decision_chains dc ON dc.id = rd.decision_chain_id
+                WHERE dc.account_scope = ?
+                  AND dc.candle_close_time = ?
+                  AND rd.approved = 1
+                ORDER BY rd.created_at DESC
+                LIMIT 1
+                """,
+                (paper_account_id, opened_at),
+            ).fetchone()
+        if row is None:
+            return None
+        details = json.loads(row["details_json"])
+        plan = details.get("plan")
+        return plan if isinstance(plan, dict) else None
 
 
 class AgentEventRepository:

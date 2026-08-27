@@ -12,7 +12,6 @@ Comprehensive REST API and WebSocket layer connecting the complete trading pipel
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import random
 import time
@@ -36,7 +35,7 @@ from goldguard.config import Settings
 from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
 from goldguard.domain.models import Candle, Quote
-from goldguard.market.binance import BinancePublicClient, SymbolFilters
+from goldguard.market.binance import BinancePublicClient
 from goldguard.providers.client import GatewayClient
 from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
@@ -103,16 +102,6 @@ def get_trading_runtime() -> TradingRuntime:
     if _trading_runtime is None:
         raise RuntimeError("Trading runtime not initialized")
     return _trading_runtime
-
-
-def _default_symbol_filters() -> SymbolFilters:
-    return SymbolFilters(
-        tick_size=Decimal("0.01"),
-        step_size=Decimal("0.0001"),
-        minimum_quantity=Decimal("0.0001"),
-        maximum_quantity=Decimal("100"),
-        minimum_notional=Decimal("5"),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -274,15 +263,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     )
     _bot_state_machine = StateMachine()
 
-    # Generate bootstrap market candles
-    _candles_15m, _candles_1h = _generate_bootstrap_candles()
-    if _candles_15m:
-        last_c = _candles_15m[-1]
-        _latest_quote = Quote(
-            bid=last_c.close - Decimal("0.10"),
-            ask=last_c.close + Decimal("0.10"),
-            observed_at=datetime.now(UTC),
-        )
+    # Runtime starts degraded until verified market inputs are injected.
+    _candles_15m = []
+    _candles_1h = []
 
     ai_veto = None
     if _provider_repo is not None and _settings.gateway_base_url:
@@ -300,7 +283,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             ),
         )
 
-    if _db is not None and _broker is not None and _genome_repo is not None and _ledger_repo is not None:
+    if (
+        _db is not None
+        and _broker is not None
+        and _genome_repo is not None
+        and _ledger_repo is not None
+    ):
         _trading_runtime = TradingRuntime(
             database=_db,
             settings=_settings,
@@ -309,13 +297,15 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             ledger_repo=_ledger_repo,
             strategy_runtime=_runtime,
             risk_engine=_risk_engine,
-            filters=_default_symbol_filters(),
+            filters=None,
             state_machine=_bot_state_machine,
-            candles_15m=_candles_15m,
-            candles_1h=_candles_1h,
-            latest_quote=_latest_quote,
+            candles_15m=[],
+            candles_1h=[],
+            latest_quote=None,
             checklist=ProfessionalChecklist(),
             ai_veto=ai_veto,
+            market_source="startup-degraded",
+            market_verified=False,
         )
 
     # Seed mock reflections if none exist
@@ -648,8 +638,7 @@ async def live_context() -> list[dict[str, Any]]:
             "id": "4",
             "category": "geopolitical",
             "title": (
-                "Central bank net gold accumulation continues strong monthly pace "
-                "across reserves."
+                "Central bank net gold accumulation continues strong monthly pace across reserves."
             ),
             "source": "worldgoldcouncil.org",
             "time": "10:30",
@@ -743,15 +732,9 @@ async def run_backtest(req: BacktestRequest) -> dict[str, Any]:
         report = res.report
         win_rate_str = f"{(report.win_rate * 100):0.1f}%"
         profit_factor_str = (
-            f"{report.profit_factor:0.2f}"
-            if report.profit_factor is not None
-            else "N/A"
+            f"{report.profit_factor:0.2f}" if report.profit_factor is not None else "N/A"
         )
-        sharpe_str = (
-            f"{report.sharpe_ratio:0.2f}"
-            if report.sharpe_ratio is not None
-            else "N/A"
-        )
+        sharpe_str = f"{report.sharpe_ratio:0.2f}" if report.sharpe_ratio is not None else "N/A"
         return {
             "net_pnl": f"{report.net_pnl:+0.2f}",
             "gross_pnl": f"{report.gross_pnl:+0.2f}",

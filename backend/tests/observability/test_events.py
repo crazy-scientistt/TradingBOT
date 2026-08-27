@@ -1,8 +1,7 @@
-from datetime import UTC, datetime, timedelta
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from goldguard.observability.events import AgentEvent, EventBus
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import AgentEventRepository
@@ -48,6 +47,8 @@ def test_repository_persists_only_audit_events_and_is_immutable(tmp_path) -> Non
     repository.save(audit)
     assert repository.list_events() == (audit,)
 
-    with pytest.raises(sqlite3.IntegrityError, match="agent events are immutable"):
-        with database.transaction() as connection:
-            connection.execute("DELETE FROM agent_events")
+    with (
+        pytest.raises(sqlite3.IntegrityError, match="agent events are immutable"),
+        database.transaction() as connection,
+    ):
+        connection.execute("DELETE FROM agent_events")
