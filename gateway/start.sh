@@ -1,20 +1,25 @@
 #!/bin/sh
-# Railway/OpenCodex entrypoint. Binds 0.0.0.0 so the bot can reach it on the
-# private network. Never overwrites saved providers — only ensures hostname/port.
+# Railway entrypoint. Bind 0.0.0.0, keep the process in the foreground, and
+# never probe `ocx start --help` (that can swallow the healthcheck window).
 set -eu
 
 PORT="${PORT:-10100}"
-export HOME="${HOME:-/app}"
-CONFIG_DIR="${HOME}/.opencodex"
-export CONFIG_FILE="${CONFIG_DIR}/config.json"
 export PORT
+export HOME="${HOME:-/app}"
+export CI=1
+export OPENCODEX_HOME="${OPENCODEX_HOME:-${HOME}/.opencodex}"
+mkdir -p "${OPENCODEX_HOME}"
+export CONFIG_FILE="${OPENCODEX_HOME}/config.json"
 
 if [ -z "${OPENCODEX_API_AUTH_TOKEN:-}" ]; then
-  echo "OPENCODEX_API_AUTH_TOKEN is required. OpenCodex refuses 0.0.0.0 without it." >&2
+  echo "==============================================" >&2
+  echo "FATAL: OPENCODEX_API_AUTH_TOKEN is not set." >&2
+  echo "Add it on the opencodex service Variables tab." >&2
+  echo "OpenCodex will not bind 0.0.0.0 without it." >&2
+  echo "==============================================" >&2
+  sleep 8
   exit 1
 fi
-
-mkdir -p "${CONFIG_DIR}"
 
 bun -e '
   const fs = require("fs");
@@ -26,11 +31,15 @@ bun -e '
   cfg.hostname = "0.0.0.0";
   cfg.port = port;
   fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
-  console.log("OpenCodex config ready at", path, "port", port);
+  console.log("OpenCodex config", path, "hostname=0.0.0.0 port=" + port);
 '
 
-echo "Starting OpenCodex on 0.0.0.0:${PORT}"
-if bun x ocx start --help >/dev/null 2>&1; then
-  exec bun x ocx start --port "${PORT}"
+OCX="/app/node_modules/.bin/ocx"
+if [ ! -x "${OCX}" ]; then
+  echo "FATAL: ${OCX} is missing. bun install did not produce the ocx binary." >&2
+  sleep 8
+  exit 1
 fi
-exec bun x opencodex --port "${PORT}"
+
+echo "Starting OpenCodex on 0.0.0.0:${PORT}"
+exec "${OCX}" start --port "${PORT}"
