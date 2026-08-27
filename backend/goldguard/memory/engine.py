@@ -1,4 +1,3 @@
-import json
 from typing import Any
 
 from goldguard.memory.reflections import Reflection
@@ -40,10 +39,7 @@ class MemoryBank:
         matches: list[dict[str, Any]] = []
 
         for row in rows:
-            try:
-                row_tags = set(json.loads(row["regime_tags_json"]))
-            except Exception:
-                row_tags = set()
+            row_tags = set(row["regime_tags"])
 
             if not wanted or wanted.issubset(row_tags):
                 matches.append(
@@ -51,9 +47,9 @@ class MemoryBank:
                         "lesson_code": row["lesson_code"],
                         "lesson": row["lesson"],
                         "exit_reason": row["exit_reason"],
-                        "net_pnl": row["net_pnl_text"],
-                        "fee_drag": row["fee_drag_text"],
-                        "regime_tags": list(row_tags),
+                        "net_pnl": row["net_pnl"],
+                        "fee_drag": row["fee_drag"],
+                        "regime_tags": sorted(row_tags),
                     }
                 )
 

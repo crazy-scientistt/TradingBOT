@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     entry_timeframe: Literal["15m"] = "15m"
     regime_timeframe: Literal["1h"] = "1h"
     data_dir: Path = Path("/data")
+    # Disable to run the API without reaching the public market endpoints (tests, offline demos).
+    market_ingestion_enabled: bool = True
+    # Binance's public market-data mirror: identical REST paths, no key, and it answers
+    # from regions where api.binance.com returns HTTP 451. Point at api.binance.com when
+    # the deployment region is eligible.
+    market_base_url: str = "https://data-api.binance.vision"
 
     paper_starting_balance: Decimal = Field(default=Decimal("100"), gt=0)
     paper_risk_per_trade: Decimal = Field(

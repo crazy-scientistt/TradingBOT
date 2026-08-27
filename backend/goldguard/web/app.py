@@ -1,32 +1,38 @@
 """FastAPI application entry point for GoldGuard.
 
-Comprehensive REST API and WebSocket layer connecting the complete trading pipeline:
-- Market candles & live quote streams with technical indicators (EMA, RSI, ATR)
-- Strategy Studio with real deterministic backtesting & multi-gate genome promotion
-- Hermes Autonomous Research Lab with daily quota tracking & memory reflections
-- AI Provider Hub & Model Routing Matrix with live latency probing
-- Emergency Cockpit with circuit breakers, kill switch, and autonomy controls
-- Context, Decision Chain audit ledger, and Trade History feeds
-- Embedded static frontend build serving
+Truthfulness contract: every data endpoint answers with
+``{availability, source, observed_at, stale, detail, data}``. When a value cannot be
+measured the endpoint reports ``unavailable`` with empty data instead of substituting a
+plausible number — see backend/tests/web/test_api_truthfulness.py.
+
+Surface:
+- Market candles and quotes fed by live ingestion, never generated.
+- Strategy Studio backtests that refuse to run without a verified candle series.
+- Hermes research quotas, memory reflections, provider routing, decision audit ledger.
+- Paper-only cockpit: preflight gate, start/pause/emergency-stop, and a bounded agent
+  event feed served both as a snapshot and over Server-Sent Events.
 """
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
 import logging
-import random
-import time
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from goldguard.ai.decision import DecisionVetoEngine
 from goldguard.backtest.engine import BacktestEngine, FrictionConfig
@@ -34,17 +40,18 @@ from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
 from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
-from goldguard.domain.models import Candle, Quote
-from goldguard.market.binance import BinancePublicClient
+from goldguard.observability.events import AgentEvent
 from goldguard.providers.client import GatewayClient
 from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
+from goldguard.services.ingestion import MarketIngestionService, MarketSnapshot
 from goldguard.services.runtime import TradingRuntime
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
     GenomeRepository,
     LedgerRepository,
+    MarketCandleRepository,
     ProviderRepository,
     QuotaRepository,
     ReflectionRepository,
@@ -55,11 +62,18 @@ from goldguard.strategy.genome import (
     trend_pullback_v1,
 )
 from goldguard.strategy.indicators import (
+    atr_wilder,
     ema_series,
+    median_volume_ratio,
+    rsi_wilder,
 )
 from goldguard.strategy.runtime import GenomeRuntime
 
 logger = logging.getLogger("goldguard.web")
+
+AGENT_EVENT_DISPLAY_LIMIT = 30
+SSE_HEARTBEAT_SECONDS = 15.0
+CANDLE_PAGE_LIMIT = 500
 
 # ---------------------------------------------------------------------------
 # Application Singletons
@@ -71,6 +85,7 @@ _ledger_repo: LedgerRepository | None = None
 _quota_repo: QuotaRepository | None = None
 _provider_repo: ProviderRepository | None = None
 _reflection_repo: ReflectionRepository | None = None
+_candle_repo: MarketCandleRepository | None = None
 
 _broker: PaperBroker | None = None
 _risk_engine: RiskEngine | None = None
@@ -78,90 +93,98 @@ _runtime: GenomeRuntime | None = None
 _trading_runtime: TradingRuntime | None = None
 _backtest_engine: BacktestEngine | None = None
 _bot_state_machine: StateMachine | None = None
-_binance_client: BinancePublicClient | None = None
+_ingestion: MarketIngestionService | None = None
 _provider_http_client: httpx.AsyncClient | None = None
 _full_autonomy: bool = True
 
-# Live market memory
-_candles_15m: list[Candle] = []
-_candles_1h: list[Candle] = []
-_latest_quote: Quote = Quote(
-    bid=Decimal("2500.20"),
-    ask=Decimal("2500.50"),
-    observed_at=datetime.now(UTC),
-)
+# Probe results live in memory only: the providers table has no latency column, and a
+# latency measured in a previous process is not a fact about this one.
+_provider_probes: dict[str, dict[str, Any]] = {}
+
+
+def _require[T](value: T | None, label: str) -> T:
+    if value is None:
+        raise HTTPException(status_code=503, detail=f"{label} is not initialised")
+    return value
 
 
 def _get_db() -> Database:
-    if _db is None:
-        raise RuntimeError("Database not initialized")
-    return _db
+    return _require(_db, "database")
 
 
 def get_trading_runtime() -> TradingRuntime:
-    if _trading_runtime is None:
-        raise RuntimeError("Trading runtime not initialized")
-    return _trading_runtime
+    return _require(_trading_runtime, "trading runtime")
 
 
 # ---------------------------------------------------------------------------
-# Synthetic Market Data Generator (High-fidelity realistic PAXG series)
+# Envelope helpers
 # ---------------------------------------------------------------------------
-def _generate_bootstrap_candles() -> tuple[list[Candle], list[Candle]]:
-    """Generate deterministic 15m and 1h warmup candle series for realistic offline simulation."""
-    now = datetime.now(UTC)
-    count_15m = 200
-    candles_15m: list[Candle] = []
-    base_price = Decimal("2480.00")
-    current_close = base_price
+def _env(
+    data: Any,
+    *,
+    availability: str = "available",
+    source: str = "sqlite",
+    observed_at: datetime | None = None,
+    stale: bool = False,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """Wrap a payload with its provenance so the UI can never mistake a gap for a value."""
+    return {
+        "availability": availability,
+        "source": source,
+        "observed_at": (observed_at or datetime.now(UTC)).isoformat(),
+        "stale": stale,
+        "detail": detail,
+        "data": data,
+    }
 
-    for i in range(count_15m, 0, -1):
-        open_time = now - timedelta(minutes=15 * i)
-        close_time = open_time + timedelta(minutes=15)
-        # Gentle random walk with upward drift
-        drift = Decimal(str(round(random.uniform(-1.5, 1.8), 2)))
-        open_p = current_close
-        close_p = open_p + drift
-        high_p = max(open_p, close_p) + Decimal(str(round(random.uniform(0.2, 1.5), 2)))
-        low_p = min(open_p, close_p) - Decimal(str(round(random.uniform(0.2, 1.5), 2)))
-        vol = Decimal(str(round(random.uniform(0.8, 3.5), 4)))
 
-        candles_15m.append(
-            Candle(
-                symbol="PAXGUSDT",
-                timeframe="15m",
-                open_time=open_time,
-                close_time=close_time,
-                open=open_p,
-                high=high_p,
-                low=low_p,
-                close=close_p,
-                volume=vol,
-                closed=True,
-            )
-        )
-        current_close = close_p
+_UNAVAILABLE_MARKET = MarketSnapshot(
+    availability="unavailable",
+    source="unconfigured",
+    observed_at=None,
+    stale=True,
+    detail="market ingestion is not initialised",
+    verified=False,
+    candles_15m=(),
+    candles_1h=(),
+    latest_quote=None,
+    filters=None,
+)
 
-    # Aggregate into 1h candles
-    candles_1h: list[Candle] = []
-    for i in range(0, len(candles_15m) - 3, 4):
-        batch = candles_15m[i : i + 4]
-        candles_1h.append(
-            Candle(
-                symbol="PAXGUSDT",
-                timeframe="1h",
-                open_time=batch[0].open_time,
-                close_time=batch[-1].close_time,
-                open=batch[0].open,
-                high=max(c.high for c in batch),
-                low=min(c.low for c in batch),
-                close=batch[-1].close,
-                volume=sum((c.volume for c in batch), Decimal("0")),
-                closed=True,
-            )
-        )
 
-    return candles_15m, candles_1h
+def _market() -> MarketSnapshot:
+    return _ingestion.snapshot() if _ingestion is not None else _UNAVAILABLE_MARKET
+
+
+def _jsonable(value: Any) -> Any:
+    """Coerce Decimals/datetimes inside free-form event payloads into JSON scalars."""
+    return json.loads(json.dumps(value, default=str))
+
+
+def _event_payload(event: AgentEvent) -> dict[str, Any]:
+    return {
+        "event_id": event.event_id,
+        "action": event.action,
+        "reason": event.reason,
+        "reason_codes": list(event.reason_codes),
+        "payload": _jsonable(dict(event.payload)),
+        "occurred_at": event.occurred_at.isoformat(),
+        "audit_worthy": event.audit_worthy,
+    }
+
+
+def _fingerprint(secret: SecretStr | None) -> str:
+    if secret is None:
+        return "not-configured"
+    digest = hashlib.sha256(secret.get_secret_value().encode()).hexdigest()
+    return f"sha256:{digest[:8]}"
+
+
+def _paper_account_id() -> str | None:
+    if _trading_runtime is not None:
+        return _trading_runtime.status().paper_account_id
+    return _ledger_repo.current_paper_session_id() if _ledger_repo else None
 
 
 # ---------------------------------------------------------------------------
@@ -169,10 +192,10 @@ def _generate_bootstrap_candles() -> tuple[list[Candle], list[Candle]]:
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
-    global _settings, _db, _genome_repo, _ledger_repo
+    global _settings, _db, _genome_repo, _ledger_repo, _candle_repo
     global _quota_repo, _provider_repo, _reflection_repo
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
-    global _binance_client, _provider_http_client, _candles_15m, _candles_1h, _latest_quote
+    global _ingestion, _provider_http_client
 
     try:
         _settings = Settings()
@@ -207,47 +230,40 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _quota_repo = QuotaRepository(_db)
         _provider_repo = ProviderRepository(_db)
         _reflection_repo = ReflectionRepository(_db)
+        _candle_repo = MarketCandleRepository(_db)
 
-        # Ensure active baseline genome exists
         if _genome_repo.get_active_genome() is None:
             baseline = trend_pullback_v1()
             _genome_repo.save_genome(baseline, origin="baseline", status="active")
             logger.info("Saved baseline strategy genome: %s", baseline.genome_id)
 
-        # Seed providers and routes if empty
+        # Fingerprints are re-derived every boot so a rotated key never shows a stale digest.
+        _provider_repo.upsert_provider(
+            name="opencodex",
+            kind="proxy",
+            base_url=_settings.gateway_base_url or "http://localhost:10100",
+            key_fingerprint=_fingerprint(_settings.gateway_data_token),
+            status="active" if _settings.gateway_base_url else "unconfigured",
+        )
+        _provider_repo.upsert_provider(
+            name="google-antigravity",
+            kind="native",
+            base_url="https://generativelanguage.googleapis.com",
+            key_fingerprint=_fingerprint(_settings.gemini_api_key),
+            status="active" if _settings.gemini_api_key else "unconfigured",
+        )
         if not _provider_repo.get_active_routes():
-            _provider_repo.upsert_provider(
-                name="opencodex",
-                kind="proxy",
-                base_url="http://localhost:10100",
-                key_fingerprint="sk-data-****9999",
-                status="active",
-            )
-            _provider_repo.upsert_provider(
-                name="google-antigravity",
-                kind="native",
-                base_url="https://generativelanguage.googleapis.com",
-                key_fingerprint="sk-gemini-****8888",
-                status="active",
-            )
-            _provider_repo.set_route(
-                "decision", "opencodex", "google-antigravity/gemini-3.7-flash", pinned=True
-            )
-            _provider_repo.set_route(
-                "context", "opencodex", "google-antigravity/gemini-3.7-flash", pinned=True
-            )
-            _provider_repo.set_route(
-                "hermes", "opencodex", "google-antigravity/gemini-3.7-flash", pinned=True
-            )
+            for role in ("decision", "context", "hermes"):
+                _provider_repo.set_route(
+                    role, "opencodex", "google-antigravity/gemini-3.7-flash", pinned=True
+                )
 
-        # Ensure a paper session exists
         if _ledger_repo.current_paper_session_id() is None:
             session_id = _ledger_repo.create_paper_session(_settings.paper_starting_balance)
             logger.info("Created initial paper session: %s", session_id)
     except Exception as exc:
         logger.error("Database migration error (degraded mode): %s", exc, exc_info=True)
 
-    # Initialize domain engines
     _broker = PaperBroker(
         starting_cash=_settings.paper_starting_balance,
         fee_rate=_settings.taker_fee_rate,
@@ -263,11 +279,11 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     )
     _bot_state_machine = StateMachine()
 
-    # Runtime starts degraded until verified market inputs are injected.
-    _candles_15m = []
-    _candles_1h = []
-
     ai_veto = None
+    # Reset per-process caches so a restarted app never reports the previous run's probes
+    # or hands out an already-closed HTTP client.
+    _provider_http_client = None
+    _provider_probes.clear()
     if _provider_repo is not None and _settings.gateway_base_url:
         _provider_http_client = httpx.AsyncClient()
         ai_veto = DecisionVetoEngine(
@@ -289,6 +305,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         and _genome_repo is not None
         and _ledger_repo is not None
     ):
+        # The runtime starts with no market inputs; ingestion is the only thing that
+        # unblocks it, so a boot without market access stays visibly degraded.
         _trading_runtime = TradingRuntime(
             database=_db,
             settings=_settings,
@@ -308,40 +326,18 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             market_verified=False,
         )
 
-    # Seed mock reflections if none exist
-    if _reflection_repo and not _reflection_repo.list_reflections(limit=5):
-        _reflection_repo.record_reflection(
-            reflection_id="ref-init-01",
-            trade_id="t-101",
-            namespace="forward",
-            lesson_code="TP_CLEAN",
-            lesson="Hourly EMA50 momentum generated clean take-profit exit during Asian overlap.",
-            regime_tags=["trend", "normal-volatility"],
-            net_pnl=Decimal("2.40"),
-            fee_drag=Decimal("0.22"),
-            mae=Decimal("1.20"),
-            mfe=Decimal("4.50"),
-            exit_reason="TAKE_PROFIT",
-            payload={"symbol": "PAXGUSDT"},
+    if _trading_runtime is not None and _candle_repo is not None:
+        _ingestion = MarketIngestionService(
+            settings=_settings,
+            runtime=_trading_runtime,
+            candle_repo=_candle_repo,
         )
-        _reflection_repo.record_reflection(
-            reflection_id="ref-init-02",
-            trade_id="t-102",
-            namespace="forward",
-            lesson_code="CHOP_WHIPSAW",
-            lesson="Low volume pullback reached initial target then reversed into trailing stop.",
-            regime_tags=["trend", "low-volatility"],
-            net_pnl=Decimal("-1.25"),
-            fee_drag=Decimal("0.24"),
-            mae=Decimal("3.10"),
-            mfe=Decimal("1.80"),
-            exit_reason="STOP_LOSS",
-            payload={"symbol": "PAXGUSDT"},
-        )
+        await _ingestion.start()
 
     yield
 
-    # Shutdown
+    if _ingestion is not None:
+        await _ingestion.aclose()
     if _trading_runtime is not None:
         _trading_runtime.shutdown()
     if _provider_http_client is not None:
@@ -354,7 +350,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="GoldGuard",
-    description="Autonomous PAXG/USDT Trading Platform & Strategy Studio",
+    description="Autonomous PAXG/USDT Paper Trading Platform & Strategy Studio",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -369,11 +365,11 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# 1. Health & Status Endpoints
+# 1. Health & Status
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    """Production health check — verifies DB integrity, quota, and state."""
+    """Process health probe. Raw (not enveloped) so container health checks stay simple."""
     results: dict[str, Any] = {"status": "ok", "timestamp": datetime.now(UTC).isoformat()}
     if _db is None:
         results["status"] = "starting"
@@ -381,533 +377,732 @@ async def health() -> dict[str, Any]:
         return results
 
     try:
-        integrity = _db.integrity_check()
-        results["database"] = integrity
+        results["database"] = _db.integrity_check()
     except Exception as exc:
         results["database"] = f"FAIL: {exc}"
         results["status"] = "degraded"
 
     if _quota_repo is not None:
         today = datetime.now(UTC).strftime("%Y-%m-%d")
-        bt, wc = _quota_repo.get_usage(today)
-        results["quota"] = {"backtests_today": bt, "web_calls_today": wc}
+        backtests, web_calls = _quota_repo.get_usage(today)
+        results["quota"] = {"backtests_today": backtests, "web_calls_today": web_calls}
 
     results["bot_running"] = _trading_runtime.status().running if _trading_runtime else False
+    results["market"] = _market().availability
     return results
 
 
 @app.get("/api/status")
-async def status() -> dict[str, Any]:
-    """Summary of runtime mode, active session, and autonomy configuration."""
-    assert _settings is not None
-    active_g = _genome_repo.get_active_genome() if _genome_repo else None
-    runtime_status = get_trading_runtime().status() if _trading_runtime else None
-    return {
-        "environment": _settings.environment,
-        "mode": _settings.mode,
-        "symbol": _settings.symbol,
-        "bot_running": runtime_status.running if runtime_status else False,
-        "full_autonomy": _full_autonomy,
-        "active_genome_id": active_g.genome_id if active_g else "trend-pullback-v1",
-        "paper_balance": str(_broker.cash if _broker else _settings.paper_starting_balance),
-        "live_enabled": _settings.live_capability_enabled,
-    }
+async def app_status() -> dict[str, Any]:
+    """Runtime mode, active strategy, and autonomy configuration."""
+    settings = _require(_settings, "settings")
+    active_genome = _genome_repo.get_active_genome() if _genome_repo else None
+    runtime_status = _trading_runtime.status() if _trading_runtime else None
+    market = _market()
+    return _env(
+        {
+            "environment": settings.environment,
+            "mode": settings.mode,
+            "symbol": settings.symbol,
+            "bot_running": runtime_status.running if runtime_status else False,
+            "bot_state": runtime_status.state.value if runtime_status else None,
+            "full_autonomy": _full_autonomy,
+            "active_genome_id": active_genome.genome_id if active_genome else None,
+            "paper_balance": str(_broker.cash) if _broker else None,
+            "live_enabled": settings.live_capability_enabled,
+            "market_source": market.source,
+            "market_verified": market.verified,
+            "degraded_reasons": list(runtime_status.degraded_reasons) if runtime_status else [],
+        },
+        source="runtime",
+        availability="available" if runtime_status else "degraded",
+        detail=None if runtime_status else "trading runtime failed to initialise",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 2. KPI & Financial Overview Metrics
+# 2. KPI cards
 # ---------------------------------------------------------------------------
+def _max_drawdown_percent(values: list[float]) -> float | None:
+    """Peak-to-trough decline across recorded snapshots. None until there is history."""
+    if len(values) < 2:
+        return None
+    peak = values[0]
+    worst = 0.0
+    for value in values:
+        peak = max(peak, value)
+        if peak > 0:
+            worst = max(worst, (peak - value) / peak)
+    return round(worst * 100, 2)
+
+
 @app.get("/api/kpi")
 async def kpi() -> dict[str, Any]:
-    """Key performance indicators for the 5 dashboard overview cards."""
-    assert _broker is not None
-    assert _settings is not None
+    """Overview cards. Any figure that needs data we do not have is reported as null."""
+    settings = _require(_settings, "settings")
+    broker = _require(_broker, "paper broker")
+    market = _market()
+    quote = market.latest_quote
 
-    equity = float(_broker.equity(_latest_quote))
-    cash = float(_broker.cash)
-    start_bal = float(_settings.paper_starting_balance)
-    total_pnl = round(equity - start_bal, 2)
-    pnl_pct = round((total_pnl / start_bal) * 100, 2)
-    spread = float(_latest_quote.ask - _latest_quote.bid)
+    if quote is not None:
+        equity: float | None = float(broker.equity(quote))
+    elif broker.position is None:
+        equity = float(broker.cash)  # flat: equity is exactly cash, no mark-to-market needed
+    else:
+        equity = None
 
-    return {
-        "equity": round(equity, 2),
-        "equityCurrency": "USDT",
-        "equityChangePercent": pnl_pct,
-        "equityChangePeriod": "24H",
-        "cash": round(cash, 2),
-        "cashCurrency": "USDT",
-        "cashChangeNote": "Paper Mode" if _settings.mode == "paper" else "Live Active",
-        "totalPnl": total_pnl,
-        "totalPnlCurrency": "USDT",
-        "totalPnlChangePercent": pnl_pct,
-        "totalPnlChangePeriod": "24H",
-        "maxDrawdown": 1.45,
-        "maxDrawdownPeriod": "All time",
-        "liveSpread": round(spread, 2),
-        "liveSpreadCurrency": "USDT",
-    }
+    account = _paper_account_id()
+    snapshots = _ledger_repo.list_equity_snapshots(account) if _ledger_repo and account else []
+    values = [float(Decimal(str(row["equity_text"]))) for row in snapshots]
+    cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+    reference = next(
+        (
+            value
+            for row, value in zip(snapshots, values, strict=True)
+            if str(row["observed_at"]) >= cutoff
+        ),
+        None,
+    )
+
+    start_balance = float(settings.paper_starting_balance)
+    total_pnl = round(equity - start_balance, 2) if equity is not None else None
+    total_pnl_percent = (
+        round(total_pnl / start_balance * 100, 2)
+        if total_pnl is not None and start_balance
+        else None
+    )
+    change_percent = (
+        round((equity - reference) / reference * 100, 2)
+        if equity is not None and reference
+        else None
+    )
+
+    return _env(
+        {
+            "equity": round(equity, 2) if equity is not None else None,
+            "equityCurrency": "USDT",
+            "equityChangePercent": change_percent,
+            "equityChangePeriod": "24H",
+            "cash": round(float(broker.cash), 2),
+            "cashCurrency": "USDT",
+            "cashChangeNote": "Paper Mode" if settings.mode == "paper" else "Live Active",
+            "totalPnl": total_pnl,
+            "totalPnlCurrency": "USDT",
+            "totalPnlChangePercent": total_pnl_percent,
+            "totalPnlChangePeriod": "Since start",
+            "maxDrawdown": _max_drawdown_percent(values),
+            "maxDrawdownPeriod": f"{len(values)} recorded snapshots",
+            "liveSpread": round(float(quote.ask - quote.bid), 2) if quote else None,
+            "liveSpreadCurrency": "USDT",
+        },
+        source="paper-ledger",
+        availability="available" if quote is not None else "degraded",
+        observed_at=quote.observed_at if quote else None,
+        stale=market.stale,
+        detail=None if quote is not None else "spread and drawdown need live market data",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 3. Market Candles & Live Quotes
+# 3. Market candles & quotes
 # ---------------------------------------------------------------------------
 @app.get("/api/market/candles")
 async def market_candles(
     symbol: str = "PAXGUSDT",
     interval: str = "15m",
     limit: int = 50,
-) -> list[dict[str, Any]]:
-    """Historical candles with computed EMA20, EMA50, and indicator series."""
-    global _candles_15m, _candles_1h
-    candles = _candles_15m if interval == "15m" else _candles_1h
+) -> dict[str, Any]:
+    """Ingested candles with real EMA/RSI/ATR series. Empty until ingestion verifies data."""
+    if interval not in ("15m", "1h"):
+        raise HTTPException(status_code=400, detail="interval must be 15m or 1h")
+    limit = max(1, min(limit, CANDLE_PAGE_LIMIT))
+    market = _market()
+    candles = list(market.candles_15m if interval == "15m" else market.candles_1h)
     if not candles:
-        _candles_15m, _candles_1h = _generate_bootstrap_candles()
-        candles = _candles_15m if interval == "15m" else _candles_1h
+        return _env(
+            [],
+            availability="unavailable",
+            source=market.source,
+            stale=True,
+            detail=market.detail or f"no verified {interval} candles have been ingested yet",
+        )
 
-    slice_c = candles[-limit:]
-    closes = [float(c.close) for c in slice_c]
+    closes = [float(candle.close) for candle in candles]
+    highs = [float(candle.high) for candle in candles]
+    lows = [float(candle.low) for candle in candles]
+    volumes = [float(candle.volume) for candle in candles]
     ema20 = ema_series(closes, 20)
     ema50 = ema_series(closes, 50)
+    rsi14 = rsi_wilder(closes, 14)
+    atr14 = atr_wilder(highs, lows, closes, 14)
 
-    result: list[dict[str, Any]] = []
-    for i, c in enumerate(slice_c):
-        result.append(
+    rows: list[dict[str, Any]] = []
+    for index in range(max(len(candles) - limit, 0), len(candles)):
+        candle = candles[index]
+        rows.append(
             {
-                "time": c.close_time.strftime("%H:%M"),
-                "fullTime": c.close_time.isoformat(),
-                "open": float(c.open),
-                "high": float(c.high),
-                "low": float(c.low),
-                "close": float(c.close),
-                "volume": float(c.volume),
-                "ema20": round(ema20[i], 2) if i < len(ema20) else float(c.close),
-                "ema50": round(ema50[i], 2) if i < len(ema50) else float(c.close),
+                "time": candle.close_time.strftime("%H:%M"),
+                "fullTime": candle.close_time.isoformat(),
+                "open": float(candle.open),
+                "high": float(candle.high),
+                "low": float(candle.low),
+                "close": float(candle.close),
+                "volume": float(candle.volume),
+                "ema20": round(ema20[index], 2),
+                "ema50": round(ema50[index], 2),
+                "rsi14": None if rsi14[index] is None else round(float(rsi14[index] or 0.0), 2),
+                "atr14": None if atr14[index] is None else round(float(atr14[index] or 0.0), 4),
+                "volumeRatio": (
+                    round(median_volume_ratio(volumes[: index + 1]), 3) if index >= 19 else None
+                ),
             }
         )
-    return result
+
+    return _env(
+        rows,
+        availability=market.availability,
+        source=market.source,
+        observed_at=candles[-1].close_time,
+        stale=market.stale,
+        detail=market.detail,
+    )
 
 
 @app.get("/api/market/quote")
 async def market_quote(symbol: str = "PAXGUSDT") -> dict[str, Any]:
-    """Real-time bid, ask, spread, and spread rate for PAXG/USDT."""
-    spread = _latest_quote.ask - _latest_quote.bid
-    mid = (_latest_quote.ask + _latest_quote.bid) / Decimal("2")
-    spread_rate = spread / mid if mid > 0 else Decimal("0")
-    return {
-        "symbol": symbol,
-        "bid": float(_latest_quote.bid),
-        "ask": float(_latest_quote.ask),
-        "spread": float(spread),
-        "spread_rate": float(spread_rate),
-        "observed_at": _latest_quote.observed_at.isoformat(),
-    }
+    """Latest ingested bid/ask. Null until a quote has actually been observed."""
+    market = _market()
+    quote = market.latest_quote
+    if quote is None:
+        return _env(
+            None,
+            availability="unavailable",
+            source=market.source,
+            stale=True,
+            detail=market.detail or "no live quote has been observed yet",
+        )
+    spread = quote.ask - quote.bid
+    mid = (quote.ask + quote.bid) / Decimal("2")
+    return _env(
+        {
+            "symbol": symbol,
+            "bid": float(quote.bid),
+            "ask": float(quote.ask),
+            "spread": float(spread),
+            "spread_rate": float(spread / mid) if mid > 0 else None,
+            "observed_at": quote.observed_at.isoformat(),
+        },
+        availability=market.availability,
+        source=market.source,
+        observed_at=quote.observed_at,
+        stale=market.stale,
+        detail=market.detail,
+    )
 
 
 # ---------------------------------------------------------------------------
-# 4. Open Position & 5-Step Pipeline Card
+# 4. Open position & decision pipeline
 # ---------------------------------------------------------------------------
+_PIPELINE_STEPS: tuple[tuple[str, str], ...] = (
+    ("strategy", "Strategy signal"),
+    ("context", "Context checklist"),
+    ("ai", "AI veto"),
+    ("risk", "Risk sizing"),
+    ("execution", "Paper fill"),
+)
+
+# Stage (1-indexed) each outcome reached, and whether that stage let the trade through.
+_PIPELINE_OUTCOMES: dict[str, tuple[int, bool]] = {
+    "NO_ACTION": (1, False),
+    "CHECKLIST_HELD": (2, False),
+    "AI_VETO_REJECTED": (3, False),
+    "MARKET_FILTERS_UNAVAILABLE": (4, False),
+    "RISK_REJECTED": (4, False),
+    "ENTRY_FILLED": (5, True),
+    "EXIT_TRIGGERED": (5, True),
+}
+
+
+def _latest_decision_event() -> AgentEvent | None:
+    if _trading_runtime is None:
+        return None
+    for event in reversed(_trading_runtime.recent_events(AGENT_EVENT_DISPLAY_LIMIT)):
+        if "outcome_action" in event.payload:
+            return event
+    return None
+
+
+def _pipeline_steps() -> list[dict[str, Any]]:
+    """Rebuild the 5-gate card from the last real decision instead of guessing."""
+    event = _latest_decision_event()
+    if event is None:
+        return [
+            {
+                "stepNumber": number,
+                "id": identifier,
+                "label": label,
+                "status": "pending",
+                "detail": "No closed candle has been evaluated yet.",
+            }
+            for number, (identifier, label) in enumerate(_PIPELINE_STEPS, start=1)
+        ]
+
+    action = str(event.payload.get("outcome_action", ""))
+    reached, passed = _PIPELINE_OUTCOMES.get(action, (0, False))
+    codes = ", ".join(event.reason_codes) or action or "no reason recorded"
+    steps: list[dict[str, Any]] = []
+    for number, (identifier, label) in enumerate(_PIPELINE_STEPS, start=1):
+        if reached == 0:
+            status, detail = "pending", f"{event.reason}: {codes}"
+        elif number < reached:
+            status, detail = "completed", "Passed on the last evaluated candle."
+        elif number == reached:
+            status = "completed" if passed else "blocked"
+            detail = codes
+        else:
+            status, detail = "pending", "Not reached on the last evaluated candle."
+        steps.append(
+            {
+                "stepNumber": number,
+                "id": identifier,
+                "label": label,
+                "status": status,
+                "detail": detail,
+            }
+        )
+    return steps
+
+
 @app.get("/api/position")
 async def position() -> dict[str, Any]:
-    """Current open position details and live 5-step decision pipeline status."""
-    assert _broker is not None
-    pos = _broker.position
-    runtime_status = get_trading_runtime().status() if _trading_runtime else None
+    """Open paper position, if any. A flat account returns ``position: null``."""
+    settings = _require(_settings, "settings")
+    broker = _require(_broker, "paper broker")
+    market = _market()
+    quote = market.latest_quote
+    open_position = broker.position
+    steps = _pipeline_steps()
 
-    # Dynamic pipeline state based on bot running and position
-    pipeline_steps = [
-        {
-            "stepNumber": 1,
-            "label": "Strategy Passed",
-            "status": "completed" if runtime_status and runtime_status.running else "pending",
-            "detail": "RSI & EMA trend alignment confirmed",
-        },
-        {
-            "stepNumber": 2,
-            "label": "Context Clear",
-            "status": "completed" if runtime_status and runtime_status.running else "pending",
-            "detail": "No FOMC blackout or macro veto",
-        },
-        {
-            "stepNumber": 3,
-            "label": "AI Veto Approved 84%",
-            "status": "active"
-            if (runtime_status and runtime_status.running and pos is None)
-            else ("completed" if pos is not None else "pending"),
-            "detail": "Gemini 3.7 Flash approved entry",
-        },
-        {
-            "stepNumber": 4,
-            "label": "Risk Sizing Gate",
-            "status": "completed" if pos is not None else "pending",
-            "detail": "0.5% max risk ceiling verified",
-        },
-        {
-            "stepNumber": 5,
-            "label": "Paper Fill Executed",
-            "status": "completed" if pos is not None else "pending",
-            "detail": "Filled on paper ledger with 2bps slippage",
-        },
-    ]
+    if open_position is None:
+        return _env(
+            {"hasPosition": False, "position": None, "pipelineSteps": steps},
+            source="paper-broker",
+            observed_at=quote.observed_at if quote else None,
+            stale=market.stale,
+        )
 
-    if pos is None:
-        # Provide representative fallback position details for UI display when flat
-        return {
-            "hasPosition": False,
+    plan = open_position.plan
+    entry_price = open_position.entry_fill.price
+    unrealized = (
+        round(float((quote.bid - entry_price) * open_position.quantity), 2) if quote else None
+    )
+    equity = broker.equity(quote) if quote else None
+    return _env(
+        {
+            "hasPosition": True,
             "position": {
                 "direction": "LONG",
-                "isLive": _settings.mode == "live" if _settings else False,
-                "entry": float(_latest_quote.ask),
-                "stop": float(_latest_quote.ask * Decimal("0.995")),
-                "target": float(_latest_quote.ask * Decimal("1.010")),
-                "quantity": "0.020 PAXG",
-                "riskPercent": 0.50,
-                "unrealizedPnl": 0.0,
+                "isLive": settings.mode == "live",
+                "entry": float(entry_price),
+                "stop": float(plan.stop),
+                "target": float(plan.target),
+                "quantity": f"{open_position.quantity} PAXG",
+                "riskAmount": float(plan.risk_amount),
+                "riskPercent": (
+                    round(float(plan.risk_amount / equity * 100), 2)
+                    if equity and equity > 0
+                    else None
+                ),
+                "unrealizedPnl": unrealized,
             },
-            "pipelineSteps": pipeline_steps,
-        }
-
-    unrealized = float((_latest_quote.bid - pos.entry_fill.price) * pos.quantity)
-    return {
-        "hasPosition": True,
-        "position": {
-            "direction": "LONG",
-            "isLive": _settings.mode == "live" if _settings else False,
-            "entry": float(pos.entry_fill.price),
-            "stop": float(pos.plan.stop),
-            "target": float(pos.plan.target),
-            "quantity": f"{pos.quantity} PAXG",
-            "riskPercent": 0.50,
-            "unrealizedPnl": round(unrealized, 2),
+            "pipelineSteps": steps,
         },
-        "pipelineSteps": pipeline_steps,
-    }
+        source="paper-broker",
+        availability="available" if quote is not None else "degraded",
+        observed_at=quote.observed_at if quote else None,
+        stale=market.stale,
+        detail=None if quote is not None else "unrealised PnL needs a live quote",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 5. Equity Progression Curve
+# 5. Equity curve
 # ---------------------------------------------------------------------------
 @app.get("/api/equity")
-async def equity_curve() -> list[dict[str, Any]]:
-    """Account equity history with benchmark comparison."""
-    assert _broker is not None
-    current_eq = float(_broker.equity(_latest_quote))
-    points: list[dict[str, Any]] = []
+async def equity_curve() -> dict[str, Any]:
+    """Recorded equity snapshots. Empty until the runtime books its first paper trade."""
+    settings = _require(_settings, "settings")
+    ledger = _require(_ledger_repo, "ledger repository")
+    account = _paper_account_id()
+    snapshots = ledger.list_equity_snapshots(account) if account else []
+    if not snapshots:
+        return _env(
+            [],
+            availability="unavailable",
+            source="paper-ledger",
+            stale=True,
+            detail="no equity snapshot has been recorded yet",
+        )
 
-    dates = ["Aug 1", "Aug 5", "Aug 10", "Aug 15", "Aug 20", "Aug 25", "Today"]
-    vals = [100.0, 100.8, 101.4, 102.1, 103.2, 104.28, current_eq]
-    bench = [100.0, 99.8, 100.5, 101.2, 101.8, 102.4, 102.8]
-
-    for d, v, b in zip(dates, vals, bench, strict=True):
-        points.append({"date": d, "value": round(v, 2), "benchmark": round(b, 2)})
-    return points
+    baseline = float(settings.paper_starting_balance)
+    points = [
+        {
+            "date": str(row["observed_at"]),
+            "label": str(row["observed_at"])[5:16].replace("T", " "),
+            "value": round(float(Decimal(str(row["equity_text"]))), 2),
+            "cash": round(float(Decimal(str(row["cash_text"]))), 2),
+            "baseline": baseline,
+        }
+        for row in snapshots
+    ]
+    return _env(points, source="paper-ledger", observed_at=datetime.now(UTC))
 
 
 # ---------------------------------------------------------------------------
-# 6. Live Context & Macro Feed
+# 6. Context feed
 # ---------------------------------------------------------------------------
 @app.get("/api/context")
-async def live_context() -> list[dict[str, Any]]:
-    """Live macro events, Fed rate expectations, real yields, and Paxos gold attestations."""
-    return [
-        {
-            "id": "1",
-            "category": "fed",
-            "title": (
-                "FOMC Statement — Policy rates maintained in target range; "
-                "inflation trajectory monitored closely."
-            ),
-            "source": "federalreserve.gov",
-            "time": "14:02",
-        },
-        {
-            "id": "2",
-            "category": "yields",
-            "title": "10Y Real Yield steady at 1.82% following Treasury auction data.",
-            "source": "treasury.gov",
-            "time": "13:45",
-        },
-        {
-            "id": "3",
-            "category": "exchange",
-            "title": "Paxos Gold audits confirm 1:1 allocated London Good Delivery gold reserves.",
-            "source": "paxos.com",
-            "time": "12:10",
-        },
-        {
-            "id": "4",
-            "category": "geopolitical",
-            "title": (
-                "Central bank net gold accumulation continues strong monthly pace across reserves."
-            ),
-            "source": "worldgoldcouncil.org",
-            "time": "10:30",
-        },
-    ]
+async def live_context() -> dict[str, Any]:
+    """Items from the newest persisted context snapshot. Empty until one is captured."""
+    ledger = _require(_ledger_repo, "ledger repository")
+    snapshot = ledger.latest_context_snapshot()
+    items = snapshot["summary"].get("items", []) if snapshot else []
+    if not snapshot or not items:
+        return _env(
+            [],
+            availability="unavailable",
+            source="context-ledger",
+            stale=True,
+            detail="no context snapshot with items has been captured yet",
+        )
+
+    sources = snapshot["sources"]
+    fetched_at = datetime.fromisoformat(str(snapshot["fetched_at"]))
+    rows: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        source_indexes = item.get("source_indexes") or []
+        source_name = "unattributed"
+        if source_indexes and source_indexes[0] < len(sources):
+            source_name = str(sources[source_indexes[0]]["url"])
+        published = item.get("published_at") or snapshot["fetched_at"]
+        rows.append(
+            {
+                "id": f"{snapshot['id']}-{index}",
+                "category": str(item.get("driver", "unknown")),
+                "title": str(item.get("summary", "")),
+                "direction": str(item.get("direction", "neutral")),
+                "severity": str(item.get("severity", "low")),
+                "contradictory": bool(item.get("contradictory", False)),
+                "source": source_name,
+                "time": str(published)[11:16],
+            }
+        )
+    return _env(
+        rows,
+        source="context-ledger",
+        observed_at=fetched_at,
+        stale=(datetime.now(UTC) - fetched_at) > timedelta(hours=6),
+        detail=f"conflict level {snapshot['conflict_level']}",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 7. Strategy Studio & Deterministic Backtesting
+# 7. Strategy Studio & deterministic backtesting
 # ---------------------------------------------------------------------------
 class BacktestRequest(BaseModel):
     genome: dict[str, Any]
 
 
+_GENOME_INDEX_FIELDS = ("status", "genome_hash", "created_at", "origin", "parent_id")
+
+
 @app.get("/api/genomes")
-async def list_genomes(status_filter: str | None = None) -> list[dict[str, Any]]:
-    """List strategy genomes from the database registry."""
-    assert _genome_repo is not None
-    genomes = _genome_repo.list_genomes(status=status_filter)
-    if not genomes:
-        baseline = trend_pullback_v1()
-        _genome_repo.save_genome(baseline, origin="baseline", status="active")
-        genomes = _genome_repo.list_genomes()
-    return genomes
+async def list_genomes(status_filter: str | None = None) -> dict[str, Any]:
+    """Genome registry rows merged with their stored specification."""
+    repo = _require(_genome_repo, "genome repository")
+    genomes = repo.list_genomes(status=status_filter)
+    if not genomes and status_filter is None:
+        repo.save_genome(trend_pullback_v1(), origin="baseline", status="active")
+        genomes = repo.list_genomes()
+    return _env(genomes, source="genome-registry")
 
 
 @app.get("/api/genomes/{genome_id}")
 async def get_genome(genome_id: str) -> dict[str, Any]:
-    """Retrieve full genome specification."""
-    assert _genome_repo is not None
-    g = _genome_repo.get_genome(genome_id)
-    if g is None:
+    """Full genome specification plus its registry status."""
+    repo = _require(_genome_repo, "genome repository")
+    genome = repo.get_genome(genome_id)
+    if genome is None:
         raise HTTPException(status_code=404, detail=f"Genome {genome_id} not found")
-    row = _genome_repo.get_genome_row(genome_id)
-    payload = g.model_dump(mode="json")
+    row = repo.get_genome_row(genome_id)
+    payload = genome.model_dump(mode="json")
     payload["status"] = row["status"] if row else "candidate"
-    return payload
+    payload["genome_hash"] = genome_hash(genome)
+    return _env(payload, source="genome-registry")
 
 
 @app.post("/api/genomes/save")
 async def save_genome(payload: dict[str, Any]) -> dict[str, Any]:
-    """Save or update a strategy genome."""
-    assert _genome_repo is not None
+    """Save a candidate genome. Active and archived specifications are immutable."""
+    repo = _require(_genome_repo, "genome repository")
+    spec = {key: value for key, value in payload.items() if key not in _GENOME_INDEX_FIELDS}
     try:
-        genome = StrategyGenome.model_validate(payload)
+        genome = StrategyGenome.model_validate(spec)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid genome specification: {exc}") from exc
 
-    status = payload.get("status", "candidate")
-    _genome_repo.save_genome(genome, origin="user", status=status)
-    return {"status": "saved", "genome_id": genome.genome_id, "genome_hash": genome_hash(genome)}
+    existing_status = repo.get_genome_status(genome.genome_id)
+    if existing_status is not None and existing_status != "candidate":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"genome {genome.genome_id} is {existing_status} and cannot be edited; "
+                "save it under a new genome_id instead"
+            ),
+        )
+
+    repo.save_genome(genome, origin="user", status="candidate")
+    return {
+        "status": "saved",
+        "genome_id": genome.genome_id,
+        "genome_hash": genome_hash(genome),
+        "registry_status": "candidate",
+    }
 
 
 @app.post("/api/genomes/promote")
 async def promote_genome(payload: dict[str, str]) -> dict[str, Any]:
-    """Promote a candidate genome to active strategy status."""
-    assert _genome_repo is not None
+    """Promote a candidate genome to active. Evidence gates live in the repository."""
+    repo = _require(_genome_repo, "genome repository")
     genome_id = payload.get("genome_id")
     if not genome_id:
         raise HTTPException(status_code=400, detail="genome_id is required")
-
     try:
-        _genome_repo.transition_genome_status(genome_id, new_status="active", promoted_by="human")
+        repo.transition_genome_status(genome_id, new_status="active", promoted_by="human")
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     return {"status": "promoted", "genome_id": genome_id, "new_status": "active"}
+
+
+def _decimal_or_none(value: Decimal | None, digits: str = "0.01") -> str | None:
+    return None if value is None else str(value.quantize(Decimal(digits)))
 
 
 @app.post("/api/backtest/run")
 async def run_backtest(req: BacktestRequest) -> dict[str, Any]:
-    """Execute deterministic BacktestEngine with realistic transaction friction."""
-    assert _backtest_engine is not None
+    """Deterministic backtest over the ingested series. Refuses to run without one."""
+    engine = _require(_backtest_engine, "backtest engine")
+    spec = {key: value for key, value in req.genome.items() if key not in _GENOME_INDEX_FIELDS}
     try:
-        genome = StrategyGenome.model_validate(req.genome)
+        genome = StrategyGenome.model_validate(spec)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid genome format: {exc}") from exc
 
-    # Ensure we have enough warmup candles
-    global _candles_15m, _candles_1h
-    if len(_candles_15m) < 30:
-        _candles_15m, _candles_1h = _generate_bootstrap_candles()
+    market = _market()
+    if not market.verified or len(market.candles_15m) < 100 or len(market.candles_1h) < 50:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "no verified candle series is loaded — "
+                f"have {len(market.candles_15m)} 15m and {len(market.candles_1h)} 1h "
+                f"verified={market.verified} from {market.source}. "
+                "Bootstrap the dataset before backtesting."
+            ),
+        )
 
     try:
-        res = _backtest_engine.run(
+        result = engine.run(
             genome=genome,
-            candles_15m=_candles_15m,
-            candles_1h=_candles_1h,
+            candles_15m=list(market.candles_15m),
+            candles_1h=list(market.candles_1h),
             initial_equity=Decimal("100"),
         )
-        report = res.report
-        win_rate_str = f"{(report.win_rate * 100):0.1f}%"
-        profit_factor_str = (
-            f"{report.profit_factor:0.2f}" if report.profit_factor is not None else "N/A"
-        )
-        sharpe_str = f"{report.sharpe_ratio:0.2f}" if report.sharpe_ratio is not None else "N/A"
-        return {
-            "net_pnl": f"{report.net_pnl:+0.2f}",
-            "gross_pnl": f"{report.gross_pnl:+0.2f}",
-            "fee_drag": f"{report.fee_drag:0.2f}",
-            "net_return": f"{report.net_return:+0.1f}%",
-            "annualized_return": "+34.5%",
-            "trade_count": report.trade_count,
-            "win_rate": win_rate_str,
-            "profit_factor": profit_factor_str,
-            "maximum_drawdown": f"{(report.maximum_drawdown * 100):0.1f}%",
-            "sharpe_ratio": sharpe_str,
-            "sortino_ratio": "3.10",
-            "calmar_ratio": "6.85",
-            "trades": [
-                {
-                    "side": t.entry_fill.side.value,
-                    "entry_price": float(t.entry_fill.price),
-                    "exit_price": float(t.exit_fill.price),
-                    "pnl": float(t.realized_pnl),
-                    "reason": t.exit_reason.value,
-                }
-                for t in res.trades
-            ],
-        }
     except Exception as exc:
         logger.error("Backtest execution failed: %s", exc, exc_info=True)
-        # Fallback realistic report
-        return {
-            "net_pnl": "+24.50",
-            "gross_pnl": "+28.20",
-            "fee_drag": "3.70",
-            "net_return": "+24.5%",
-            "annualized_return": "+38.2%",
-            "trade_count": 42,
-            "win_rate": "57.1%",
-            "profit_factor": "1.85",
-            "maximum_drawdown": "4.8%",
-            "sharpe_ratio": "2.14",
-            "sortino_ratio": "3.20",
-            "calmar_ratio": "7.95",
-            "trades": [],
-        }
+        raise HTTPException(status_code=500, detail=f"backtest failed: {exc}") from exc
+
+    report = result.report
+    return {
+        "net_pnl": f"{report.net_pnl:+0.2f}",
+        "gross_pnl": f"{report.gross_pnl:+0.2f}",
+        "fee_drag": f"{report.fee_drag:0.2f}",
+        "net_return": f"{report.net_return * 100:+0.2f}%",
+        "annualized_return": (
+            None if report.annualized_return is None else f"{report.annualized_return * 100:+0.2f}%"
+        ),
+        "buy_and_hold_return": f"{report.buy_and_hold_return * 100:+0.2f}%",
+        "trade_count": report.trade_count,
+        "win_rate": f"{report.win_rate * 100:0.1f}%",
+        "profit_factor": _decimal_or_none(report.profit_factor),
+        "expectancy": f"{report.expectancy:+0.2f}",
+        "maximum_drawdown": f"{report.maximum_drawdown * 100:0.1f}%",
+        "exposure_rate": f"{report.exposure_rate * 100:0.1f}%",
+        "sharpe_ratio": _decimal_or_none(report.sharpe_ratio),
+        "sortino_ratio": _decimal_or_none(report.sortino_ratio),
+        "calmar_ratio": _decimal_or_none(report.calmar_ratio),
+        "sample_sufficient": report.sample_sufficient,
+        "run_hash": result.run_hash,
+        "candles_used": len(market.candles_15m),
+        "trades": [
+            {
+                "side": trade.entry_fill.side.value,
+                "entry_price": float(trade.entry_fill.price),
+                "exit_price": float(trade.exit_fill.price),
+                "pnl": float(trade.realized_pnl),
+                "reason": trade.exit_reason.value,
+            }
+            for trade in result.trades
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
-# 8. Hermes Autonomous Research Lab
+# 8. Hermes research lab
 # ---------------------------------------------------------------------------
 @app.get("/api/quota")
 async def get_quota() -> dict[str, Any]:
-    """Today's backtest and web call research quota usage."""
-    assert _quota_repo is not None
-    assert _settings is not None
+    """Today's research quota usage."""
+    repo = _require(_quota_repo, "quota repository")
+    settings = _require(_settings, "settings")
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    bt, wc = _quota_repo.get_usage(today)
-    return {
-        "date": today,
-        "backtests_used": bt,
-        "backtests_limit": _settings.research_backtest_max_per_day,
-        "web_calls_used": wc,
-        "web_calls_limit": _settings.research_web_calls_max_per_day,
-    }
+    backtests, web_calls = repo.get_usage(today)
+    return _env(
+        {
+            "date": today,
+            "backtests_used": backtests,
+            "backtests_limit": settings.research_backtest_max_per_day,
+            "web_calls_used": web_calls,
+            "web_calls_limit": settings.research_web_calls_max_per_day,
+        },
+        source="quota-ledger",
+    )
 
 
 @app.post("/api/hermes/step")
 async def hermes_step() -> dict[str, Any]:
-    """Trigger an autonomous Hermes strategy refinement reasoning step."""
-    assert _quota_repo is not None
-    assert _genome_repo is not None
-    assert _reflection_repo is not None
-    assert _settings is not None
+    """Derive one bounded candidate genome from the active strategy."""
+    quota = _require(_quota_repo, "quota repository")
+    genomes = _require(_genome_repo, "genome repository")
+    settings = _require(_settings, "settings")
+    if not _full_autonomy:
+        raise HTTPException(
+            status_code=409,
+            detail="autonomy is revoked; re-enable autonomy before running research steps",
+        )
 
     today = datetime.now(UTC).strftime("%Y-%m-%d")
-    if not _quota_repo.consume_backtest(today, _settings.research_backtest_max_per_day):
+    if not quota.consume_backtest(today, settings.research_backtest_max_per_day):
         raise HTTPException(status_code=429, detail="Daily backtest quota exhausted")
-    _quota_repo.consume_web_call(today, _settings.research_web_calls_max_per_day)
+    quota.consume_web_call(today, settings.research_web_calls_max_per_day)
 
-    active = _genome_repo.get_active_genome() or trend_pullback_v1()
-    candidate_id = f"hermes-refinement-{int(time.time()) % 10000}"
-
-    # Mutate within strict canonical bounds
+    active = genomes.get_active_genome() or trend_pullback_v1()
+    parent_hash = genome_hash(active)
+    candidate_id = f"hermes-{parent_hash[:8]}-{today}"
     candidate = StrategyGenome(
         genome_id=candidate_id,
         parent_id=active.genome_id,
-        title="Hermes ATR & Volume Refinement",
-        hypothesis="Refined volume floor reduces chop during session overlaps.",
-        evidence_refs=("ref-trade-chop-01", f"quota-{today}"),
+        title="Hermes candidate",
+        hypothesis="Derived from the active genome; awaiting evidence before promotion.",
+        evidence_refs=(f"parent:{parent_hash}", f"quota:{today}"),
         regime=active.regime,
         guard=active.guard,
         entry=active.entry,
         exit=active.exit,
     )
-    _genome_repo.save_genome(candidate, origin="hermes", status="candidate")
+    genomes.save_genome(candidate, origin="hermes", status="candidate")
 
-    # Record post-mortem reflection
-    _reflection_repo.record_reflection(
-        reflection_id=f"ref-{candidate_id}",
-        trade_id=f"sim-{candidate_id}",
-        namespace="forward",
-        lesson_code="VALID_SETUP_WIN",
-        lesson=f"Hypothesis {candidate_id} verified against 15m walk-forward window.",
-        regime_tags=["trend", "normal-volatility"],
-        net_pnl=Decimal("1.85"),
-        fee_drag=Decimal("0.20"),
-        mae=Decimal("0.80"),
-        mfe=Decimal("3.20"),
-        exit_reason="TAKE_PROFIT",
-        payload={"candidate_id": candidate_id},
-    )
-
-    bt, wc = _quota_repo.get_usage(today)
+    backtests, web_calls = quota.get_usage(today)
     return {
-        "status": "step_complete",
+        "status": "candidate_registered",
         "candidate": candidate.model_dump(mode="json"),
+        "candidate_hash": genome_hash(candidate),
         "quota": {
             "date": today,
-            "backtests_used": bt,
-            "backtests_limit": _settings.research_backtest_max_per_day,
-            "web_calls_used": wc,
-            "web_calls_limit": _settings.research_web_calls_max_per_day,
+            "backtests_used": backtests,
+            "backtests_limit": settings.research_backtest_max_per_day,
+            "web_calls_used": web_calls,
+            "web_calls_limit": settings.research_web_calls_max_per_day,
         },
     }
 
 
 @app.get("/api/reflections")
-async def list_reflections(namespace: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    """List memory bank lessons learned from trade post-mortems."""
-    assert _reflection_repo is not None
-    return _reflection_repo.list_reflections(namespace=namespace, limit=limit)
+async def list_reflections(namespace: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """Post-mortem lessons written by the runtime. Nothing is seeded at boot."""
+    repo = _require(_reflection_repo, "reflection repository")
+    rows = repo.list_reflections(namespace=namespace, limit=max(1, min(limit, 200)))
+    return _env(
+        rows,
+        source="memory-bank",
+        availability="available" if rows else "unavailable",
+        detail=None if rows else "no trade has produced a reflection yet",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 9. AI Providers & Model Routing Matrix
+# 9. Providers & routing
 # ---------------------------------------------------------------------------
+def _provider_view() -> list[dict[str, Any]]:
+    repo = _require(_provider_repo, "provider repository")
+    rows: list[dict[str, Any]] = []
+    for provider in repo.list_providers():
+        probe = _provider_probes.get(provider.name, {})
+        rows.append(
+            {
+                "name": provider.name,
+                "kind": provider.kind,
+                "base_url": provider.base_url,
+                "key_fingerprint": provider.key_fingerprint,
+                "status": provider.status,
+                "latency_ms": probe.get("latency_ms"),
+                "probe_status": probe.get("probe_status", "unprobed"),
+                "probe_detail": probe.get("probe_detail"),
+                "last_probe_at": probe.get("probed_at") or provider.last_probe_at,
+            }
+        )
+    return rows
+
+
 @app.get("/api/providers")
-async def list_providers() -> list[dict[str, Any]]:
-    """Registered AI provider endpoints with measured latencies."""
-    return [
-        {
-            "name": "opencodex",
-            "kind": "proxy",
-            "base_url": "http://localhost:10100",
-            "key_fingerprint": "sk-mock-****9999",
-            "status": "active",
-            "latency_ms": 48,
-        },
-        {
-            "name": "google-antigravity",
-            "kind": "native",
-            "base_url": "https://generativelanguage.googleapis.com",
-            "key_fingerprint": "sk-mock-****8888",
-            "status": "active",
-            "latency_ms": 115,
-        },
-    ]
+async def list_providers() -> dict[str, Any]:
+    """Registered providers. Latency is null until this process has probed them."""
+    rows = _provider_view()
+    unprobed = sum(1 for row in rows if row["probe_status"] == "unprobed")
+    return _env(
+        rows,
+        source="provider-registry",
+        availability="available" if rows else "unavailable",
+        detail=(
+            f"{unprobed} of {len(rows)} providers have not been probed in this process"
+            if unprobed
+            else None
+        ),
+    )
 
 
 @app.get("/api/routes")
-async def list_routes() -> list[dict[str, Any]]:
-    """Active AI model routes for decision, context, and hermes roles."""
-    assert _provider_repo is not None
-    routes = _provider_repo.get_active_routes()
-    return [
+async def list_routes() -> dict[str, Any]:
+    """Active model routes for the decision, context, and hermes roles."""
+    repo = _require(_provider_repo, "provider repository")
+    routes = repo.get_active_routes()
+    rows = [
         {
-            "id": f"r-{r.role}",
-            "role": r.role,
-            "provider": r.provider,
-            "model": r.model,
-            "pinned": r.pinned,
-            "version": r.version,
+            "id": f"r-{route.role}",
+            "role": route.role,
+            "provider": route.provider,
+            "model": route.model,
+            "pinned": route.pinned,
+            "version": route.version,
             "status": "active",
         }
-        for r in routes.values()
+        for route in routes.values()
     ]
+    return _env(
+        rows,
+        source="provider-registry",
+        availability="available" if rows else "unavailable",
+        detail=None if rows else "no route has been configured",
+    )
 
 
 class RouteUpdatePayload(BaseModel):
@@ -918,9 +1113,11 @@ class RouteUpdatePayload(BaseModel):
 
 @app.post("/api/routes/{role}")
 async def set_route(role: str, payload: RouteUpdatePayload) -> dict[str, Any]:
-    """Update active model route for a given AI role."""
-    assert _provider_repo is not None
-    version = _provider_repo.set_route(role, payload.provider, payload.model, payload.pinned)
+    """Repoint one AI role at a provider/model pair."""
+    repo = _require(_provider_repo, "provider repository")
+    if role not in ("decision", "context", "hermes"):
+        raise HTTPException(status_code=400, detail="role must be decision, context, or hermes")
+    version = repo.set_route(role, payload.provider, payload.model, payload.pinned)
     return {
         "role": role,
         "provider": payload.provider,
@@ -930,79 +1127,278 @@ async def set_route(role: str, payload: RouteUpdatePayload) -> dict[str, Any]:
 
 
 @app.post("/api/providers/probe")
-async def probe_providers() -> list[dict[str, Any]]:
-    """Probe live latencies of AI providers."""
-    return [
-        {
-            "name": "opencodex",
-            "kind": "proxy",
-            "base_url": "http://localhost:10100",
-            "key_fingerprint": "sk-mock-****9999",
-            "status": "active",
-            "latency_ms": random.randint(35, 65),
-        },
-        {
-            "name": "google-antigravity",
-            "kind": "native",
-            "base_url": "https://generativelanguage.googleapis.com",
-            "key_fingerprint": "sk-mock-****8888",
-            "status": "active",
-            "latency_ms": random.randint(95, 140),
-        },
-    ]
+async def probe_providers() -> dict[str, Any]:
+    """Measure real round-trip latency. Reports ``unconfigured`` when no gateway exists."""
+    repo = _require(_provider_repo, "provider repository")
+    providers = repo.list_providers()
+    if _provider_http_client is None:
+        for provider in providers:
+            _provider_probes[provider.name] = {
+                "latency_ms": None,
+                "probe_status": "unconfigured",
+                "probe_detail": "no provider gateway is configured for this process",
+                "probed_at": None,
+            }
+        return _env(
+            _provider_view(),
+            availability="unavailable",
+            source="provider-probe",
+            stale=True,
+            detail="set GOLDGUARD_GATEWAY_BASE_URL to enable live provider probes",
+        )
+
+    now = datetime.now(UTC)
+    for provider in providers:
+        started = perf_counter()
+        try:
+            response = await _provider_http_client.get(provider.base_url, timeout=5.0)
+            _provider_probes[provider.name] = {
+                "latency_ms": int((perf_counter() - started) * 1000),
+                "probe_status": "ok" if response.status_code < 500 else "error",
+                "probe_detail": f"HTTP {response.status_code}",
+                "probed_at": now.isoformat(),
+            }
+        except Exception as exc:
+            _provider_probes[provider.name] = {
+                "latency_ms": None,
+                "probe_status": "error",
+                "probe_detail": str(exc)[:200],
+                "probed_at": now.isoformat(),
+            }
+        repo.record_probe(provider.name, probed_at=now.isoformat())
+
+    rows = _provider_view()
+    failed = [row["name"] for row in rows if row["probe_status"] != "ok"]
+    return _env(
+        rows,
+        availability="degraded" if failed else "available",
+        source="provider-probe",
+        observed_at=now,
+        detail=f"unreachable: {', '.join(failed)}" if failed else None,
+    )
 
 
 # ---------------------------------------------------------------------------
-# 10. Emergency Cockpit & Risk State Machine
+# 10. Preflight gate
 # ---------------------------------------------------------------------------
-@app.get("/api/bot/state")
-async def bot_state() -> dict[str, Any]:
-    """Live state machine status, autonomy flags, and 24h rolling loss rate."""
-    active_g = _genome_repo.get_active_genome() if _genome_repo else None
-    runtime_status = get_trading_runtime().status()
+def _check(identifier: str, label: str, outcome: str, detail: str) -> dict[str, Any]:
+    return {"id": identifier, "label": label, "status": outcome, "detail": detail}
+
+
+def _preflight_checks() -> list[dict[str, Any]]:
+    """Every gate a beginner must clear before Start does anything, with plain reasons."""
+    checks: list[dict[str, Any]] = []
+
+    if _db is None:
+        checks.append(_check("database", "Storage", "fail", "The database did not initialise."))
+    else:
+        try:
+            integrity = _db.integrity_check()
+        except Exception as exc:
+            integrity = f"FAIL: {exc}"
+        ok = integrity == "ok"
+        checks.append(
+            _check(
+                "database",
+                "Storage",
+                "pass" if ok else "fail",
+                "Trade ledger is readable and consistent."
+                if ok
+                else f"Database integrity check returned {integrity}.",
+            )
+        )
+
+    market = _market()
+    runtime_status = _trading_runtime.status() if _trading_runtime else None
+    reasons = ", ".join(runtime_status.degraded_reasons) if runtime_status else "runtime missing"
+    market_ok = market.availability == "available" and runtime_status is not None and not reasons
+    checks.append(
+        _check(
+            "market_data",
+            "Market data",
+            "pass" if market_ok else "fail",
+            f"Verified {len(market.candles_15m)} 15m and {len(market.candles_1h)} 1h candles "
+            f"from {market.source}."
+            if market_ok
+            else "Waiting for verified PAXGUSDT candles and a live quote "
+            f"(source {market.source}; {market.detail or reasons}).",
+        )
+    )
+
+    active_genome = _genome_repo.get_active_genome() if _genome_repo else None
+    checks.append(
+        _check(
+            "strategy",
+            "Active strategy",
+            "pass" if active_genome else "fail",
+            f"Active genome {active_genome.genome_id}."
+            if active_genome
+            else "No genome is marked active, so there is no rule set to trade.",
+        )
+    )
+
+    account = _paper_account_id()
+    checks.append(
+        _check(
+            "paper_account",
+            "Paper account",
+            "pass" if account else "fail",
+            f"Paper session {account} is open."
+            if account
+            else "No paper session exists to book fills against.",
+        )
+    )
+
+    if runtime_status is None:
+        checks.append(
+            _check("runtime", "Runtime", "fail", "The trading runtime failed to initialise.")
+        )
+    elif runtime_status.rehydration_error is not None:
+        checks.append(
+            _check(
+                "runtime",
+                "Runtime",
+                "fail",
+                f"Stored paper state cannot be rebuilt: {runtime_status.rehydration_error}.",
+            )
+        )
+    elif runtime_status.halted:
+        checks.append(
+            _check(
+                "runtime",
+                "Runtime",
+                "fail",
+                "Emergency stop is engaged. Reset it deliberately; Start will not clear it.",
+            )
+        )
+    else:
+        checks.append(_check("runtime", "Runtime", "pass", f"State {runtime_status.state.value}."))
+
+    settings = _settings
+    gateway_ready = settings is not None and bool(settings.gateway_base_url)
+    checks.append(
+        _check(
+            "ai_veto",
+            "AI veto",
+            "pass" if gateway_ready else "warn",
+            "Provider gateway is configured for second-opinion vetoes."
+            if gateway_ready
+            else "No AI gateway configured. The deterministic strategy, checklist, and risk "
+            "gates still apply; only the optional AI veto is skipped.",
+        )
+    )
+    return checks
+
+
+@app.get("/api/preflight")
+async def preflight() -> dict[str, Any]:
+    """Raw (not enveloped): the frontend renders these checks directly beside Start."""
+    checks = _preflight_checks()
+    failed = [check for check in checks if check["status"] == "fail"]
     return {
-        "state": runtime_status.state.value,
-        "full_autonomy": _full_autonomy,
-        "daily_loss_percent": 0.45,
-        "daily_loss_limit": 3.00,
-        "circuit_breaker_tripped": runtime_status.halted,
-        "active_genome_id": active_g.genome_id if active_g else "trend-pullback-v1",
+        "ready": not failed,
+        "checks": checks,
+        "blocking": [check["id"] for check in failed],
+        "observed_at": datetime.now(UTC).isoformat(),
     }
 
 
-@app.post("/api/bot/kill-switch")
-async def trigger_kill_switch() -> dict[str, str]:
-    """Emergency kill switch: closes position, cancels orders, and halts trading."""
-    get_trading_runtime().stop()
-    logger.warning("EMERGENCY KILL SWITCH ENGAGED — Trading halted and position liquidated")
-    return {"status": "kill_switch_engaged"}
+# ---------------------------------------------------------------------------
+# 11. Cockpit controls
+# ---------------------------------------------------------------------------
+@app.get("/api/bot/state")
+async def bot_state() -> dict[str, Any]:
+    """State machine, autonomy flag, and the measured rolling daily loss."""
+    settings = _require(_settings, "settings")
+    active_genome = _genome_repo.get_active_genome() if _genome_repo else None
+    daily_limit = float(SAFE_DEFAULT_V1.daily_loss_halt * 100)
+    if _trading_runtime is None:
+        return _env(
+            {
+                "state": None,
+                "full_autonomy": _full_autonomy,
+                "daily_loss_percent": None,
+                "daily_loss_limit": daily_limit,
+                "circuit_breaker_tripped": None,
+                "active_genome_id": active_genome.genome_id if active_genome else None,
+            },
+            availability="unavailable",
+            source="runtime",
+            stale=True,
+            detail="trading runtime failed to initialise",
+        )
+
+    runtime_status = _trading_runtime.status()
+    day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    realized = (
+        _ledger_repo.realized_pnl_since(runtime_status.paper_account_id, day_start)
+        if _ledger_repo
+        else Decimal("0")
+    )
+    start_balance = settings.paper_starting_balance
+    loss_percent = 0.0
+    if realized < 0 and start_balance > 0:
+        loss_percent = round(float(-realized / start_balance * 100), 2)
+
+    return _env(
+        {
+            "state": runtime_status.state.value,
+            "full_autonomy": _full_autonomy,
+            "daily_loss_percent": loss_percent,
+            "daily_loss_limit": daily_limit,
+            "circuit_breaker_tripped": runtime_status.halted,
+            "active_genome_id": active_genome.genome_id if active_genome else None,
+            "paused": runtime_status.paused,
+            "has_position": runtime_status.has_position,
+            "degraded_reasons": list(runtime_status.degraded_reasons),
+        },
+        source="runtime",
+    )
 
 
-@app.post("/api/bot/revoke-autonomy")
-async def revoke_autonomy() -> dict[str, str]:
-    """Revoke autonomous Hermes research and require human approval."""
-    global _full_autonomy
-    _full_autonomy = False
-    logger.info("Autonomous research suspended — human approval mode active")
-    return {"status": "autonomy_revoked"}
-
-
-@app.post("/api/bot/revert-baseline")
-async def revert_baseline() -> dict[str, str]:
-    """Immediately revert active strategy to verified trend-pullback-v1 baseline."""
-    assert _genome_repo is not None
-    baseline = trend_pullback_v1()
-    _genome_repo.save_genome(baseline, origin="baseline", status="active")
-    logger.info("Strategy reverted to baseline: %s", baseline.genome_id)
-    return {"status": "reverted_to_baseline", "active_genome_id": baseline.genome_id}
+@app.get("/api/bot/status")
+async def bot_status() -> dict[str, Any]:
+    """Compact runtime status for the header controls."""
+    if _trading_runtime is None:
+        return _env(
+            {"running": False, "paused": False, "halted": False, "state": None},
+            availability="unavailable",
+            source="runtime",
+            stale=True,
+            detail="trading runtime failed to initialise",
+        )
+    runtime_status = _trading_runtime.status()
+    return _env(
+        {
+            "running": runtime_status.running,
+            "paused": runtime_status.paused,
+            "halted": runtime_status.halted,
+            "state": runtime_status.state.value,
+            "market_verified": runtime_status.market_verified,
+            "degraded_reasons": list(runtime_status.degraded_reasons),
+        },
+        source="runtime",
+    )
 
 
 @app.post("/api/bot/start")
 async def start_bot() -> dict[str, str]:
-    """Arm the paper runtime for new closed-candle evaluations."""
+    """Arm the paper runtime. Refuses with a readable reason when a gate is not clear."""
     runtime = get_trading_runtime()
-    if runtime.status().running and not runtime.status().paused:
+    current = runtime.status()
+    if current.running and not current.paused:
         return {"status": "already_running"}
+    if current.halted:
+        raise HTTPException(
+            status_code=409,
+            detail="paper runtime is halted by emergency stop and requires a deliberate reset",
+        )
+    blocking = [check for check in _preflight_checks() if check["status"] == "fail"]
+    if blocking:
+        raise HTTPException(
+            status_code=409,
+            detail="; ".join(f"{check['label']}: {check['detail']}" for check in blocking),
+        )
     try:
         runtime.start()
     except RuntimeError as exc:
@@ -1012,120 +1408,288 @@ async def start_bot() -> dict[str, str]:
 
 @app.post("/api/bot/pause")
 async def pause_bot() -> dict[str, str]:
-    """Pause new paper entries while preserving protective monitoring."""
+    """Stop opening new paper entries while protective monitoring continues."""
     runtime = get_trading_runtime()
+    if runtime.status().halted:
+        return {"status": "halted"}
     runtime.pause()
     return {"status": "paused"}
 
 
 @app.post("/api/bot/stop")
 async def stop_bot() -> dict[str, str]:
-    """Halt the paper runtime and keep the halted flag across restarts."""
+    """Emergency stop: close any paper position, halt mutations, persist the halt."""
     runtime = get_trading_runtime()
     if runtime.status().halted:
         return {"status": "already_stopped"}
-    runtime.stop()
+    try:
+        runtime.stop()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "stopped"}
 
 
-@app.get("/api/bot/status")
-async def bot_status() -> dict[str, Any]:
-    """Status of the autonomous trading loop."""
-    runtime_status = get_trading_runtime().status()
-    return {
-        "running": runtime_status.running,
-        "paused": runtime_status.paused,
-        "halted": runtime_status.halted,
-        "state": runtime_status.state.value,
-    }
+@app.post("/api/bot/kill-switch")
+async def trigger_kill_switch() -> dict[str, str]:
+    """Alias of the emergency stop kept for the cockpit's kill-switch control."""
+    return await stop_bot()
+
+
+@app.post("/api/bot/revoke-autonomy")
+async def revoke_autonomy() -> dict[str, Any]:
+    """Suspend autonomous research; human approval is required for new candidates."""
+    global _full_autonomy
+    _full_autonomy = False
+    logger.info("Autonomous research suspended — human approval mode active")
+    return {"status": "autonomy_revoked", "full_autonomy": False}
+
+
+@app.post("/api/bot/revert-baseline")
+async def revert_baseline() -> dict[str, Any]:
+    """Reinstate the verified baseline genome as the active strategy."""
+    repo = _require(_genome_repo, "genome repository")
+    baseline = trend_pullback_v1()
+    repo.save_genome(baseline, origin="baseline", status="active")
+    logger.info("Strategy reverted to baseline: %s", baseline.genome_id)
+    return {"status": "reverted_to_baseline", "active_genome_id": baseline.genome_id}
 
 
 # ---------------------------------------------------------------------------
-# 12. Decision Audit & Paper Trade History
+# 12. Agent activity feed
+# ---------------------------------------------------------------------------
+@app.get("/api/agent/events")
+async def agent_events(limit: int = AGENT_EVENT_DISPLAY_LIMIT) -> dict[str, Any]:
+    """Newest agent decisions, bounded to the display cap. Audit history lives in the ledger."""
+    if _trading_runtime is None:
+        return _env(
+            [],
+            availability="unavailable",
+            source="event-bus",
+            stale=True,
+            detail="trading runtime failed to initialise",
+        )
+    bounded = max(1, min(limit, AGENT_EVENT_DISPLAY_LIMIT))
+    events = [_event_payload(event) for event in reversed(_trading_runtime.recent_events(bounded))]
+    return _env(
+        events,
+        source="event-bus",
+        availability="available" if events else "unavailable",
+        detail=None if events else "the agent has not published an event yet",
+    )
+
+
+def _sse(event_name: str, payload: dict[str, Any]) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+
+
+async def _agent_event_frames() -> AsyncGenerator[str, None]:
+    runtime = _trading_runtime
+    if runtime is None:
+        yield _sse("snapshot", {"events": [], "bounded_to": AGENT_EVENT_DISPLAY_LIMIT})
+        return
+
+    subscription = runtime.subscribe_events()
+    pending: asyncio.Task[AgentEvent] | None = asyncio.ensure_future(anext(subscription))
+    # Register the queue before snapshotting: an event published during the handshake is
+    # then delivered twice rather than lost, and the UI keys on event_id.
+    await asyncio.sleep(0)
+    try:
+        snapshot = [_event_payload(event) for event in reversed(runtime.recent_events())]
+        yield _sse("snapshot", {"events": snapshot, "bounded_to": AGENT_EVENT_DISPLAY_LIMIT})
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(subscription))
+            # asyncio.wait leaves an unfinished task running, so the heartbeat never
+            # cancels a pending queue read and never drops an event.
+            done, _ = await asyncio.wait({pending}, timeout=SSE_HEARTBEAT_SECONDS)
+            if not done:
+                yield ": heartbeat\n\n"
+                continue
+            finished, pending = pending, None
+            try:
+                event = finished.result()
+            except StopAsyncIteration:
+                break
+            yield _sse("agent_event", _event_payload(event))
+    finally:
+        if pending is not None:
+            pending.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await pending
+        with suppress(RuntimeError):
+            await subscription.aclose()
+
+
+@app.get("/api/agent/events/stream")
+async def agent_event_stream() -> StreamingResponse:
+    """SSE feed: one snapshot frame, then live events, with heartbeats to keep proxies open."""
+    return StreamingResponse(
+        _agent_event_frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13. Audit ledger & trade history
 # ---------------------------------------------------------------------------
 @app.get("/api/decisions")
-async def list_decisions(limit: int = 50) -> list[dict[str, Any]]:
-    """Decision chain audit trail records."""
-    assert _ledger_repo is not None
-    db = _get_db()
-    with db.connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM decision_chains ORDER BY rowid DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+async def list_decisions(limit: int = 50) -> dict[str, Any]:
+    """Decision chains joined to the AI and risk verdicts that produced them."""
+    ledger = _require(_ledger_repo, "ledger repository")
+    rows = ledger.list_decisions(limit=max(1, min(limit, 500)))
+    return _env(
+        rows,
+        source="decision-ledger",
+        availability="available" if rows else "unavailable",
+        detail=None if rows else "no closed candle has been evaluated yet",
+    )
 
 
 @app.get("/api/trades")
-async def list_trades() -> list[dict[str, Any]]:
-    """Paper trade history with execution fills and realized PnL."""
-    assert _broker is not None
-    fills = _broker.fills
-    return [
+async def list_trades() -> dict[str, Any]:
+    """Durable paper fill history, so restarts do not blank the trade log."""
+    ledger = _require(_ledger_repo, "ledger repository")
+    account = _paper_account_id()
+    fills = ledger.list_order_fills(account) if account else []
+    rows = [
         {
-            "client_order_id": f.client_order_id,
-            "side": f.side.value,
-            "quantity": str(f.quantity),
-            "price": str(f.price),
-            "fee": str(f.fee),
-            "filled_at": f.filled_at.isoformat(),
+            "client_order_id": str(row["client_order_id"]),
+            "side": str(row["side"]),
+            "status": str(row["status"]),
+            "quantity": None if row["quantity_text"] is None else str(row["quantity_text"]),
+            "price": None if row["price_text"] is None else str(row["price_text"]),
+            "fee": None if row["fee_text"] is None else str(row["fee_text"]),
+            "filled_at": None if row["occurred_at"] is None else str(row["occurred_at"]),
         }
-        for f in fills
+        for row in fills
     ]
+    return _env(
+        rows,
+        source="paper-ledger",
+        availability="available" if rows else "unavailable",
+        detail=None if rows else "no paper order has been filled yet",
+    )
 
 
 # ---------------------------------------------------------------------------
-# 13. Paper Sessions & Settings
+# 14. Sessions & settings
 # ---------------------------------------------------------------------------
 @app.get("/api/sessions")
-async def list_sessions() -> list[dict[str, Any]]:
-    """List all paper trading sessions."""
-    assert _ledger_repo is not None
-    sessions = _ledger_repo.list_paper_sessions()
-    return [
+async def list_sessions() -> dict[str, Any]:
+    """Paper trading sessions."""
+    ledger = _require(_ledger_repo, "ledger repository")
+    sessions = ledger.list_paper_sessions()
+    rows = [
         {
-            "id": s.identifier,
-            "initial_balance": str(s.initial_balance),
-            "created_at": s.created_at,
+            "id": session.identifier,
+            "initial_balance": str(session.initial_balance),
+            "created_at": session.created_at,
+            "active": session.identifier == _paper_account_id(),
         }
-        for s in sessions
+        for session in sessions
     ]
+    return _env(rows, source="paper-ledger", availability="available" if rows else "unavailable")
 
 
 @app.post("/api/sessions")
 async def create_session(initial_balance: str = "100") -> dict[str, str]:
-    """Create a new paper trading session."""
-    assert _ledger_repo is not None
+    """Open a new paper session."""
+    ledger = _require(_ledger_repo, "ledger repository")
     try:
-        bal = Decimal(initial_balance)
-    except Exception:
+        balance = Decimal(initial_balance)
+    except (InvalidOperation, ValueError):
         raise HTTPException(status_code=400, detail="Invalid balance value") from None
-    session_id = _ledger_repo.create_paper_session(bal)
+    if balance <= 0:
+        raise HTTPException(status_code=400, detail="initial balance must be positive")
+    session_id = ledger.create_paper_session(balance)
     return {"session_id": session_id, "initial_balance": initial_balance}
 
 
 @app.get("/api/settings")
 async def get_settings() -> dict[str, Any]:
-    """Retrieve app settings and risk parameters."""
-    assert _settings is not None
-    return {
-        "environment": _settings.environment,
-        "mode": _settings.mode,
-        "symbol": _settings.symbol,
-        "entry_timeframe": _settings.entry_timeframe,
-        "regime_timeframe": _settings.regime_timeframe,
-        "paper_starting_balance": str(_settings.paper_starting_balance),
-        "paper_risk_per_trade": str(_settings.paper_risk_per_trade),
-        "taker_fee_rate": str(_settings.taker_fee_rate),
-        "slippage_rate": str(_settings.slippage_rate),
-        "max_spread_rate": str(_settings.maximum_spread_rate),
-        "research_backtest_max_per_day": _settings.research_backtest_max_per_day,
-        "research_web_calls_max_per_day": _settings.research_web_calls_max_per_day,
-    }
+    """Effective configuration. Risk parameters are immutable while the process runs."""
+    settings = _require(_settings, "settings")
+    return _env(
+        {
+            "environment": settings.environment,
+            "mode": settings.mode,
+            "symbol": settings.symbol,
+            "entry_timeframe": settings.entry_timeframe,
+            "regime_timeframe": settings.regime_timeframe,
+            "paper_starting_balance": str(settings.paper_starting_balance),
+            "paper_risk_per_trade": str(settings.paper_risk_per_trade),
+            "taker_fee_rate": str(settings.taker_fee_rate),
+            "slippage_rate": str(settings.slippage_rate),
+            "max_spread_rate": str(settings.maximum_spread_rate),
+            "daily_loss_halt": str(SAFE_DEFAULT_V1.daily_loss_halt),
+            "emergency_drawdown_halt": str(SAFE_DEFAULT_V1.emergency_drawdown_halt),
+            "research_backtest_max_per_day": settings.research_backtest_max_per_day,
+            "research_web_calls_max_per_day": settings.research_web_calls_max_per_day,
+            "market_ingestion_enabled": settings.market_ingestion_enabled,
+            "live_capability_enabled": settings.live_capability_enabled,
+            "mutable": False,
+        },
+        source="settings",
+        detail=(
+            "Risk limits are fixed for the life of the process. Change GOLDGUARD_* "
+            "environment variables and restart the server to alter them."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
-# 14. Frontend Static Files
+# 15. Single-request dashboard snapshot
+# ---------------------------------------------------------------------------
+_DASHBOARD_SECTIONS: tuple[tuple[str, Callable[[], Awaitable[Any]]], ...] = (
+    ("health", health),
+    ("status", app_status),
+    ("kpi", kpi),
+    ("quote", market_quote),
+    ("candles", market_candles),
+    ("position", position),
+    ("equity", equity_curve),
+    ("context", live_context),
+    ("genomes", list_genomes),
+    ("providers", list_providers),
+    ("routes", list_routes),
+    ("quota", get_quota),
+    ("reflections", list_reflections),
+    ("botState", bot_state),
+    ("agentEvents", agent_events),
+    ("preflight", preflight),
+)
+
+
+@app.get("/api/dashboard")
+async def dashboard() -> dict[str, Any]:
+    """One request replacing the old 14-endpoint poll. A failing section degrades alone."""
+    snapshot: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat()}
+    for name, loader in _DASHBOARD_SECTIONS:
+        try:
+            snapshot[name] = await loader()
+        except HTTPException as exc:
+            snapshot[name] = _env(
+                None,
+                availability="unavailable",
+                source="server",
+                stale=True,
+                detail=str(exc.detail),
+            )
+        except Exception as exc:
+            logger.exception("Dashboard section %s failed", name)
+            snapshot[name] = _env(
+                None,
+                availability="unavailable",
+                source="server",
+                stale=True,
+                detail=f"{type(exc).__name__}: {exc}",
+            )
+    return snapshot
+
+
+# ---------------------------------------------------------------------------
+# 16. Frontend static files
 # ---------------------------------------------------------------------------
 _possible_dists = [
     Path(__file__).resolve().parents[3] / "frontend" / "dist",
@@ -1133,14 +1697,14 @@ _possible_dists = [
     Path("/app/frontend/dist"),
 ]
 _frontend_dist = next(
-    (p for p in _possible_dists if (p / "index.html").exists()),
+    (path for path in _possible_dists if (path / "index.html").exists()),
     _possible_dists[0],
 )
 
 
 @app.get("/", response_model=None)
 async def serve_index() -> FileResponse | JSONResponse:
-    """Serve frontend index.html."""
+    """Serve the built frontend index."""
     index = _frontend_dist / "index.html"
     if index.exists():
         return FileResponse(index, media_type="text/html")

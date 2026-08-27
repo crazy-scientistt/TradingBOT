@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import hashlib
+from bisect import bisect_right
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +24,12 @@ from goldguard.market.binance import SymbolFilters
 from goldguard.risk.engine import RiskContext, RiskEngine
 from goldguard.strategy.engine import StrategyFeatures
 from goldguard.strategy.genome import StrategyGenome
+from goldguard.strategy.indicators import (
+    atr_wilder,
+    ema_series,
+    median_volume_ratio,
+    rsi_wilder,
+)
 from goldguard.strategy.runtime import GenomeRuntime
 
 
@@ -41,6 +50,74 @@ class BacktestResult:
     mae: Decimal
     mfe: Decimal
     ulcer_index: Decimal
+
+
+@dataclass(frozen=True)
+class _IndicatorSeries:
+    """Every indicator the strategy reads, computed once per series and indexed by bar."""
+
+    ema20_15m: list[float]
+    ema50_15m: list[float]
+    rsi14: list[float | None]
+    atr14: list[float | None]
+    volumes: list[float]
+    below_ema50: list[int]
+    contiguous: list[bool]
+    closes_1h: list[float]
+    ema50_1h: list[float]
+    ema200_1h: list[float]
+    # For each 15m bar, the index of the newest 1h bar that had already closed, or None.
+    hour_index: list[int | None]
+
+    @classmethod
+    def build(
+        cls,
+        candles_15m: Sequence[Candle],
+        candles_1h: Sequence[Candle] | None,
+    ) -> _IndicatorSeries:
+        closes = [float(candle.close) for candle in candles_15m]
+        highs = [float(candle.high) for candle in candles_15m]
+        lows = [float(candle.low) for candle in candles_15m]
+        volumes = [float(candle.volume) for candle in candles_15m]
+        ema50_15m = ema_series(closes, 50)
+
+        below: list[int] = []
+        streak = 0
+        for close, average in zip(closes, ema50_15m, strict=True):
+            streak = streak + 1 if close < average else 0
+            below.append(streak)
+
+        gap = timedelta(minutes=15)
+        contiguous: list[bool] = []
+        run = 1
+        for position, candle in enumerate(candles_15m):
+            if position and candle.close_time - candles_15m[position - 1].close_time == gap:
+                run += 1
+            elif position:
+                run = 1
+            contiguous.append(run >= min(position + 1, 50))
+
+        hourly = list(candles_1h or ())
+        closes_1h = [float(candle.close) for candle in hourly]
+        hour_closes = [candle.close_time for candle in hourly]
+        hour_index: list[int | None] = []
+        for candle in candles_15m:
+            position = bisect_right(hour_closes, candle.close_time) - 1
+            hour_index.append(position if position >= 0 else None)
+
+        return cls(
+            ema20_15m=ema_series(closes, 20),
+            ema50_15m=ema50_15m,
+            rsi14=rsi_wilder(closes, 14),
+            atr14=atr_wilder(highs, lows, closes, 14),
+            volumes=volumes,
+            below_ema50=below,
+            contiguous=contiguous,
+            closes_1h=closes_1h,
+            ema50_1h=ema_series(closes_1h, 50),
+            ema200_1h=ema_series(closes_1h, 200),
+            hour_index=hour_index,
+        )
 
 
 class BacktestEngine:
@@ -80,11 +157,15 @@ class BacktestEngine:
         max_adverse_excursion = Decimal("0")
         max_favorable_excursion = Decimal("0")
 
+        # Indicators are computed once over the whole series instead of per bar: the
+        # per-bar recomputation this replaces was O(n^2) and was seeded from a truncated
+        # tail, so warm-up values disagreed with the live runtime's.
+        series = _IndicatorSeries.build(candles, candles_1h)
+
         for idx in range(25, len(candles)):
             curr_candle = candles[idx]
-            sub_15m = candles[: idx + 1]
 
-            features = self._extract_features(sub_15m, candles_1h)
+            features = self._extract_features(candles, idx, series)
 
             if position_plan is not None and position_entry_fill is not None:
                 low_diff = position_plan.entry - curr_candle.low
@@ -280,51 +361,59 @@ class BacktestEngine:
     def _extract_features(
         self,
         candles_15m: tuple[Candle, ...],
-        candles_1h: Sequence[Candle] | None = None,
+        index: int,
+        series: _IndicatorSeries,
     ) -> StrategyFeatures:
-        latest = candles_15m[-1]
-        prev = candles_15m[-2] if len(candles_15m) > 1 else latest
+        """Features as of the close of ``candles_15m[index]``, mirroring the live runtime."""
+        latest = candles_15m[index]
+        prev = candles_15m[index - 1] if index > 0 else latest
+        latest_close = float(latest.close)
 
-        closes_15m = [float(c.close) for c in candles_15m]
-        ema20_15m = sum(closes_15m[-20:]) / min(len(closes_15m), 20)
-        ema50_15m = sum(closes_15m[-50:]) / min(len(closes_15m), 50)
+        atr14 = series.atr14[index]
+        if atr14 is None:
+            atr14 = float(latest.high - latest.low)
+        rsi14 = series.rsi14[index]
+        previous_rsi14 = series.rsi14[index - 1] if index > 0 else None
 
-        if candles_1h and len(candles_1h) >= 50:
-            closes_1h = [float(c.close) for c in candles_1h]
-            latest_1h = closes_1h[-1]
-            ema50_1h = sum(closes_1h[-50:]) / 50
-            ema200_1h = sum(closes_1h[-200:]) / min(len(closes_1h), 200)
-            if len(closes_1h) >= 55:
-                ema50_slope = (ema50_1h - sum(closes_1h[-55:-5]) / 50) / 50
-            else:
-                ema50_slope = 0.001
+        hour = series.hour_index[index]
+        if hour is None:
+            # No 1h bar has closed yet: report the 15m close for both averages so the
+            # regime filter sees a flat trend and holds instead of inventing one.
+            latest_close_1h = latest_close
+            ema50_1h = latest_close
+            ema200_1h = latest_close
+            ema50_slope_1h = 0.0
         else:
-            latest_1h = float(latest.close)
-            ema50_1h = latest_1h * 0.98
-            ema200_1h = latest_1h * 0.95
-            ema50_slope = 0.002
-
-        atr = float(max(c.high - c.low for c in candles_15m[-14:]))
-        atr_rate = atr / float(latest.close) if float(latest.close) > 0 else 0.005
+            latest_close_1h = series.closes_1h[hour]
+            ema50_1h = series.ema50_1h[hour]
+            ema200_1h = series.ema200_1h[hour]
+            prior = series.ema50_1h[hour - 5] if hour >= 5 else ema50_1h
+            ema50_slope_1h = (ema50_1h - prior) / 5
 
         return StrategyFeatures(
             previous_close=float(prev.close),
-            latest_close=float(latest.close),
-            ema20_15m=ema20_15m,
-            ema50_15m=ema50_15m,
-            previous_rsi14=48.0,
-            rsi14=52.0,
-            atr14=atr,
-            atr_rate=atr_rate,
-            volume_ratio=1.1,
-            spread_rate=0.0004,
-            latest_close_1h=latest_1h,
+            latest_close=latest_close,
+            ema20_15m=series.ema20_15m[index],
+            ema50_15m=series.ema50_15m[index],
+            previous_rsi14=previous_rsi14 if previous_rsi14 is not None else 50.0,
+            rsi14=rsi14 if rsi14 is not None else 50.0,
+            atr14=atr14,
+            atr_rate=atr14 / latest_close if latest_close > 0 else 0.0,
+            volume_ratio=(
+                median_volume_ratio(series.volumes[index - 19 : index + 1], 20)
+                if index >= 19
+                else 0.0
+            ),
+            # Backtests replay closed candles, so the only friction that exists is the
+            # configured half-spread; there is no historical order book to read.
+            spread_rate=float(self.friction.half_spread_rate * 2),
+            latest_close_1h=latest_close_1h,
             ema50_1h=ema50_1h,
             ema200_1h=ema200_1h,
-            ema50_slope_1h=ema50_slope,
-            consecutive_closes_below_ema50=0,
-            sufficient_history=True,
-            contiguous=True,
+            ema50_slope_1h=ema50_slope_1h,
+            consecutive_closes_below_ema50=series.below_ema50[index],
+            sufficient_history=index >= 49 and hour is not None and hour >= 49,
+            contiguous=series.contiguous[index],
             quote_fresh=True,
         )
 

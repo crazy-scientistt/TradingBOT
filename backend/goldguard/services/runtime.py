@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import inspect
 import threading
+from collections.abc import AsyncGenerator
 from concurrent.futures import Future
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -319,6 +320,16 @@ class TradingRuntime:
 
     def recent_events(self, limit: int = 30) -> tuple[AgentEvent, ...]:
         return self._event_bus.recent(limit)
+
+    def subscribe_events(self) -> AsyncGenerator[AgentEvent, None]:
+        """Live fanout for the SSE endpoint. Slow consumers lose oldest events, never block."""
+        return self._event_bus.subscribe()
+
+    def candles(self, timeframe: str) -> tuple[Candle, ...]:
+        return tuple(self._candles_1h if timeframe == "1h" else self._candles_15m)
+
+    def latest_quote(self) -> Quote | None:
+        return self._latest_quote
 
     def shutdown(self) -> None:
         if isinstance(self._ai_veto, _AsyncDecisionAdapter):
@@ -828,6 +839,8 @@ class TradingRuntime:
             "spread_rate": float(quote.spread_rate),
             "state": self._state.value,
             "market_source": self._market_source,
+            # The API rebuilds the decision-pipeline card from this, so keep it machine-readable.
+            "outcome_action": outcome.action,
         }
         if features is not None:
             payload["features"] = {

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -14,6 +15,7 @@ from goldguard.strategy.genome import StrategyGenome, genome_hash
 if TYPE_CHECKING:
     from goldguard.ai.gemini import AiAssessment
     from goldguard.context.models import ContextSnapshot
+    from goldguard.domain.models import Candle
 
 
 def utc_now_iso() -> str:
@@ -318,6 +320,103 @@ class LedgerRepository:
             ).fetchone()
         return dict(row) if row else None
 
+    def list_equity_snapshots(
+        self,
+        paper_account_id: str,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Oldest-first equity history. Empty until the runtime records its first snapshot."""
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT equity_text, cash_text, observed_at FROM equity_snapshots
+                WHERE paper_account_id = ?
+                ORDER BY observed_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (paper_account_id, limit),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    def realized_pnl_since(self, paper_account_id: str, since: datetime) -> Decimal:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT realized_pnl_text FROM trades
+                WHERE paper_account_id = ? AND status = 'CLOSED' AND closed_at >= ?
+                """,
+                (paper_account_id, since.isoformat()),
+            ).fetchall()
+        return sum(
+            (Decimal(str(row["realized_pnl_text"] or "0")) for row in rows),
+            start=Decimal("0"),
+        )
+
+    def latest_context_snapshot(self) -> dict[str, Any] | None:
+        """Most recent persisted context snapshot with its sources, or None."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM context_snapshots
+                ORDER BY fetched_at DESC, rowid DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            sources = connection.execute(
+                """
+                SELECT url, title, published_at, source_tier FROM context_sources
+                WHERE context_snapshot_id = ?
+                ORDER BY rowid
+                """,
+                (str(row["id"]),),
+            ).fetchall()
+        snapshot = dict(row)
+        snapshot["summary"] = json.loads(str(row["summary_json"]))
+        snapshot["sources"] = [dict(source) for source in sources]
+        return snapshot
+
+    def list_decisions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Decision chains joined to the AI verdict and risk verdict that produced them.
+
+        The chain row alone carries no reason, so the audit tab used to show empty cells.
+        """
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    dc.id, dc.mode, dc.account_scope, dc.symbol, dc.timeframe,
+                    dc.candle_close_time, dc.created_at,
+                    ai.decision AS ai_decision,
+                    ai.confidence AS ai_confidence,
+                    ai.reason_codes_json AS ai_reason_codes_json,
+                    ai.model AS ai_model,
+                    rd.approved AS risk_approved,
+                    rd.details_json AS risk_details_json
+                FROM decision_chains dc
+                LEFT JOIN ai_decisions ai ON ai.decision_chain_id = dc.id
+                LEFT JOIN risk_decisions rd ON rd.decision_chain_id = dc.id
+                ORDER BY dc.candle_close_time DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        decisions: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            raw_codes = record.pop("ai_reason_codes_json", None)
+            record["ai_reason_codes"] = json.loads(str(raw_codes)) if raw_codes else []
+            raw_details = record.pop("risk_details_json", None)
+            details = json.loads(str(raw_details)) if raw_details else {}
+            record["risk_reason_codes"] = details.get("reason_codes", [])
+            record["plan"] = details.get("plan")
+            record["risk_approved"] = (
+                None if record["risk_approved"] is None else bool(record["risk_approved"])
+            )
+            decisions.append(record)
+        return decisions
+
     def list_order_fills(self, paper_account_id: str) -> list[dict[str, Any]]:
         with self.database.connect() as connection:
             rows = connection.execute(
@@ -379,6 +478,120 @@ class LedgerRepository:
         details = json.loads(row["details_json"])
         plan = details.get("plan")
         return plan if isinstance(plan, dict) else None
+
+
+class MarketCandleRepository:
+    """Durable candle store. Prices round-trip as text so no float ever touches money."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def upsert_candles(self, candles: Sequence["Candle"], *, source: str) -> int:
+        if not candles:
+            return 0
+        rows = [
+            (
+                candle.symbol,
+                candle.timeframe,
+                candle.open_time.isoformat(),
+                candle.close_time.isoformat(),
+                str(candle.open),
+                str(candle.high),
+                str(candle.low),
+                str(candle.close),
+                str(candle.volume),
+                hashlib.sha256(
+                    f"{source}|{candle.symbol}|{candle.timeframe}|"
+                    f"{candle.open_time.isoformat()}|{candle.close}".encode()
+                ).hexdigest(),
+            )
+            for candle in candles
+            if candle.closed
+        ]
+        with self.database.transaction() as connection:
+            connection.executemany(
+                """
+                INSERT INTO market_candles(
+                    symbol, timeframe, open_time, close_time,
+                    open_text, high_text, low_text, close_text, volume_text, source_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe, open_time) DO UPDATE SET
+                    close_time = excluded.close_time,
+                    open_text = excluded.open_text,
+                    high_text = excluded.high_text,
+                    low_text = excluded.low_text,
+                    close_text = excluded.close_text,
+                    volume_text = excluded.volume_text,
+                    source_hash = excluded.source_hash
+                """,
+                rows,
+            )
+        return len(rows)
+
+    def load_candles(self, symbol: str, timeframe: str, limit: int = 500) -> list["Candle"]:
+        from goldguard.domain.models import Candle
+
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM market_candles
+                WHERE symbol = ? AND timeframe = ?
+                ORDER BY open_time DESC
+                LIMIT ?
+                """,
+                (symbol, timeframe, limit),
+            ).fetchall()
+        return [
+            Candle(
+                symbol=str(row["symbol"]),
+                timeframe=str(row["timeframe"]),
+                open_time=datetime.fromisoformat(str(row["open_time"])),
+                close_time=datetime.fromisoformat(str(row["close_time"])),
+                open=Decimal(str(row["open_text"])),
+                high=Decimal(str(row["high_text"])),
+                low=Decimal(str(row["low_text"])),
+                close=Decimal(str(row["close_text"])),
+                volume=Decimal(str(row["volume_text"])),
+                closed=True,
+            )
+            for row in reversed(rows)
+        ]
+
+    def latest_close_time(self, symbol: str, timeframe: str) -> datetime | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(close_time) AS newest FROM market_candles "
+                "WHERE symbol = ? AND timeframe = ?",
+                (symbol, timeframe),
+            ).fetchone()
+        if row is None or row["newest"] is None:
+            return None
+        return datetime.fromisoformat(str(row["newest"]))
+
+    def record_quality_event(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        event_type: str,
+        details: dict[str, Any],
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO data_quality_events(
+                    id, symbol, timeframe, event_type, details_json, occurred_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    symbol,
+                    timeframe,
+                    event_type,
+                    canonical_json(details),
+                    utc_now_iso(),
+                ),
+            )
 
 
 class AgentEventRepository:
@@ -444,6 +657,14 @@ class GenomeRepository:
                     genome_id, genome_hash, parent_id, origin, status,
                     hypothesis, payload_json, evidence_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(genome_id) DO UPDATE SET
+                    genome_hash = excluded.genome_hash,
+                    parent_id = excluded.parent_id,
+                    origin = excluded.origin,
+                    status = excluded.status,
+                    hypothesis = excluded.hypothesis,
+                    payload_json = excluded.payload_json,
+                    evidence_json = excluded.evidence_json
                 """,
                 (
                     genome.genome_id,
@@ -552,10 +773,15 @@ class GenomeRepository:
             )
 
     def list_genomes(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Registry rows merged with the stored specification.
+
+        The Studio editor dereferences ``evidence_refs``, ``regime``, ``guard``, ``entry``,
+        and ``exit``; returning only the index columns crashed the tab.
+        """
         with self.database.connect() as connection:
             query = (
                 "SELECT genome_id, genome_hash, parent_id, origin, status, "
-                "hypothesis, created_at FROM genomes "
+                "hypothesis, payload_json, created_at FROM genomes "
             )
             if status:
                 rows = connection.execute(
@@ -564,7 +790,14 @@ class GenomeRepository:
                 ).fetchall()
             else:
                 rows = connection.execute(query + "ORDER BY created_at DESC").fetchall()
-        return [dict(r) for r in rows]
+
+        genomes: list[dict[str, Any]] = []
+        for row in rows:
+            record = dict(row)
+            payload = json.loads(str(record.pop("payload_json")))
+            payload.update(record)
+            genomes.append(payload)
+        return genomes
 
 
 class EvaluationRepository:
@@ -780,6 +1013,29 @@ class ProviderRepository:
             )
         return next_version
 
+    def list_providers(self) -> list[ProviderRow]:
+        with self.database.connect() as connection:
+            rows = connection.execute("SELECT * FROM providers ORDER BY name").fetchall()
+        return [
+            ProviderRow(
+                name=str(row["name"]),
+                kind=str(row["kind"]),
+                base_url=str(row["base_url"]),
+                key_fingerprint=str(row["key_fingerprint"]),
+                status=str(row["status"]),
+                last_probe_at=(None if row["last_probe_at"] is None else str(row["last_probe_at"])),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def record_probe(self, name: str, *, probed_at: str | None = None) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE providers SET last_probe_at = ? WHERE name = ?",
+                (probed_at or utc_now_iso(), name),
+            )
+
     def get_active_routes(self) -> dict[str, RouteRow]:
         with self.database.connect() as connection:
             rows = connection.execute("SELECT * FROM active_routes").fetchall()
@@ -848,6 +1104,7 @@ class ReflectionRepository:
         namespace: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        """Lessons with decoded, un-suffixed field names the memory tab can render directly."""
         with self.database.connect() as connection:
             query = "SELECT * FROM reflections "
             if namespace:
@@ -860,4 +1117,21 @@ class ReflectionRepository:
                     query + "ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
-        return [dict(r) for r in rows]
+        return [
+            {
+                "id": str(row["id"]),
+                "trade_id": str(row["trade_id"]),
+                "namespace": str(row["namespace"]),
+                "lesson_code": str(row["lesson_code"]),
+                "lesson": str(row["lesson"]),
+                "regime_tags": json.loads(str(row["regime_tags_json"])),
+                "net_pnl": str(row["net_pnl_text"]),
+                "fee_drag": str(row["fee_drag_text"]),
+                "mae": str(row["mae_text"]),
+                "mfe": str(row["mfe_text"]),
+                "exit_reason": str(row["exit_reason"]),
+                "payload": json.loads(str(row["payload_json"])),
+                "created_at": str(row["created_at"]),
+            }
+            for row in rows
+        ]

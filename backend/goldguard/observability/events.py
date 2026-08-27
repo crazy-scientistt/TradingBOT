@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -101,7 +101,7 @@ class EventBus:
         self._events.extend(events)
         return tuple(events[-limit:])
 
-    async def subscribe(self) -> AsyncIterator[AgentEvent]:
+    async def subscribe(self) -> AsyncGenerator[AgentEvent, None]:
         queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=self._subscriber_queue_size)
         self._subscribers.add(queue)
         try:
