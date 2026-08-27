@@ -59,3 +59,36 @@ The single source of truth is SQLite WAL-mode database at `data/goldguard.db`.
   ```bash
   sqlite3 data/goldguard.db ".backup 'data/backup_goldguard_$(date +%Y%m%d_%H%M%S).db'"
   ```
+
+## 5. Verified Market-Dataset Bootstrap
+
+Historical candles are downloaded from Binance's public market-data API. The
+bootstrap is resumable: each page is checkpointed under
+`data/market/<SYMBOL>/` and the manifest is marked `VERIFIED` only after both
+requested timeframes are closed, contiguous, unique, and checksum-matched.
+Unverified data must not be used to warm a runtime or run a backtest.
+
+From the repository root (with the backend environment active):
+
+```bash
+python scripts/bootstrap_history.py \
+  --symbol PAXGUSDT \
+  --storage-dir data \
+  --warmup-days 30 \
+  --timeframes 15m,1h
+```
+
+The default range is the previous three years ending at the current UTC hour.
+For a deterministic run, provide explicit UTC boundaries, for example:
+
+```bash
+python scripts/bootstrap_history.py \
+  --start 2023-01-01T00:00:00+00:00 \
+  --end 2026-01-01T00:00:00+00:00
+```
+
+The command prints page-level progress and exits non-zero unless the final
+status is `VERIFIED`. Inspect `data/market/PAXGUSDT/manifest.json` and
+`progress.json`; a `CORRUPT` or `DOWNLOADING` status is a hard data gate, not a
+signal to run a backtest with partial candles. A later invocation resumes from
+the checkpoint after transient API failures.

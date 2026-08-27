@@ -91,13 +91,29 @@ npm --prefix frontend run typecheck
 python scripts/run_shadow_trading.py --db data/goldguard.db --symbol PAXGUSDT --cash 100.0 --autonomy
 ```
 
-### 3. Verify Production Health
+### 3. Bootstrap Verified Market History
+
+Backtests and runtime warmup require a verified, closed-candle dataset. From
+the repository root, run the resumable three-year bootstrap (15-minute and
+1-hour candles plus 30 days of warmup):
+
+```bash
+python scripts/bootstrap_history.py --symbol PAXGUSDT --storage-dir data --warmup-days 30 --timeframes 15m,1h
+```
+
+The command prints page progress and exits non-zero unless
+`data/market/PAXGUSDT/manifest.json` reaches `VERIFIED`. `DOWNLOADING` and
+`CORRUPT` datasets are hard gates; do not use their partial candles for a
+backtest or runtime startup. Supply `--start` and `--end` as UTC ISO-8601
+timestamps when a reproducible range is needed.
+
+### 4. Verify Production Health
 
 ```bash
 python scripts/health_check.py --db data/goldguard.db --gateway-url http://localhost:10100
 ```
 
-### 4. Single-Command Docker Deployment
+### 5. Single-Command Docker Deployment
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d

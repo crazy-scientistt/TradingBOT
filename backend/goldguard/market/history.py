@@ -1,7 +1,6 @@
 import hashlib
-import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
@@ -53,6 +52,9 @@ class BootstrapManifest:
     timeframe_counts: dict[str, int]
     checksum: str
     created_at: str
+    progress_percent: int = 100
+    last_error: str | None = None
+    timeframe_ranges: dict[str, tuple[str, str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,13 @@ def verify_candles(
     missing = 0
     previous: datetime | None = None
     for item in ordered:
-        if item.timeframe != timeframe or not item.closed:
+        if (
+            item.timeframe != timeframe
+            or not item.closed
+            or item.close_time <= item.open_time
+            or item.high < max(item.open, item.close, item.low)
+            or item.low > min(item.open, item.close, item.high)
+        ):
             return VerificationResult(False, missing, duplicates)
         if item.open_time in seen:
             duplicates += 1
@@ -127,6 +135,17 @@ def _checksum(candles: tuple[Candle, ...]) -> str:
         )
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def checksum_candles(candles: list[Candle] | tuple[Candle, ...]) -> str:
+    """Return the stable row checksum used by dataset manifests.
+
+    The public helper keeps checksum calculation in one place for both the
+    downloader and the resumable dataset service.  Rows are expected to be in
+    chronological order; callers loading a file should sort before calling it.
+    """
+
+    return _checksum(tuple(candles))
 
 
 class HistoryDownloader:
@@ -193,87 +212,18 @@ async def bootstrap_history(
     client: KlineClient,
     storage_dir: Path,
 ) -> BootstrapManifest:
-    """Resumably bootstrap multi-timeframe market history including warmup period."""
-    actual_start = start - timedelta(days=warmup_days)
-    downloader = HistoryDownloader(client)
+    """Compatibility wrapper around :class:`DatasetService`.
 
-    dataset_dir = storage_dir / "market" / symbol
-    dataset_dir.mkdir(parents=True, exist_ok=True)
-    manifest_file = dataset_dir / "manifest.json"
+    Keeping this function preserves the original script and callers while the
+    service owns checkpointing, verification, retries, and status reads.
+    """
 
-    tf_checksums: dict[str, str] = {}
-    tf_counts: dict[str, int] = {}
-    all_verified = True
+    from goldguard.market.dataset_service import DatasetService
 
-    for tf in timeframes:
-        start_str = actual_start.strftime("%Y%m%d")
-        end_str = end.strftime("%Y%m%d")
-        tf_file = dataset_dir / f"{tf}_{start_str}_{end_str}.json"
-        candles: list[Candle] = []
-
-        if tf_file.exists():
-            try:
-                raw_data = json.loads(tf_file.read_text(encoding="utf-8"))
-                candles = [Candle.model_validate(c) for c in raw_data]
-                v_res = verify_candles(candles, tf)
-                if v_res.verified:
-                    tf_checksums[tf] = _checksum(tuple(candles))
-                    tf_counts[tf] = len(candles)
-                    continue
-            except Exception:
-                candles = []
-
-        # Download if absent or invalid
-        res = await downloader.fetch(
-            symbol=symbol,
-            timeframe=tf,
-            start=actual_start,
-            end=end,
-        )
-        if not res.manifest.verified:
-            all_verified = False
-
-        tf_checksums[tf] = res.manifest.checksum
-        tf_counts[tf] = res.manifest.candle_count
-
-        # Save to disk
-        dump_data = [c.model_dump(mode="json") for c in res.candles]
-        tf_file.write_text(json.dumps(dump_data, default=str), encoding="utf-8")
-
-    combined_hash = hashlib.sha256(
-        "|".join(f"{k}:{v}" for k, v in sorted(tf_checksums.items())).encode()
-    ).hexdigest()
-
-    status = DatasetStatus.VERIFIED if all_verified else DatasetStatus.CORRUPT
-
-    manifest = BootstrapManifest(
-        symbol=symbol,
-        requested_start=start,
-        requested_end=end,
-        actual_start=actual_start,
-        actual_end=end,
+    service = DatasetService(
+        client=client,
+        storage_dir=storage_dir,
+        timeframes=timeframes,
         warmup_days=warmup_days,
-        warmup_included=True,
-        status=status,
-        timeframe_checksums=tf_checksums,
-        timeframe_counts=tf_counts,
-        checksum=combined_hash,
-        created_at=datetime.now(UTC).isoformat(),
     )
-
-    manifest_dict = {
-        "symbol": manifest.symbol,
-        "requested_start": manifest.requested_start.isoformat(),
-        "requested_end": manifest.requested_end.isoformat(),
-        "actual_start": manifest.actual_start.isoformat(),
-        "actual_end": manifest.actual_end.isoformat(),
-        "warmup_days": manifest.warmup_days,
-        "warmup_included": manifest.warmup_included,
-        "status": manifest.status.value,
-        "timeframe_checksums": manifest.timeframe_checksums,
-        "timeframe_counts": manifest.timeframe_counts,
-        "checksum": manifest.checksum,
-        "created_at": manifest.created_at,
-    }
-    manifest_file.write_text(json.dumps(manifest_dict, indent=2), encoding="utf-8")
-    return manifest
+    return await service.bootstrap(symbol, start, end)
