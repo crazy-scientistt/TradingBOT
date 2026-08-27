@@ -146,6 +146,13 @@ def test_probe_without_a_configured_gateway_is_unavailable(client: TestClient) -
         assert provider["probe_status"] == "unconfigured"
 
 
+def test_opencodex_catalog_is_unavailable_without_a_gateway(client: TestClient) -> None:
+    body = _envelope(client.get("/api/providers/catalog"))
+    assert body["availability"] == "unavailable"
+    assert body["data"] == []
+    assert "OpenCodex" in (body["detail"] or "")
+
+
 # --- no fabricated performance ------------------------------------------------
 
 
@@ -182,6 +189,7 @@ def test_dashboard_snapshot_covers_every_polled_section(client: TestClient) -> N
         "context",
         "genomes",
         "providers",
+        "catalog",
         "routes",
         "quota",
         "reflections",

@@ -80,7 +80,7 @@ const ConnectionBanner: React.FC = () => {
 };
 
 const MainDashboard: React.FC = () => {
-  const [activeTab, setActiveTab] = useState('Overview');
+  const [activeTab, setActiveTab] = useState('Home');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const {
@@ -144,7 +144,7 @@ const MainDashboard: React.FC = () => {
             overflowY: 'auto',
           }}
         >
-          {activeTab === 'Overview' && (
+          {(activeTab === 'Home' || activeTab === 'Overview') && (
             <>
               {/* Row 1: 5 KPI Cards */}
               {kpi ? (
@@ -192,11 +192,11 @@ const MainDashboard: React.FC = () => {
 
           {activeTab === 'Agent' && <AgentActivity />}
           {activeTab === 'Studio' && (genomes.length > 0 ? <StrategyStudio /> : <DataNotice title="No strategy genomes observed" detail="The Strategy Studio remains read-only until the registry returns a real genome." />)}
-          {activeTab === 'Hermes' && <ResearchLab />}
+          {(activeTab === 'Learning' || activeTab === 'Hermes') && <ResearchLab />}
           {activeTab === 'Providers' && <RouteMatrix />}
           {activeTab === 'Cockpit' && (botState ? <EmergencyCockpit /> : <DataNotice title="Runtime status unavailable" detail="Emergency controls are unavailable until the server reports runtime state." />)}
           {activeTab === 'Market' && (quote && candles.length > 0 ? <MarketView /> : <DataNotice title="Market data unavailable" detail="This view does not fabricate quotes or candles while the feed is disconnected." />)}
-          {activeTab === 'Context' && <ContextView />}
+          {(activeTab === 'News' || activeTab === 'Context') && <ContextView />}
           {activeTab === 'Decisions' && <DecisionsView />}
           {activeTab === 'Trades' && <TradesView />}
         </main>

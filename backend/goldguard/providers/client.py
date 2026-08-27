@@ -46,6 +46,9 @@ class GatewayClient:
     def _headers(self) -> dict[str, str]:
         headers = {"content-type": "application/json"}
         if self.auth_token:
+            # OpenCodex remote mode requires x-opencodex-api-key. Bearer is sent too
+            # so a vanilla OpenAI-compatible proxy still authenticates.
+            headers["x-opencodex-api-key"] = self.auth_token
             headers["authorization"] = f"Bearer {self.auth_token}"
         return headers
 

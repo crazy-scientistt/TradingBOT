@@ -36,6 +36,7 @@ const dashboard = (ready: boolean, running = false) => ({
   context: envelope([], 'unavailable'),
   genomes: envelope([]),
   providers: envelope([]),
+  catalog: envelope([]),
   routes: envelope([]),
   quota: envelope(null, 'unavailable'),
   reflections: envelope([], 'unavailable'),

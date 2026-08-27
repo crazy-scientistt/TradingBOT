@@ -45,7 +45,7 @@ from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesResearchLoop
 from goldguard.memory.engine import MemoryBank
 from goldguard.observability.events import AgentEvent
-from goldguard.providers.client import GatewayClient
+from goldguard.providers.client import GatewayClient, GatewayUnavailableError, AuthenticationError
 from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
@@ -306,6 +306,22 @@ def _fingerprint(secret: SecretStr | None) -> str:
         return "not-configured"
     digest = hashlib.sha256(secret.get_secret_value().encode()).hexdigest()
     return f"sha256:{digest[:8]}"
+
+
+def _gateway_client() -> GatewayClient | None:
+    """Build a client only when this process actually has a gateway URL and HTTP pool."""
+    if _provider_http_client is None or _settings is None or not _settings.gateway_base_url:
+        return None
+    token = (
+        _settings.gateway_data_token.get_secret_value()
+        if _settings.gateway_data_token is not None
+        else None
+    )
+    return GatewayClient(
+        base_url=_settings.gateway_base_url,
+        auth_token=token,
+        http_client=_provider_http_client,
+    )
 
 
 def _paper_account_id() -> str | None:
@@ -1290,6 +1306,53 @@ async def list_routes() -> dict[str, Any]:
     )
 
 
+@app.get("/api/providers/catalog")
+async def provider_catalog() -> dict[str, Any]:
+    """Live model list from OpenCodex. Empty until the gateway answers /v1/models."""
+    client = _gateway_client()
+    if client is None:
+        return _env(
+            [],
+            availability="unavailable",
+            source="opencodex",
+            stale=True,
+            detail="OpenCodex is not configured. Add the second Railway service, then pick models here.",
+        )
+    try:
+        models = await client.list_models()
+    except AuthenticationError:
+        return _env(
+            [],
+            availability="unavailable",
+            source="opencodex",
+            stale=True,
+            detail="OpenCodex rejected the shared token. Tokens on both services must match.",
+        )
+    except GatewayUnavailableError as exc:
+        return _env(
+            [],
+            availability="unavailable",
+            source="opencodex",
+            stale=True,
+            detail=str(exc),
+        )
+    rows = [
+        {
+            "id": model.model_id,
+            "name": model.display_name or model.model_id,
+            "web_search": model.web_search,
+            "context_window": model.context_window,
+        }
+        for model in models
+    ]
+    return _env(
+        rows,
+        source="opencodex",
+        availability="available" if rows else "unavailable",
+        detail=None if rows else "OpenCodex is up but has no models yet. Add a provider in its dashboard.",
+    )
+
+
 class RouteUpdatePayload(BaseModel):
     provider: str
     model: str = "google-antigravity/gemini-3.7-flash"
@@ -1370,7 +1433,7 @@ def _check(identifier: str, label: str, outcome: str, detail: str) -> dict[str, 
     return {"id": identifier, "label": label, "status": outcome, "detail": detail}
 
 
-def _preflight_checks() -> list[dict[str, Any]]:
+async def _preflight_checks() -> list[dict[str, Any]]:
     """Every gate a beginner must clear before Start does anything, with plain reasons."""
     checks: list[dict[str, Any]] = []
 
@@ -1460,25 +1523,57 @@ def _preflight_checks() -> list[dict[str, Any]]:
         checks.append(_check("runtime", "Runtime", "pass", f"State {runtime_status.state.value}."))
 
     settings = _settings
-    gateway_ready = settings is not None and bool(settings.gateway_base_url)
-    checks.append(
-        _check(
-            "ai_veto",
-            "AI veto",
-            "pass" if gateway_ready else "warn",
-            "Provider gateway is configured for second-opinion vetoes."
-            if gateway_ready
-            else "No AI gateway configured. The deterministic strategy, checklist, and risk "
-            "gates still apply; only the optional AI veto is skipped.",
+    require_gateway = settings is not None and settings.environment != "test"
+    client = _gateway_client()
+    if client is None:
+        checks.append(
+            _check(
+                "ai_veto",
+                "AI brain (OpenCodex)",
+                "fail" if require_gateway else "warn",
+                "OpenCodex is not configured. Paper trading waits until the second Railway "
+                "service is up and OPENCODEX_BASE_URL points at it."
+                if require_gateway
+                else "No AI gateway in this test process. Deterministic strategy still applies.",
+            )
         )
-    )
+    else:
+        try:
+            await client.healthz()
+            checks.append(
+                _check(
+                    "ai_veto",
+                    "AI brain (OpenCodex)",
+                    "pass",
+                    "OpenCodex answered /healthz. Pick models on the Providers tab.",
+                )
+            )
+        except AuthenticationError:
+            checks.append(
+                _check(
+                    "ai_veto",
+                    "AI brain (OpenCodex)",
+                    "fail",
+                    "OpenCodex rejected the shared token. OPENCODEX_API_AUTH_TOKEN must match "
+                    "on both Railway services.",
+                )
+            )
+        except GatewayUnavailableError as exc:
+            checks.append(
+                _check(
+                    "ai_veto",
+                    "AI brain (OpenCodex)",
+                    "fail",
+                    f"OpenCodex is not reachable: {exc}",
+                )
+            )
     return checks
 
 
 @app.get("/api/preflight")
 async def preflight() -> dict[str, Any]:
     """Raw (not enveloped): the frontend renders these checks directly beside Start."""
-    checks = _preflight_checks()
+    checks = await _preflight_checks()
     failed = [check for check in checks if check["status"] == "fail"]
     return {
         "ready": not failed,
@@ -1582,7 +1677,7 @@ async def start_bot() -> dict[str, str]:
             status_code=409,
             detail="paper runtime is halted by emergency stop and requires a deliberate reset",
         )
-    blocking = [check for check in _preflight_checks() if check["status"] == "fail"]
+    blocking = [check for check in await _preflight_checks() if check["status"] == "fail"]
     if blocking:
         raise HTTPException(
             status_code=409,
@@ -1856,6 +1951,7 @@ _DASHBOARD_SECTIONS: tuple[tuple[str, Callable[[], Awaitable[Any]]], ...] = (
     ("context", live_context),
     ("genomes", list_genomes),
     ("providers", list_providers),
+    ("catalog", provider_catalog),
     ("routes", list_routes),
     ("quota", get_quota),
     ("reflections", list_reflections),

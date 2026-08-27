@@ -11,6 +11,7 @@ import {
   StrategyGenome,
   BacktestPerformance,
   AIProvider,
+  OpenCodexModel,
   ProviderRoute,
   ResearchQuota,
   TradeReflection,
@@ -132,6 +133,7 @@ export interface DashboardSnapshot {
   context: ApiEnvelope<NewsItem[]>;
   genomes: ApiEnvelope<StrategyGenome[]>;
   providers: ApiEnvelope<AIProvider[]>;
+  catalog?: ApiEnvelope<OpenCodexModel[]>;
   routes: ApiEnvelope<ProviderRoute[]>;
   quota: ApiEnvelope<ResearchQuota | null>;
   reflections: ApiEnvelope<TradeReflection[]>;
@@ -282,11 +284,15 @@ export const api = {
     return fetchJson(`${API_BASE}/providers`);
   },
 
+  async getCatalog(): Promise<OpenCodexModel[]> {
+    return fetchJson(`${API_BASE}/providers/catalog`);
+  },
+
   async getRoutes(): Promise<ProviderRoute[]> {
     return fetchJson(`${API_BASE}/routes`);
   },
 
-  async setRoute(role: string, provider: string, model = 'google-antigravity/gemini-3.7-flash', pinned = true): Promise<any> {
+  async setRoute(role: string, provider: string, model: string, pinned = true): Promise<any> {
     return fetchJson(`${API_BASE}/routes/${role}`, {
       method: 'POST',
       body: JSON.stringify({ provider, model, pinned }),

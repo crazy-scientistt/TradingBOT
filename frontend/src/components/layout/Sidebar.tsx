@@ -1,12 +1,11 @@
+import type { ComponentType } from 'react';
 import { 
   LayoutDashboard, 
   TrendingUp, 
-  Layers, 
+  Newspaper, 
   CheckCircle2, 
   Briefcase, 
-  BarChart2, 
   Settings, 
-  ChevronDown,
   Sparkles,
   Cpu,
   ShieldAlert,
@@ -19,24 +18,69 @@ interface SidebarProps {
   onSelectTab?: (tab: string) => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSelectTab }) => {
-  const selected = activeTab;
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTab }) => {
+  const selected = activeTab === 'Overview' ? 'Home' : activeTab === 'Context' ? 'News' : activeTab === 'Hermes' ? 'Learning' : activeTab;
 
-  const navItems = [
-    { name: 'Overview', icon: LayoutDashboard },
+  const primary = [
+    { name: 'Home', icon: LayoutDashboard },
     { name: 'Agent', icon: Activity },
-    { name: 'Studio', icon: Sparkles },
-    { name: 'Hermes', icon: HermesIcon, isCustom: true },
+    { name: 'News', icon: Newspaper },
+    { name: 'Learning', icon: HermesIcon, isCustom: true },
     { name: 'Providers', icon: Cpu },
-    { name: 'Cockpit', icon: ShieldAlert },
+  ];
+
+  const more = [
+    { name: 'Studio', icon: Sparkles },
     { name: 'Market', icon: TrendingUp },
-    { name: 'Context', icon: Layers },
     { name: 'Decisions', icon: CheckCircle2 },
     { name: 'Trades', icon: Briefcase },
+    { name: 'Cockpit', icon: ShieldAlert },
   ];
 
   const handleSelect = (name: string) => {
     if (onSelectTab) onSelectTab(name);
+  };
+
+  const renderItem = (item: { name: string; icon: ComponentType<{ size?: number; color?: string }> }) => {
+    const isActive = selected === item.name;
+    const Icon = item.icon;
+    return (
+      <button
+        key={item.name}
+        onClick={() => handleSelect(item.name)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          width: '100%',
+          padding: '9px 12px',
+          borderRadius: '6px',
+          border: isActive ? '1px solid rgba(240, 185, 11, 0.4)' : '1px solid transparent',
+          backgroundColor: isActive ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
+          color: isActive ? '#f0b90b' : '#9498a4',
+          fontSize: '13.5px',
+          fontWeight: isActive ? 600 : 400,
+          cursor: 'pointer',
+          textAlign: 'left',
+          transition: 'all 0.15s ease'
+        }}
+        onMouseEnter={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+            e.currentTarget.style.color = '#e2e4e8';
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!isActive) {
+            e.currentTarget.style.backgroundColor = 'transparent';
+            e.currentTarget.style.color = '#9498a4';
+          }
+        }}
+      >
+        <Icon size={17} color={isActive ? '#f0b90b' : '#9498a4'} />
+        <span>{item.name}</span>
+      </button>
+    );
   };
 
   return (
@@ -55,15 +99,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSele
       userSelect: 'none',
       zIndex: 20
     }}>
-      {/* Top Logo & Navigation */}
       <div>
-        {/* Brand Logo Header */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
           gap: '10px',
           padding: '4px 8px 24px 8px',
-          cursor: 'pointer'
         }}>
           <GoldGuardLogo size={26} />
           <span style={{
@@ -77,55 +118,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSele
           </span>
         </div>
 
-        {/* Main Menu Links */}
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-          {navItems.map((item) => {
-            const isActive = selected === item.name;
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.name}
-                onClick={() => handleSelect(item.name)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  width: '100%',
-                  padding: '9px 12px',
-                  borderRadius: '6px',
-                  border: isActive ? '1px solid rgba(240, 185, 11, 0.4)' : '1px solid transparent',
-                  backgroundColor: isActive ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
-                  color: isActive ? '#f0b90b' : '#9498a4',
-                  fontSize: '13.5px',
-                  fontWeight: isActive ? 600 : 400,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  transition: 'all 0.15s ease'
-                }}
-                onMouseEnter={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
-                    e.currentTarget.style.color = '#e2e4e8';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!isActive) {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                    e.currentTarget.style.color = '#9498a4';
-                  }
-                }}
-              >
-                <Icon size={17} color={isActive ? '#f0b90b' : '#9498a4'} />
-                <span>{item.name}</span>
-              </button>
-            );
-          })}
+          {primary.map(renderItem)}
+          <div style={{ height: '1px', backgroundColor: '#1c2028', margin: '10px 8px' }} />
+          <span style={{ fontSize: '10px', color: '#525661', letterSpacing: '0.08em', padding: '0 12px 6px' }}>
+            MORE
+          </span>
+          {more.map(renderItem)}
         </nav>
       </div>
 
-      {/* Bottom Settings & User Profile */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        {/* Settings button */}
+      <div>
         <button
           onClick={() => handleSelect('Settings')}
           style={{
@@ -141,69 +144,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Overview', onSele
             fontSize: '13.5px',
             cursor: 'pointer',
             textAlign: 'left',
-            transition: 'all 0.15s ease'
-          }}
-          onMouseEnter={(e) => {
-            if (selected !== 'Settings') {
-              e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
-              e.currentTarget.style.color = '#e2e4e8';
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (selected !== 'Settings') {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.color = '#9498a4';
-            }
           }}
         >
           <Settings size={17} />
           <span>Settings</span>
         </button>
-
-        {/* User Profile Pill */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '8px 6px',
-          borderRadius: '8px',
-          cursor: 'pointer',
-          transition: 'background-color 0.15s ease'
-        }}
-        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)'}
-        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {/* AD Avatar */}
-            <div style={{
-              width: '32px',
-              height: '32px',
-              borderRadius: '50%',
-              backgroundColor: '#141518',
-              border: '1.5px solid #d4a017',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#f0b90b',
-              fontSize: '12px',
-              fontWeight: 700
-            }}>
-              AD
-            </div>
-
-            {/* Name and plan */}
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#f8fafc', lineHeight: 1.2 }}>
-                Alex Devon
-              </span>
-              <span style={{ fontSize: '11px', color: '#676b78' }}>
-                Pro Plan
-              </span>
-            </div>
-          </div>
-
-          <ChevronDown size={14} color="#676b78" />
-        </div>
       </div>
     </aside>
   );

@@ -5,8 +5,19 @@ WORKDIR /app
 COPY package.json ./
 RUN bun install
 
+COPY start.sh config.example.json ./
+RUN chmod +x start.sh \
+  && mkdir -p /app/.opencodex \
+  && chown -R bun:bun /app
+
+ENV HOME=/app
+ENV PORT=10100
+
 EXPOSE 10100
 
 USER bun
 
-ENTRYPOINT ["bun", "x", "opencodex", "--port", "10100"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+  CMD bun -e 'fetch("http://127.0.0.1:"+ (process.env.PORT||"10100") +"/healthz").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+
+ENTRYPOINT ["/app/start.sh"]

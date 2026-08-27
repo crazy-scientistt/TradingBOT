@@ -12,6 +12,7 @@ import {
 import {
   StrategyGenome,
   AIProvider,
+  OpenCodexModel,
   ProviderRoute,
   ResearchQuota,
   TradeReflection,
@@ -68,6 +69,7 @@ export interface BotContextType {
   equityHistory: EquityDataPoint[];
   genomes: StrategyGenome[];
   providers: AIProvider[];
+  catalog: OpenCodexModel[];
   routes: ProviderRoute[];
   quota: ResearchQuota;
   reflections: TradeReflection[];
@@ -87,7 +89,7 @@ export interface BotContextType {
   refreshAll: () => Promise<void>;
   promoteGenome: (genomeId: string) => Promise<void>;
   triggerHermesStep: () => Promise<void>;
-  updateRoute: (role: 'decision' | 'context' | 'hermes', provider: string) => Promise<void>;
+  updateRoute: (role: 'decision' | 'context' | 'hermes', provider: string, model?: string) => Promise<void>;
   probeLatencies: () => Promise<void>;
   triggerKillSwitch: () => Promise<void>;
   revokeAutonomy: () => Promise<void>;
@@ -184,6 +186,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [equityHistory, setEquityHistory] = useState<EquityDataPoint[]>([]);
   const [genomes, setGenomes] = useState<StrategyGenome[]>([]);
   const [providers, setProviders] = useState<AIProvider[]>([]);
+  const [catalog, setCatalog] = useState<OpenCodexModel[]>([]);
   const [routes, setRoutes] = useState<ProviderRoute[]>([]);
   const [quota, setQuota] = useState<ResearchQuota>(null as unknown as ResearchQuota);
   const [reflections, setReflections] = useState<TradeReflection[]>([]);
@@ -231,6 +234,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snapshot.context,
         snapshot.genomes,
         snapshot.providers,
+        snapshot.catalog,
         snapshot.routes,
         snapshot.quota,
         snapshot.reflections,
@@ -254,6 +258,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLiveContext(sectionData(snapshot.context) ?? []);
       setGenomes(sectionData(snapshot.genomes) ?? []);
       setProviders(sectionData(snapshot.providers) ?? []);
+      setCatalog(sectionData(snapshot.catalog) ?? []);
       setRoutes(sectionData(snapshot.routes) ?? []);
       setQuota(sectionData(snapshot.quota) as ResearchQuota);
       setReflections(sectionData(snapshot.reflections) ?? []);
@@ -374,13 +379,13 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [addToast, refreshAll]);
 
-  const updateRoute = useCallback(async (role: 'decision' | 'context' | 'hermes', provider: string) => {
+  const updateRoute = useCallback(async (role: 'decision' | 'context' | 'hermes', provider: string, model?: string) => {
     try {
-      await api.setRoute(role, provider);
-      addToast('success', 'Route updated', `Assigned ${provider} to ${role}.`);
+      await api.setRoute(role, provider, model || 'google-antigravity/gemini-3.7-flash');
+      addToast('success', 'Saved', `Using ${model || provider} for ${role}.`);
       await refreshAll();
     } catch (error) {
-      addToast('error', 'Route update failed', error instanceof Error ? error.message : 'The server rejected the route update.');
+      addToast('error', 'Could not save model', error instanceof Error ? error.message : 'The server rejected the route update.');
     }
   }, [addToast, refreshAll]);
 
@@ -436,6 +441,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     equityHistory,
     genomes,
     providers,
+    catalog,
     routes,
     quota,
     reflections,
@@ -462,6 +468,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     botRunning,
     botState,
     candles,
+    catalog,
     dataStatus,
     emergencyStop,
     equityHistory,

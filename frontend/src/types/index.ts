@@ -82,8 +82,17 @@ export interface AIProvider {
   kind: string;
   base_url: string;
   key_fingerprint: string;
-  status: 'active' | 'degraded' | 'offline';
-  latency_ms: number;
+  status: 'active' | 'degraded' | 'offline' | 'unconfigured';
+  latency_ms: number | null;
+  probe_status?: string;
+  probe_detail?: string | null;
+}
+
+export interface OpenCodexModel {
+  id: string;
+  name: string;
+  web_search: boolean;
+  context_window: number;
 }
 
 export interface ResearchQuota {

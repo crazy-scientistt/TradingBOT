@@ -10,6 +10,27 @@ from goldguard.providers.redaction import redact_secrets, redact_string
 
 
 @pytest.mark.asyncio
+async def test_gateway_client_sends_opencodex_and_bearer_headers() -> None:
+    seen: dict[str, str] = {}
+
+    async def mock_health(request: httpx.Request) -> httpx.Response:
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return httpx.Response(200, json={"status": "ok"})
+
+    transport = httpx.MockTransport(mock_health)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = GatewayClient(
+            base_url="http://gateway:10100",
+            auth_token="railway-token",
+            http_client=http_client,
+        )
+        await client.healthz()
+
+    assert seen.get("x-opencodex-api-key") == "railway-token"
+    assert seen.get("authorization") == "Bearer railway-token"
+
+
+@pytest.mark.asyncio
 async def test_gateway_client_chat_completion_success() -> None:
     async def mock_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/chat/completions":

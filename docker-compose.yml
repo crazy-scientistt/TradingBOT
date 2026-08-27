@@ -9,16 +9,14 @@ services:
       - "10100:10100"
     environment:
       - PORT=10100
-      - OPENCODEX_MANAGEMENT_TOKEN=${OPENCODEX_MANAGEMENT_TOKEN:-test-mgmt-token}
+      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
     volumes:
-      - gateway-data:/app/data
+      - gateway-data:/app/.opencodex
     networks:
       - goldguard-net
 
   backend:
     build:
-      # The backend image also builds the frontend and installs the root project;
-      # its context therefore has to be the repository root.
       context: .
       dockerfile: backend/Dockerfile
     container_name: goldguard-backend
@@ -26,8 +24,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - GOLDGUARD_GATEWAY_URL=http://gateway:10100
-      - GOLDGUARD_GATEWAY_TOKEN=${GOLDGUARD_GATEWAY_TOKEN:-}
+      - OPENCODEX_BASE_URL=http://gateway:10100
+      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+      - GOLDGUARD_ENVIRONMENT=development
+      - GOLDGUARD_MODE=paper
     depends_on:
       - gateway
     volumes:
