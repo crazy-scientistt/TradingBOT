@@ -1,6 +1,6 @@
 # Autonomous Hermes Trading Platform Design
 
-**Status:** User-approved design, awaiting written-spec review
+**Status:** Approved by the user on 2026-08-28
 
 **Source baseline:** GitHub `main` at `c899c35e08ec8975766a14914d99b901501300ee`
 
