@@ -15,12 +15,33 @@ CREATE TABLE active_profile (
 
 CREATE TABLE live_arming_state (
     id INTEGER PRIMARY KEY CHECK (id = 1),
-    status TEXT NOT NULL, -- 'disarmed', 'armed_pending_reconciliation', 'armed_ready', 'blocked'
-    profile_hash TEXT NOT NULL REFERENCES profile_versions(hash),
-    expected_equity_usdt TEXT NOT NULL,
-    armed_at TEXT NOT NULL,
-    armed_by TEXT NOT NULL
+    status TEXT NOT NULL CHECK (
+        status IN ('disarmed', 'armed_pending_reconciliation', 'armed_ready', 'blocked')
+    ),
+    profile_hash TEXT REFERENCES profile_versions(hash),
+    expected_equity_usdt TEXT,
+    armed_at TEXT,
+    armed_by TEXT,
+    CHECK (
+        (
+            status = 'disarmed'
+            AND profile_hash IS NULL
+            AND expected_equity_usdt IS NULL
+            AND armed_at IS NULL
+            AND armed_by IS NULL
+        )
+        OR (
+            status != 'disarmed'
+            AND
+            profile_hash IS NOT NULL
+            AND expected_equity_usdt IS NOT NULL
+            AND armed_at IS NOT NULL
+            AND armed_by IS NOT NULL
+        )
+    )
 );
+
+INSERT INTO live_arming_state (id, status) VALUES (1, 'disarmed');
 
 CREATE TABLE admin_users (
     username TEXT PRIMARY KEY,
@@ -48,4 +69,22 @@ CREATE TABLE security_events (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'))
 );
 
-INSERT INTO schema_migrations (version) VALUES (3);
+CREATE TRIGGER profile_versions_no_update
+BEFORE UPDATE ON profile_versions BEGIN
+    SELECT RAISE(ABORT, 'profile versions are immutable');
+END;
+
+CREATE TRIGGER profile_versions_no_delete
+BEFORE DELETE ON profile_versions BEGIN
+    SELECT RAISE(ABORT, 'profile versions are immutable');
+END;
+
+CREATE TRIGGER security_events_no_update
+BEFORE UPDATE ON security_events BEGIN
+    SELECT RAISE(ABORT, 'security events are immutable');
+END;
+
+CREATE TRIGGER security_events_no_delete
+BEFORE DELETE ON security_events BEGIN
+    SELECT RAISE(ABORT, 'security events are immutable');
+END;
