@@ -26,6 +26,7 @@
 
 **Files:**
 - Create: `.venv/` (ignored local environment; never commit)
+- Create: `.dockerignore`
 - Create: `docker-compose.autonomous.yml`
 - Create: `.env.autonomous.example`
 - Create: `scripts/bootstrap_local_env.ps1`
@@ -38,6 +39,8 @@
 - Python dependencies come from `uv.lock`; frontend dependencies come from `frontend/package-lock.json`.
 - Baseline report records command, exit code, failure summary, checkout/HEAD, and explicitly separates missing dependency failures from source failures.
 - All local containers use the `goldguard-autonomous` Compose project, host ports `18000` (app), `18100` (OpenCodex), and `18642` (Hermes when added), with project-scoped volumes/network.
+- The bootstrap script resolves the repository root from `$PSScriptRoot`, creates `.env.autonomous` with exclusive `FileMode.CreateNew`, and treats an existing or racing target as a refusal.
+- The autonomous backend receives the generated session and Hermes bridge tokens through Compose environment wiring; credentials remain outside tracked files and profile payloads.
 
 - [ ] **Step 1: Prove the clone has no shared local dependencies**
 
@@ -48,6 +51,8 @@ git status --short
 ```
 
 Expected: both dependency paths are `False`; Git status contains only the approved plan/spec work at plan-writing time and is clean when implementation begins.
+
+Create a root `.dockerignore` that excludes Git metadata, `.env*`, `.venv`, dependency/build/cache/data/report/SDD artifacts, while preserving every path copied by `backend/Dockerfile` and `gateway/Dockerfile` (`pyproject.toml`, `frontend/package*.json`, `frontend/`, `backend/`, `scripts/`, `app.py`, `main.py`, and the gateway runtime files).
 
 Create `docker-compose.autonomous.yml` as a standalone Compose file; do not layer it over the existing file with fixed container names:
 
@@ -70,6 +75,8 @@ services:
       GOLDGUARD_ENVIRONMENT: development
       GOLDGUARD_MODE: paper
       GOLDGUARD_DATA_DIR: /app/data
+      GOLDGUARD_SESSION_SECRET: ${GOLDGUARD_SESSION_SECRET}
+      GOLDGUARD_HERMES_BRIDGE_TOKEN: ${HERMES_BRIDGE_TOKEN}
       OPENCODEX_BASE_URL: http://opencodex:10100
       OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
     depends_on: ["opencodex"]
@@ -98,7 +105,7 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 ```
 
-Keep `.env.autonomous` ignored. `scripts/bootstrap_local_env.ps1` refuses to overwrite an existing file, generates session/OpenCodex/Hermes tokens with `RandomNumberGenerator.GetBytes(32)`, writes the explicit target `.env.autonomous`, and prints only `created` status—not secret values. Binance and Telegram values stay empty until the user configures them through the approved secure setup.
+Keep `.env.autonomous` ignored. `scripts/bootstrap_local_env.ps1` resolves the repository root from `$PSScriptRoot` so invocation from another working directory cannot redirect output, generates session/OpenCodex/Hermes tokens with `RandomNumberGenerator.GetBytes(32)`, and writes only the explicit target `.env.autonomous` through an exclusive `FileMode.CreateNew` stream. Existing and concurrent/racing targets are refused, all streams are disposed safely, and output contains only `created` status—not secret values. Binance and Telegram values stay empty until the user configures them through the approved secure setup.
 
 - [ ] **Step 2: Create repository-local Python and frontend environments**
 

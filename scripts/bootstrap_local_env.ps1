@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
-$target = Join-Path -Path (Get-Location) -ChildPath '.env.autonomous'
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path -Path $PSScriptRoot -ChildPath '..')).Path
+$target = Join-Path -Path $repoRoot -ChildPath '.env.autonomous'
 if (Test-Path -LiteralPath $target) {
     throw "Refusing to overwrite existing .env.autonomous."
 }
@@ -38,5 +39,25 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 "@
 
-[System.IO.File]::WriteAllText($target, $content, [System.Text.UTF8Encoding]::new($false))
+$bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($content)
+$stream = $null
+try {
+    $stream = [System.IO.File]::Open(
+        $target,
+        [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::None
+    )
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush($true)
+}
+catch [System.IO.IOException] {
+    throw "Refusing to overwrite existing .env.autonomous."
+}
+finally {
+    if ($null -ne $stream) {
+        $stream.Dispose()
+    }
+}
+
 Write-Output 'created .env.autonomous'
