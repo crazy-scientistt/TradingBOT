@@ -1,0 +1,43 @@
+name: goldguard-autonomous
+
+services:
+  opencodex:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "18100:10100"
+    environment:
+      PORT: "10100"
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
+      OPENCODEX_ADMIN_AUTH_TOKEN: ${OPENCODEX_ADMIN_AUTH_TOKEN}
+    volumes:
+      - autonomous-opencodex:/app/.opencodex
+    networks:
+      - autonomous-net
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "18000:8000"
+    environment:
+      GOLDGUARD_ENVIRONMENT: development
+      GOLDGUARD_MODE: paper
+      GOLDGUARD_DATA_DIR: /app/data
+      OPENCODEX_BASE_URL: http://opencodex:10100
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
+    depends_on:
+      - opencodex
+    volumes:
+      - autonomous-ledger:/app/data
+    networks:
+      - autonomous-net
+
+volumes:
+  autonomous-opencodex: {}
+  autonomous-ledger: {}
+
+networks:
+  autonomous-net: {}
