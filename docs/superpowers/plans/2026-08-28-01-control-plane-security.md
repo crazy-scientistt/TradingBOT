@@ -154,7 +154,7 @@ Run `git diff --check`; confirm `.venv/` and `frontend/node_modules/` do not app
 - [ ] **Step 5: Commit the evidence report only**
 
 ```powershell
-git add .gitignore docker-compose.autonomous.yml .env.autonomous.example scripts/bootstrap_local_env.ps1 docs/verification/2026-08-28-isolated-baseline.md
+git add .dockerignore .gitignore docker-compose.autonomous.yml .env.autonomous.example scripts/bootstrap_local_env.ps1 docs/verification/2026-08-28-isolated-baseline.md
 git commit -m "chore: isolate autonomous local workspace"
 ```
 

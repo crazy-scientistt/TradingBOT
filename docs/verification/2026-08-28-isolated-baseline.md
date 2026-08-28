@@ -2,7 +2,7 @@
 
 - Repository: `C:\Users\creat\Downloads\TradingBOT-Autonomous`
 - Baseline-command checkout: `main` at `8328a53995197bdafdcdf8f5cc7af80442bdbd02` (plan commits were present when baseline commands ran)
-- Final Task 0 head after the initial isolation fix: `346df427da153032a1cf277904a791f895173058`
+- Initial Task 0 isolation commit: `346df427da153032a1cf277904a791f895173058` (subsequent reviewer fixes are recorded in the implementer report; this baseline does not assert a current/final repository head)
 - Source HEAD before plan commits: `c899c35e08ec8975766a14914d99b901501300ee`
 - Existing checkout confirmed unchanged: `95b03dcdcde21ede2c5cd6bcccb77037a61270d8`
 - Initial dependency isolation: `.venv` and `frontend\node_modules` were absent; Git status was clean before Task 0 edits.
@@ -31,7 +31,7 @@
 | `npm --prefix frontend run build` | 0 | Passed; Vite production build completed. |
 | `docker compose -f docker-compose.autonomous.yml --env-file .env.autonomous.example config` | 0 | Passed; rendered project `goldguard-autonomous`, ports `18000`/`18100`, project-scoped volumes/network, and no containers were started. |
 
-The additional consistency check `uv lock --check` returned exit code `1` because the committed lockfile needs an update for the current `pyproject.toml`; the lockfile was intentionally left unchanged because Task 0 commits only the five approved deliverables. This is a dependency-metadata baseline finding, not a repaired source change.
+The additional consistency check `uv lock --check` returned exit code `1` because the committed lockfile needs an update for the current `pyproject.toml`; Task 0 records this pre-existing dependency-metadata finding but does not repair it. This is not a repaired source change.
 
 ## Safety checks
 

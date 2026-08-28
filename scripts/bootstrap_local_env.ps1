@@ -52,7 +52,10 @@ try {
     $stream.Flush($true)
 }
 catch [System.IO.IOException] {
-    throw "Refusing to overwrite existing .env.autonomous."
+    if (Test-Path -LiteralPath $target) {
+        throw "Refusing to overwrite existing .env.autonomous."
+    }
+    throw $_
 }
 finally {
     if ($null -ne $stream) {
