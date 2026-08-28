@@ -92,9 +92,7 @@ def test_live_arming_starts_disarmed_and_rejects_unknown_status(tmp_path: Path) 
         pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"),
         database.transaction() as connection,
     ):
-        connection.execute(
-            "UPDATE live_arming_state SET status = 'invented_state' WHERE id = 1"
-        )
+        connection.execute("UPDATE live_arming_state SET status = 'invented_state' WHERE id = 1")
 
 
 def test_disarmed_state_rejects_stale_arming_details(tmp_path: Path) -> None:
@@ -118,6 +116,17 @@ def test_disarmed_state_rejects_stale_arming_details(tmp_path: Path) -> None:
             "armed_at = '2026-08-29T00:00:00+00:00', armed_by = 'admin' "
             "WHERE id = 1"
         )
+
+
+def test_live_arming_singleton_cannot_be_deleted(tmp_path: Path) -> None:
+    database = Database(tmp_path / "test.db")
+    database.migrate()
+
+    with (
+        pytest.raises(sqlite3.IntegrityError, match="live arming state is required"),
+        database.transaction() as connection,
+    ):
+        connection.execute("DELETE FROM live_arming_state WHERE id = 1")
 
 
 def test_migration_executor_accepts_multiple_statements_on_one_line(

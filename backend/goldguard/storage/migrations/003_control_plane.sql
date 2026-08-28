@@ -43,6 +43,11 @@ CREATE TABLE live_arming_state (
 
 INSERT INTO live_arming_state (id, status) VALUES (1, 'disarmed');
 
+CREATE TRIGGER live_arming_state_no_delete
+BEFORE DELETE ON live_arming_state BEGIN
+    SELECT RAISE(ABORT, 'live arming state is required');
+END;
+
 CREATE TABLE admin_users (
     username TEXT PRIMARY KEY,
     password_hash TEXT NOT NULL,
