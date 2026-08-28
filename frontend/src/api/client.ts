@@ -117,7 +117,9 @@ export interface EffectiveSettings {
   research_web_calls_max_per_day: number;
   market_ingestion_enabled: boolean;
   live_capability_enabled: boolean;
-  mutable: false;
+  mutable: boolean;
+  mutable_fields?: string[];
+  session_id?: string;
   detail?: string | null;
 }
 
@@ -352,6 +354,16 @@ export const api = {
 
   async getSettings(): Promise<EffectiveSettings> {
     return fetchJson(`${API_BASE}/settings`);
+  },
+
+  async saveSettings(payload: {
+    paper_starting_balance?: string;
+    paper_risk_per_trade?: string;
+  }): Promise<EffectiveSettings> {
+    return fetchJson(`${API_BASE}/settings`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
   async getAgentEvents(limit = 30): Promise<AgentEvent[]> {

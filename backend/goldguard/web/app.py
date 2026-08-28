@@ -32,7 +32,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, SecretStr, StringConstraints
+from pydantic import BaseModel, Field, SecretStr, StringConstraints
 
 from goldguard.ai.decision import DecisionVetoEngine
 from goldguard.backtest.engine import BacktestEngine, FrictionConfig
@@ -131,6 +131,41 @@ def _require[T](value: T | None, label: str) -> T:
     if value is None:
         raise HTTPException(status_code=503, detail=f"{label} is not initialised")
     return value
+
+
+def _overlay_app_settings(settings: Settings, ledger: LedgerRepository) -> Settings:
+    stored = ledger.load_active_settings()
+    if not stored:
+        return settings
+    update: dict[str, Any] = {}
+    if stored.get("paper_starting_balance") is not None:
+        update["paper_starting_balance"] = Decimal(str(stored["paper_starting_balance"]))
+    if stored.get("paper_risk_per_trade") is not None:
+        update["paper_risk_per_trade"] = Decimal(str(stored["paper_risk_per_trade"]))
+    return settings.model_copy(update=update) if update else settings
+
+
+def _settings_payload(settings: Settings) -> dict[str, Any]:
+    return {
+        "environment": settings.environment,
+        "mode": settings.mode,
+        "symbol": settings.symbol,
+        "entry_timeframe": settings.entry_timeframe,
+        "regime_timeframe": settings.regime_timeframe,
+        "paper_starting_balance": str(settings.paper_starting_balance),
+        "paper_risk_per_trade": str(settings.paper_risk_per_trade),
+        "taker_fee_rate": str(settings.taker_fee_rate),
+        "slippage_rate": str(settings.slippage_rate),
+        "max_spread_rate": str(settings.maximum_spread_rate),
+        "daily_loss_halt": str(SAFE_DEFAULT_V1.daily_loss_halt),
+        "emergency_drawdown_halt": str(SAFE_DEFAULT_V1.emergency_drawdown_halt),
+        "research_backtest_max_per_day": settings.research_backtest_max_per_day,
+        "research_web_calls_max_per_day": settings.research_web_calls_max_per_day,
+        "market_ingestion_enabled": settings.market_ingestion_enabled,
+        "live_capability_enabled": settings.live_capability_enabled,
+        "mutable": True,
+        "mutable_fields": ["paper_starting_balance", "paper_risk_per_trade"],
+    }
 
 
 def _get_db() -> Database:
@@ -451,6 +486,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
 
         _genome_repo = GenomeRepository(_db)
         _ledger_repo = LedgerRepository(_db)
+        _settings = _overlay_app_settings(_settings, _ledger_repo)
         _quota_repo = QuotaRepository(_db)
         _provider_repo = ProviderRepository(_db)
         _reflection_repo = ReflectionRepository(_db)
@@ -2085,32 +2121,71 @@ async def create_session(initial_balance: str = "100") -> dict[str, str]:
 
 @app.get("/api/settings")
 async def get_settings() -> dict[str, Any]:
-    """Effective configuration. Risk parameters are immutable while the process runs."""
+    """Effective configuration. Paper knobs are editable in the app."""
     settings = _require(_settings, "settings")
     return _env(
-        {
-            "environment": settings.environment,
-            "mode": settings.mode,
-            "symbol": settings.symbol,
-            "entry_timeframe": settings.entry_timeframe,
-            "regime_timeframe": settings.regime_timeframe,
-            "paper_starting_balance": str(settings.paper_starting_balance),
-            "paper_risk_per_trade": str(settings.paper_risk_per_trade),
-            "taker_fee_rate": str(settings.taker_fee_rate),
-            "slippage_rate": str(settings.slippage_rate),
-            "max_spread_rate": str(settings.maximum_spread_rate),
-            "daily_loss_halt": str(SAFE_DEFAULT_V1.daily_loss_halt),
-            "emergency_drawdown_halt": str(SAFE_DEFAULT_V1.emergency_drawdown_halt),
-            "research_backtest_max_per_day": settings.research_backtest_max_per_day,
-            "research_web_calls_max_per_day": settings.research_web_calls_max_per_day,
-            "market_ingestion_enabled": settings.market_ingestion_enabled,
-            "live_capability_enabled": settings.live_capability_enabled,
-            "mutable": False,
-        },
-        source="settings",
+        _settings_payload(settings),
+        source="app-settings",
+        detail="Starting balance and risk per trade save here. No Railway restart.",
+    )
+
+
+class SettingsUpdate(BaseModel):
+    paper_starting_balance: Decimal | None = Field(default=None, gt=0, le=Decimal("1000000"))
+    paper_risk_per_trade: Decimal | None = Field(
+        default=None, ge=Decimal("0.0005"), le=Decimal("0.01")
+    )
+
+
+@app.post("/api/settings")
+async def update_settings(update: SettingsUpdate) -> dict[str, Any]:
+    """Save paper knobs in the app and apply them immediately."""
+    global _settings, _risk_engine
+    settings = _require(_settings, "settings")
+    ledger = _require(_ledger_repo, "ledger repository")
+    payload = update.model_dump(exclude_none=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="nothing to update")
+    next_settings = settings.model_copy(update=payload)
+    try:
+        risk = strategy_settings_from_app(next_settings)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    stored = {
+        "paper_starting_balance": str(next_settings.paper_starting_balance),
+        "paper_risk_per_trade": str(next_settings.paper_risk_per_trade),
+    }
+    ledger.activate_settings("app-v1", stored)
+    ledger.append_audit("operator", "settings.update", stored)
+
+    reset_session = (
+        "paper_starting_balance" in payload
+        and payload["paper_starting_balance"] != settings.paper_starting_balance
+    )
+    engine = RiskEngine(risk)
+    session_id = _paper_account_id()
+    if _trading_runtime is not None:
+        try:
+            session_id = _trading_runtime.apply_knobs(
+                next_settings, engine, reset_session=reset_session
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    elif reset_session:
+        session_id = ledger.create_paper_session(next_settings.paper_starting_balance)
+        if _broker is not None:
+            _broker.reset_account(next_settings.paper_starting_balance)
+
+    _settings = next_settings
+    _risk_engine = engine
+    return _env(
+        {**_settings_payload(next_settings), "session_id": session_id},
+        source="app-settings",
         detail=(
-            "Risk limits are fixed for the life of the process. Change GOLDGUARD_* "
-            "environment variables and restart the server to alter them."
+            "new paper session opened with the saved balance"
+            if reset_session
+            else "risk settings applied to the current session"
         ),
     )
 

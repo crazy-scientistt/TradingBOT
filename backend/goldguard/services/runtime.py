@@ -166,6 +166,26 @@ class TradingRuntime:
         self._restore_runtime_state()
         self._refresh_market_status()
 
+    def apply_knobs(
+        self,
+        settings: Settings,
+        risk_engine: RiskEngine,
+        *,
+        reset_session: bool,
+    ) -> str:
+        """Apply in-app paper knobs without a Railway restart. Reset requires a flat book."""
+        if reset_session and self._broker.position is not None:
+            raise RuntimeError("close the open paper position before changing starting balance")
+        self._settings = settings
+        self._coordinator.risk_engine = risk_engine
+        if not reset_session:
+            return self._paper_account_id
+        session_id = self._ledger_repo.create_paper_session(settings.paper_starting_balance)
+        self._paper_account_id = session_id
+        self._broker.reset_account(settings.paper_starting_balance)
+        self._rehydration_error = None
+        return session_id
+
     def _is_event_blackout(self, when: datetime) -> bool:
         if self._calendar is None:
             return False

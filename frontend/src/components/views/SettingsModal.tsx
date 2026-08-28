@@ -12,23 +12,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const { isPaperMode } = useBot();
   const [settings, setSettings] = useState<EffectiveSettings | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [balance, setBalance] = useState('10000');
+  const [riskPercent, setRiskPercent] = useState('0.5');
 
   useEffect(() => {
-    if (isOpen) {
-      setLoading(true);
-      setError(null);
-      setSettings(null);
-      api.getSettings()
-        .then(setSettings)
-        .catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load effective configuration'))
-        .finally(() => setLoading(false));
-    }
+    if (!isOpen) return;
+    setLoading(true);
+    setError(null);
+    setSaved(null);
+    setSettings(null);
+    api.getSettings()
+      .then((next) => {
+        setSettings(next);
+        setBalance(String(Number(next.paper_starting_balance)));
+        const risk = Number(next.paper_risk_per_trade);
+        setRiskPercent(Number.isFinite(risk) ? (risk * 100).toString() : '0.5');
+      })
+      .catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to load settings'))
+      .finally(() => setLoading(false));
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const riskPerTrade = settings ? Number(settings.paper_risk_per_trade) : Number.NaN;
+  const handleSave = async () => {
+    const starting = Number(balance);
+    const risk = Number(riskPercent);
+    if (!Number.isFinite(starting) || starting <= 0) {
+      setError('Starting balance must be a positive number.');
+      return;
+    }
+    if (!Number.isFinite(risk) || risk < 0.05 || risk > 1) {
+      setError('Risk per trade must be between 0.05% and 1%.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setSaved(null);
+    try {
+      const next = await api.saveSettings({
+        paper_starting_balance: String(starting),
+        paper_risk_per_trade: String(risk / 100),
+      });
+      setSettings(next);
+      setSaved(next.detail || 'Saved. Applied now — no Railway restart.');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Could not save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div
@@ -57,7 +92,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           overflow: 'hidden',
         }}
       >
-        {/* Header */}
         <div
           style={{
             display: 'flex',
@@ -70,29 +104,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Settings size={18} color="#f0b90b" />
             <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
-              GoldGuard Configuration &amp; Risk Parameters
+              Paper settings
             </h3>
           </div>
           <button
             onClick={onClose}
-            style={{
-              background: 'transparent',
-              border: 'none',
-              color: '#676b78',
-              cursor: 'pointer',
-            }}
+            style={{ background: 'transparent', border: 'none', color: '#676b78', cursor: 'pointer' }}
           >
             <X size={16} />
           </button>
         </div>
 
-        {/* Content */}
         <div style={{ padding: '20px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Trading Mode */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <label style={{ fontSize: '12px', fontWeight: 600, color: '#9498a4' }}>
-              Execution Mode
-            </label>
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#9498a4' }}>Execution Mode</label>
             <div
               style={{
                 padding: '10px 12px',
@@ -104,21 +129,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 fontSize: '12.5px',
               }}
             >
-              {isPaperMode ? 'Paper mode (server-controlled)' : 'Live mode reported by server (read-only)'}
+              {isPaperMode ? 'Paper trading — no live orders' : 'Live mode reported by server (read-only)'}
             </div>
           </div>
 
-          {loading && <div role="status" style={{ color: '#9498a4', fontSize: '12px' }}>Loading effective configuration…</div>}
+          {loading && <div role="status" style={{ color: '#9498a4', fontSize: '12px' }}>Loading…</div>}
           {error && <div role="alert" style={{ color: '#fca5a5', fontSize: '12px' }}>{error}</div>}
+          {saved && <div role="status" style={{ color: '#10b981', fontSize: '12px' }}>{saved}</div>}
 
-          {/* Risk Limits */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Risk Per Trade</label>
+              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Starting balance (USDT)</label>
               <input
-                type="text"
-                value={Number.isFinite(riskPerTrade) ? `${(riskPerTrade * 100).toFixed(1)}%` : 'Not observed'}
-                readOnly
+                type="number"
+                min={1}
+                max={1000000}
+                value={balance}
+                onChange={(event) => setBalance(event.target.value)}
                 style={{
                   backgroundColor: '#141518',
                   border: '1px solid #22242a',
@@ -129,13 +156,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 }}
               />
             </div>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Starting Balance</label>
+              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Risk per trade (%)</label>
               <input
-                type="text"
-                value={settings ? `$${settings.paper_starting_balance} USDT` : 'Not observed'}
-                readOnly
+                type="number"
+                min={0.05}
+                max={1}
+                step={0.05}
+                value={riskPercent}
+                onChange={(event) => setRiskPercent(event.target.value)}
                 style={{
                   backgroundColor: '#141518',
                   border: '1px solid #22242a',
@@ -145,44 +174,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   fontSize: '13px',
                 }}
               />
+              <span style={{ fontSize: '10.5px', color: '#676b78' }}>Hard ceiling 1%. Default 0.5%.</span>
             </div>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Daily Backtest Limit</label>
+              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Daily loss halt</label>
               <input
                 type="text"
-                value={settings ? `${settings.research_backtest_max_per_day} backtests/day` : 'Not observed'}
                 readOnly
+                value={settings ? `${(Number(settings.daily_loss_halt) * 100).toFixed(1)}% locked` : '—'}
                 style={{
                   backgroundColor: '#141518',
                   border: '1px solid #22242a',
                   borderRadius: '5px',
                   padding: '8px 10px',
-                  color: '#f8fafc',
+                  color: '#676b78',
                   fontSize: '13px',
                 }}
               />
             </div>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Daily Web Call Limit</label>
+              <label style={{ fontSize: '11.5px', color: '#9498a4' }}>Emergency drawdown halt</label>
               <input
                 type="text"
-                value={settings ? `${settings.research_web_calls_max_per_day} calls/day` : 'Not observed'}
                 readOnly
+                value={settings ? `${(Number(settings.emergency_drawdown_halt) * 100).toFixed(1)}% locked` : '—'}
                 style={{
                   backgroundColor: '#141518',
                   border: '1px solid #22242a',
                   borderRadius: '5px',
                   padding: '8px 10px',
-                  color: '#f8fafc',
+                  color: '#676b78',
                   fontSize: '13px',
                 }}
               />
             </div>
           </div>
 
-          {/* Security & Provenance Banner */}
           <div
             style={{
               backgroundColor: 'rgba(16, 185, 129, 0.08)',
@@ -197,16 +224,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             <ShieldCheck size={18} color="#10b981" />
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#10b981' }}>
-                Strict Provenance Active
+                Saves in the app
               </span>
               <span style={{ fontSize: '11px', color: '#9498a4' }}>
-                Risk ceilings locked by Safe-Default-V1 preset. Strategy mutations strictly bounded.
+                Changing starting balance opens a new paper session. Do not edit Railway env vars for this.
               </span>
             </div>
           </div>
         </div>
 
-        {/* Footer */}
         <div
           style={{
             display: 'flex',
@@ -230,9 +256,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           >
             Close
           </button>
-          <span style={{ color: '#676b78', fontSize: '11.5px', alignSelf: 'center' }}>
-            Read-only · restart with approved server configuration changes
-          </span>
+          <button
+            onClick={() => void handleSave()}
+            disabled={saving || loading || !settings}
+            style={{
+              padding: '8px 14px',
+              backgroundColor: '#f0b90b',
+              color: '#0d0e12',
+              border: 'none',
+              borderRadius: '6px',
+              fontSize: '12.5px',
+              fontWeight: 700,
+              cursor: saving || loading || !settings ? 'not-allowed' : 'pointer',
+              opacity: saving || loading || !settings ? 0.6 : 1,
+            }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
     </div>

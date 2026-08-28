@@ -87,7 +87,7 @@ def test_kpi_reports_unknown_drawdown_without_history(client: TestClient) -> Non
     data = body["data"]
     assert data["maxDrawdown"] is None
     assert data["liveSpread"] is None
-    assert data["equity"] == 100.0
+    assert data["equity"] == 10000.0
 
 
 def test_bot_state_daily_loss_is_measured_not_assumed(client: TestClient) -> None:

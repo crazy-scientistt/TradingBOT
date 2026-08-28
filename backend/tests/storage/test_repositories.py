@@ -39,6 +39,21 @@ def test_new_paper_balance_creates_a_session_without_deleting_history(
     assert [row.initial_balance for row in sessions] == [Decimal("100"), Decimal("250.50")]
 
 
+def test_active_settings_round_trip(repository: LedgerRepository) -> None:
+    identifier = repository.activate_settings(
+        "app-v1",
+        {"paper_starting_balance": "10000", "paper_risk_per_trade": "0.005"},
+    )
+    loaded = repository.load_active_settings()
+    assert loaded == {"paper_starting_balance": "10000", "paper_risk_per_trade": "0.005"}
+    again = repository.activate_settings(
+        "app-v1",
+        {"paper_starting_balance": "25000", "paper_risk_per_trade": "0.005"},
+    )
+    assert again != identifier
+    assert repository.load_active_settings()["paper_starting_balance"] == "25000"
+
+
 def test_settings_versions_are_immutable(repository: LedgerRepository) -> None:
     identifier = repository.save_settings_version(
         version="safe-default-v1",

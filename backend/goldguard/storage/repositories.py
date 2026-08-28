@@ -138,6 +138,30 @@ class LedgerRepository:
             )
         return identifier
 
+    def activate_settings(self, version: str, payload: dict[str, Any]) -> str:
+        identifier = self.save_settings_version(version, payload)
+        with self.database.transaction() as connection:
+            connection.execute(
+                "UPDATE app_state SET active_settings_id = ? WHERE singleton = 1",
+                (identifier,),
+            )
+        return identifier
+
+    def load_active_settings(self) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT v.payload_json
+                FROM app_state s
+                JOIN settings_versions v ON v.id = s.active_settings_id
+                WHERE s.singleton = 1
+                """
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        payload = json.loads(str(row["payload_json"]))
+        return payload if isinstance(payload, dict) else None
+
     def append_audit(self, actor: str, action: str, details: dict[str, Any]) -> int:
         with self.database.transaction() as connection:
             cursor = connection.execute(

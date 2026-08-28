@@ -42,6 +42,15 @@ class PaperBroker:
     def fills(self) -> tuple[PaperFill, ...]:
         return tuple(self._fills)
 
+    def reset_account(self, starting_cash: Decimal) -> None:
+        if starting_cash <= 0:
+            raise ValueError("starting paper cash must be positive")
+        if self._position is not None:
+            raise PaperOrderRejected("cannot reset while a position is open")
+        self._cash = starting_cash
+        self._fills = []
+        self._order_results = {}
+
     def equity(self, quote: Quote) -> Decimal:
         if self._position is None:
             return self._cash
