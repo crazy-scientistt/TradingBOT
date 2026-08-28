@@ -112,6 +112,7 @@ class BinancePublicClient:
         end_time_ms: int | None = None,
         limit: int = 1000,
         now_ms: int | None = None,
+        include_open: bool = False,
     ) -> list[Candle]:
         params: dict[str, Any] = {"symbol": symbol, "interval": interval, "limit": limit}
         if start_time_ms is not None:
@@ -127,7 +128,8 @@ class BinancePublicClient:
             if not isinstance(raw, list) or len(raw) < 7:
                 raise RuntimeError("Binance kline row was malformed")
             close_ms = int(raw[6])
-            if close_ms >= current_ms:
+            forming = close_ms >= current_ms
+            if forming and not include_open:
                 continue
             candles.append(
                 Candle(
@@ -140,7 +142,7 @@ class BinancePublicClient:
                     low=Decimal(str(raw[3])),
                     close=Decimal(str(raw[4])),
                     volume=Decimal(str(raw[5])),
-                    closed=True,
+                    closed=not forming,
                 )
             )
         return candles

@@ -4,9 +4,10 @@ import { SpreadSparkline } from './SpreadSparkline';
 
 interface KpiCardsRowProps {
   data: KpiMetrics;
+  spreadHistory?: number[];
 }
 
-export const KpiCardsRow: React.FC<KpiCardsRowProps> = ({ data }) => {
+export const KpiCardsRow: React.FC<KpiCardsRowProps> = ({ data, spreadHistory = [] }) => {
   return (
     <div style={{
       display: 'grid',
@@ -109,7 +110,7 @@ export const KpiCardsRow: React.FC<KpiCardsRowProps> = ({ data }) => {
           </span>
         </div>
         <div style={{ width: '100%', height: '16px', display: 'flex', alignItems: 'center' }}>
-          <SpreadSparkline height={16} />
+          <SpreadSparkline height={16} values={spreadHistory} />
         </div>
       </div>
     </div>

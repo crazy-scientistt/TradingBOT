@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { BotProvider, useBot } from './context/BotContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopHeader } from './components/layout/TopHeader';
@@ -95,6 +95,12 @@ const MainDashboard: React.FC = () => {
     genomes,
     botState,
   } = useBot();
+  const [spreadHistory, setSpreadHistory] = useState<number[]>([]);
+  useEffect(() => {
+    if (quote && Number.isFinite(quote.spread)) {
+      setSpreadHistory((previous) => [...previous.slice(-39), quote.spread]);
+    }
+  }, [quote]);
 
   const handleSelectTab = (tab: string) => {
     if (tab === 'Settings') {
@@ -148,7 +154,7 @@ const MainDashboard: React.FC = () => {
             <>
               {/* Row 1: 5 KPI Cards */}
               {kpi ? (
-                <KpiCardsRow data={kpi} />
+                <KpiCardsRow data={kpi} spreadHistory={spreadHistory} />
               ) : (
                 <DataNotice title="Waiting for a real paper-account snapshot" detail="No equity, PnL, drawdown, or spread value has been observed yet." />
               )}
@@ -162,11 +168,7 @@ const MainDashboard: React.FC = () => {
                   width: '100%',
                 }}
               >
-                {candles.length > 0 ? (
-                  <CandlestickChart candles={candles} />
-                ) : (
-                  <DataNotice title="Market candles unavailable" detail="The chart will appear after verified closed candles are ingested." />
-                )}
+                <CandlestickChart candles={candles} quote={quote} position={position} />
                 {position ? (
                   <OpenPositionCard position={position} pipelineSteps={pipelineSteps} />
                 ) : (

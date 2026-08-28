@@ -43,6 +43,7 @@ from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesResearchLoop
+from goldguard.market.live_stream import CHART_INTERVALS, candle_payload
 from goldguard.memory.engine import MemoryBank
 from goldguard.observability.events import AgentEvent
 from goldguard.providers.client import GatewayClient, GatewayUnavailableError, AuthenticationError
@@ -721,17 +722,47 @@ async def market_candles(
     interval: str = "15m",
     limit: int = 50,
 ) -> dict[str, Any]:
-    """Ingested candles with real EMA/RSI/ATR series. Empty until ingestion verifies data."""
-    if interval not in ("15m", "1h"):
-        raise HTTPException(status_code=400, detail="interval must be 15m or 1h")
+    """Ingested candles with real EMA/RSI/ATR. Empty until a real series exists.
+
+    15m/1h are the strategy series (closed bars). Other intervals are chart-only
+    Binance public klines plus the forming bar — they never drive entries.
+    """
+    if interval not in CHART_INTERVALS:
+        raise HTTPException(
+            status_code=400, detail="interval must be one of 1m, 5m, 15m, 1h, 4h, 1d"
+        )
     limit = max(1, min(limit, CANDLE_PAGE_LIMIT))
     market = _market()
-    candles = list(market.candles_15m if interval == "15m" else market.candles_1h)
+    candles: list[Any]
+    source = market.source
+    stored = market.candles_15m if interval == "15m" else market.candles_1h if interval == "1h" else ()
+    if stored:
+        candles = list(stored)
+        forming = _ingestion.hub.forming.get(interval) if _ingestion is not None else None
+        if forming is not None:
+            if candles and candles[-1].open_time == forming.open_time:
+                candles[-1] = forming
+            elif not forming.closed:
+                candles.append(forming)
+    elif _ingestion is not None and market.availability != "unavailable":
+        try:
+            candles = await _ingestion.chart_candles(interval, limit)
+            source = "binance-chart"
+        except Exception as exc:
+            return _env(
+                [],
+                availability="unavailable",
+                source=market.source,
+                stale=True,
+                detail=f"chart klines unavailable: {exc}",
+            )
+    else:
+        candles = []
     if not candles:
         return _env(
             [],
             availability="unavailable",
-            source=market.source,
+            source=source,
             stale=True,
             detail=market.detail or f"no verified {interval} candles have been ingested yet",
         )
@@ -748,15 +779,9 @@ async def market_candles(
     rows: list[dict[str, Any]] = []
     for index in range(max(len(candles) - limit, 0), len(candles)):
         candle = candles[index]
-        rows.append(
+        row = candle_payload(candle)
+        row.update(
             {
-                "time": candle.close_time.strftime("%H:%M"),
-                "fullTime": candle.close_time.isoformat(),
-                "open": float(candle.open),
-                "high": float(candle.high),
-                "low": float(candle.low),
-                "close": float(candle.close),
-                "volume": float(candle.volume),
                 "ema20": round(ema20[index], 2),
                 "ema50": round(ema50[index], 2),
                 "rsi14": None if rsi14[index] is None else round(float(rsi14[index] or 0.0), 2),
@@ -766,11 +791,12 @@ async def market_candles(
                 ),
             }
         )
+        rows.append(row)
 
     return _env(
         rows,
-        availability=market.availability,
-        source=market.source,
+        availability=market.availability if interval in ("15m", "1h") else "available",
+        source=source,
         observed_at=candles[-1].close_time,
         stale=market.stale,
         detail=market.detail,
@@ -806,6 +832,36 @@ async def market_quote(symbol: str = "PAXGUSDT") -> dict[str, Any]:
         observed_at=quote.observed_at,
         stale=market.stale,
         detail=market.detail,
+    )
+
+
+@app.get("/api/market/stream")
+async def market_stream() -> StreamingResponse:
+    """SSE: live bid/ask and forming klines from Binance public WebSocket. No API key."""
+
+    async def frames() -> AsyncGenerator[str, None]:
+        if _ingestion is None:
+            yield _sse("snapshot", {"quote": None, "forming": {}, "source": "unconfigured"})
+            return
+        hub = _ingestion.hub
+        queue = hub.subscribe()
+        try:
+            yield _sse("snapshot", hub.snapshot())
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=SSE_HEARTBEAT_SECONDS)
+                except TimeoutError:
+                    yield ": heartbeat\n\n"
+                    continue
+                name = str(event.get("type") or "tick")
+                yield _sse(name, event)
+        finally:
+            hub.unsubscribe(queue)
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 

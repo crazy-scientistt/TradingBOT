@@ -35,6 +35,29 @@ async def test_klines_normalize_decimals_and_exclude_forming_candle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_klines_can_include_forming_bar_for_charts() -> None:
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "binance_klines.json"
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = BinancePublicClient(http_client=http_client, base_url="https://binance.test")
+        candles = await client.klines(
+            symbol="PAXGUSDT",
+            interval="15m",
+            now_ms=1787704000000,
+            include_open=True,
+        )
+
+    assert len(candles) == 2
+    assert candles[0].closed is True
+    assert candles[1].closed is False
+    assert candles[1].close == Decimal("2509.00")
+
+
+@pytest.mark.asyncio
 async def test_exchange_filters_and_quote_are_typed() -> None:
     exchange_info = {
         "symbols": [

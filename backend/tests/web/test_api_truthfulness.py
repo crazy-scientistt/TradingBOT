@@ -43,6 +43,16 @@ def _envelope(response) -> dict:
 # --- no fabricated market data -------------------------------------------------
 
 
+def test_unknown_chart_interval_is_rejected(client: TestClient) -> None:
+    response = client.get("/api/market/candles?interval=2m")
+    assert response.status_code == 400
+
+
+def test_market_stream_route_exists() -> None:
+    from goldguard.web.app import app
+
+    paths = {getattr(route, "path", None) for route in app.routes}
+    assert "/api/market/stream" in paths
 def test_candles_are_unavailable_instead_of_synthetic(client: TestClient) -> None:
     body = _envelope(client.get("/api/market/candles"))
     assert body["availability"] == "unavailable"

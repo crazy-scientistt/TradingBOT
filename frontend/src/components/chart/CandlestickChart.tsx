@@ -1,424 +1,332 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Maximize2 } from 'lucide-react';
-import { Candle } from '../../types/dashboard';
+import {
+  ColorType,
+  CrosshairMode,
+  IChartApi,
+  ISeriesApi,
+  LineStyle,
+  UTCTimestamp,
+  createChart,
+} from 'lightweight-charts';
+import { Candle, PositionDetails, Quote } from '../../types/dashboard';
+import { api } from '../../api/client';
 import { ChartControls } from './ChartControls';
 
 interface CandlestickChartProps {
   candles: Candle[];
+  quote?: Quote | null;
+  position?: PositionDetails | null;
 }
 
-export const CandlestickChart: React.FC<CandlestickChartProps> = ({ candles }) => {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [activeTf, setActiveTf] = useState('15m');
+const TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h', '1D'] as const;
+type ChartTf = (typeof TIMEFRAMES)[number];
+
+const toApiInterval = (tf: ChartTf): string => (tf === '1D' ? '1d' : tf);
+
+const toUnix = (candle: Candle): UTCTimestamp => {
+  const raw = candle.openTime || candle.fullTime || candle.closeTime;
+  const ms = raw ? Date.parse(raw) : NaN;
+  if (Number.isFinite(ms)) {
+    const openGuess = candle.openTime ? ms : ms - 1;
+    return Math.floor((candle.openTime ? ms : openGuess) / 1000) as UTCTimestamp;
+  }
+  return Math.floor(Date.now() / 1000) as UTCTimestamp;
+};
+
+const toBar = (candle: Candle) => ({
+  time: toUnix(candle),
+  open: candle.open,
+  high: candle.high,
+  low: candle.low,
+  close: candle.close,
+});
+
+const toVolume = (candle: Candle) => ({
+  time: toUnix(candle),
+  value: candle.volume,
+  color: candle.close >= candle.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
+});
+
+export const CandlestickChart: React.FC<CandlestickChartProps> = ({
+  candles: seedCandles,
+  quote,
+  position,
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeries = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeries = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const ema20Series = useRef<ISeriesApi<'Line'> | null>(null);
+  const ema50Series = useRef<ISeriesApi<'Line'> | null>(null);
+  const [activeTf, setActiveTf] = useState<ChartTf>('15m');
   const [scaleMode, setScaleMode] = useState('auto');
+  const [rows, setRows] = useState<Candle[]>(seedCandles);
+  const [liveQuote, setLiveQuote] = useState<Quote | null>(quote ?? null);
+  const [hover, setHover] = useState<Candle | null>(null);
+  const [status, setStatus] = useState('Connecting live feed…');
 
-  const width = 840;
-  const height = 310;
-  const rightAxisWidth = 65;
-  const bottomAxisHeight = 24;
-  const volumeHeight = 55;
-  const mainChartHeight = height - bottomAxisHeight - volumeHeight - 12;
+  const load = useCallback(async (tf: ChartTf) => {
+    try {
+      const data = await api.getMarketCandles('PAXGUSDT', toApiInterval(tf), 300);
+      setRows(Array.isArray(data) ? data : []);
+    } catch {
+      /* keep previous bars */
+    }
+  }, []);
 
-  const lows = candles.map((c) => c.low);
-  const highs = candles.map((c) => c.high);
-  const minPrice = lows.length ? Math.min(...lows) : 0;
-  const maxPrice = highs.length ? Math.max(...highs) : 0;
-  const priceRange = maxPrice - minPrice || 1;
-  const maxVolume = Math.max(...candles.map((c) => c.volume), 1);
+  useEffect(() => {
+    if (activeTf === '15m' && seedCandles.length && rows.length === 0) {
+      setRows(seedCandles);
+    }
+  }, [activeTf, seedCandles, rows.length]);
 
-  const currentCandle = hoverIndex !== null ? candles[hoverIndex] : candles[candles.length - 1];
-  const lastCandle = candles[candles.length - 1];
+  useEffect(() => {
+    void load(activeTf);
+  }, [activeTf, load]);
 
-  const getX = (index: number) => {
-    const usableWidth = width - rightAxisWidth - 24;
-    return 16 + (index / (candles.length - 1)) * usableWidth;
-  };
+  useEffect(() => {
+    if (quote) setLiveQuote(quote);
+  }, [quote]);
 
-  const getY = (price: number) => {
-    return mainChartHeight - ((price - minPrice) / priceRange) * mainChartHeight + 8;
-  };
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const chart = createChart(el, {
+      width: el.clientWidth,
+      height: 320,
+      layout: {
+        background: { type: ColorType.Solid, color: '#0b0c0e' },
+        textColor: '#9498a4',
+        fontFamily: 'IBM Plex Mono, ui-monospace, monospace',
+      },
+      grid: {
+        vertLines: { color: '#151619' },
+        horzLines: { color: '#17181c' },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      rightPriceScale: { borderColor: '#22242a' },
+      timeScale: {
+        borderColor: '#22242a',
+        timeVisible: true,
+        secondsVisible: activeTf === '1m',
+      },
+      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
+      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+    });
+    const candles = chart.addCandlestickSeries({
+      upColor: '#26a69a',
+      downColor: '#ef5350',
+      wickUpColor: '#26a69a',
+      wickDownColor: '#ef5350',
+      borderVisible: false,
+    });
+    const volume = chart.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+    });
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: { top: 0.78, bottom: 0 },
+    });
+    const ema20 = chart.addLineSeries({
+      color: '#38bdf8',
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const ema50 = chart.addLineSeries({
+      color: '#f59e0b',
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chartRef.current = chart;
+    candleSeries.current = candles;
+    volumeSeries.current = volume;
+    ema20Series.current = ema20;
+    ema50Series.current = ema50;
 
-  const getVolY = (volume: number) => {
-    const volTop = height - bottomAxisHeight - volumeHeight;
-    const h = (volume / maxVolume) * volumeHeight;
-    return volTop + (volumeHeight - h);
-  };
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time) {
+        setHover(null);
+        return;
+      }
+      const bar = param.seriesData.get(candles) as { open: number; high: number; low: number; close: number } | undefined;
+      if (!bar) return;
+      setHover({
+        time: String(param.time),
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        volume: 0,
+        ema20: null,
+        ema50: null,
+        rsi14: null,
+        atr14: null,
+        volumeRatio: null,
+      });
+    });
 
-  const safeEmaPoints = (field: 'ema20' | 'ema50'): string => candles
-    .map((c, idx) => ({ v: c[field], idx }))
-    .filter((p) => p.v != null)
-    .map((p) => ({ x: getX(p.idx), y: getY(p.v as number) }))
-    .reduce((acc, p, i) => (i === 0 ? 'M ' + p.x + ' ' + p.y : acc + ' L ' + p.x + ' ' + p.y), '');
+    const resize = () => {
+      if (!containerRef.current || !chartRef.current) return;
+      chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      chart.remove();
+      chartRef.current = null;
+    };
+  }, [activeTf]);
 
-  const ema20Path = safeEmaPoints('ema20');
-  const ema50Path = safeEmaPoints('ema50');
+  useEffect(() => {
+    if (!candleSeries.current || rows.length === 0) return;
+    const unique = new Map<number, Candle>();
+    for (const row of rows) unique.set(toUnix(row), row);
+    const ordered = [...unique.values()].sort((a, b) => toUnix(a) - toUnix(b));
+    candleSeries.current.setData(ordered.map(toBar));
+    volumeSeries.current?.setData(ordered.map(toVolume));
+    ema20Series.current?.setData(
+      ordered
+        .filter((row) => row.ema20 != null)
+        .map((row) => ({ time: toUnix(row), value: row.ema20 as number })),
+    );
+    ema50Series.current?.setData(
+      ordered
+        .filter((row) => row.ema50 != null)
+        .map((row) => ({ time: toUnix(row), value: row.ema50 as number })),
+    );
+    chartRef.current?.timeScale().fitContent();
+  }, [rows]);
 
-  const priceLevels = Array.from({ length: 6 }, (_, i) => minPrice + (priceRange * i) / 5);
+  useEffect(() => {
+    const series = candleSeries.current;
+    if (!series) return;
+    const lines: ReturnType<ISeriesApi<'Candlestick'>['createPriceLine']>[] = [];
+    if (position) {
+      lines.push(series.createPriceLine({
+        price: position.entry, color: '#38bdf8', lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'entry',
+      }));
+      lines.push(series.createPriceLine({
+        price: position.stop, color: '#ef5350', lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'stop',
+      }));
+      lines.push(series.createPriceLine({
+        price: position.target, color: '#22c55e', lineWidth: 1,
+        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'target',
+      }));
+    }
+    return () => {
+      lines.forEach((line) => series.removePriceLine(line));
+    };
+  }, [position]);
 
-  const timeTicks = [
-    { label: '18:00', idx: 4 },
-    { label: '21:00', idx: 10 },
-    { label: '20', idx: 16, isDay: true },
-    { label: '03:00', idx: 22 },
-    { label: '06:00', idx: 28 },
-    { label: '09:00', idx: 34 },
-    { label: '12:00', idx: 40 },
-    { label: '15:00', idx: candles.length - 1 }
-  ];
+  useEffect(() => {
+    const interval = toApiInterval(activeTf);
+    const dispose = api.streamMarket({
+      onSnapshot: (payload) => {
+        if (payload.quote) setLiveQuote(payload.quote);
+        const forming = payload.forming?.[interval];
+        if (forming) {
+          setRows((previous) => upsertCandle(previous, forming));
+        }
+        setStatus('Live Binance feed');
+      },
+      onQuote: (next) => {
+        setLiveQuote(next);
+        setStatus('Live Binance feed');
+      },
+      onKline: (bar) => {
+        if ((bar.interval || interval) !== interval) return;
+        setRows((previous) => upsertCandle(previous, bar));
+      },
+      onError: (error) => setStatus(error.message),
+    });
+    return dispose;
+  }, [activeTf]);
 
-  const currentPriceY = getY(lastCandle.close);
+  useEffect(() => {
+    chartRef.current?.priceScale('right').applyOptions({
+      mode: scaleMode === 'log' ? 1 : 0,
+    });
+  }, [scaleMode]);
+
+  const last = hover || rows[rows.length - 1];
+  const lastClose = liveQuote ? (liveQuote.bid + liveQuote.ask) / 2 : last?.close;
+  const bull = last != null && last.close >= last.open;
 
   return (
-    <div className="dashboard-card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-      {/* Chart Top Header & Legend */}
+    <div className="dashboard-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
       <div style={{
         padding: '10px 16px 6px 16px',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.04)'
+        borderBottom: '1px solid rgba(255, 255, 255, 0.04)',
       }}>
         <div>
-          {/* Symbol Title & Timeframe */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
-            <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#f8fafc', letterSpacing: '-0.01em' }}>
+            <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#f8fafc' }}>
               PAXG / USDT · {activeTf}
             </span>
+            <span style={{ fontSize: '11px', color: '#676b78' }}>{status}</span>
           </div>
-
-          {/* OHLC and Change Summary */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            color: '#9498a4'
-          }}>
-            <span>O <span style={{ color: '#d1d5db' }}>{currentCandle.open.toFixed(2)}</span></span>
-            <span>H <span style={{ color: '#d1d5db' }}>{currentCandle.high.toFixed(2)}</span></span>
-            <span>L <span style={{ color: '#d1d5db' }}>{currentCandle.low.toFixed(2)}</span></span>
-            <span>C <span style={{ color: '#22c55e', fontWeight: 600 }}>{currentCandle.close.toFixed(2)}</span></span>
-          </div>
-
-          {/* Indicators Legend */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '14px',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            marginTop: '3px'
-          }}>
-            <span style={{ color: '#38bdf8', fontWeight: 500 }}>
-              EMA 20 <span style={{ color: '#38bdf8' }}>{currentCandle.ema20 != null ? currentCandle.ema20.toFixed(2) : '—'}</span>
-            </span>
-            <span style={{ color: '#f59e0b', fontWeight: 500 }}>
-              EMA 50 <span style={{ color: '#f59e0b' }}>{currentCandle.ema50 != null ? currentCandle.ema50.toFixed(2) : '—'}</span>
-            </span>
-          </div>
+          {last && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              fontSize: '11px',
+              fontFamily: 'var(--font-mono)',
+              color: '#9498a4',
+            }}>
+              <span>O <span style={{ color: '#d1d5db' }}>{last.open.toFixed(2)}</span></span>
+              <span>H <span style={{ color: '#d1d5db' }}>{last.high.toFixed(2)}</span></span>
+              <span>L <span style={{ color: '#d1d5db' }}>{last.low.toFixed(2)}</span></span>
+              <span>C <span style={{ color: bull ? '#22c55e' : '#ef5350', fontWeight: 600 }}>{last.close.toFixed(2)}</span></span>
+            </div>
+          )}
         </div>
-
-        {/* Right side: Large Price Display + Expand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <span style={{
             fontSize: '17px',
             fontWeight: 700,
             color: '#f8fafc',
             fontFamily: 'var(--font-mono)',
-            letterSpacing: '-0.02em'
           }}>
-            {lastCandle.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            {lastClose != null
+              ? lastClose.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : '—'}
           </span>
-          <button style={{
-            background: 'transparent',
-            border: 'none',
-            color: '#9498a4',
-            cursor: 'pointer',
-            padding: '4px',
-            display: 'flex',
-            alignItems: 'center',
-            borderRadius: '4px'
-          }} title="Fullscreen Chart">
+          <button
+            onClick={() => containerRef.current?.parentElement?.requestFullscreen?.()}
+            style={{ background: 'transparent', border: 'none', color: '#9498a4', cursor: 'pointer', padding: '4px' }}
+            title="Fullscreen"
+          >
             <Maximize2 size={15} />
           </button>
         </div>
       </div>
-
-      {/* Main SVG Candlestick Canvas */}
-      <div style={{ position: 'relative', width: '100%', height: '310px', backgroundColor: '#0b0c0e' }}>
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          style={{ width: '100%', height: '100%', display: 'block', overflow: 'hidden' }}
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const mouseX = ((e.clientX - rect.left) / rect.width) * width;
-            const usableWidth = width - rightAxisWidth - 24;
-            const approxIdx = Math.round(((mouseX - 16) / usableWidth) * (candles.length - 1));
-            if (approxIdx >= 0 && approxIdx < candles.length) {
-              setHoverIndex(approxIdx);
-            }
-          }}
-          onMouseLeave={() => setHoverIndex(null)}
-        >
-          {/* Grid Lines - pure neutral dark */}
-          {priceLevels.map((lvl) => {
-            const y = getY(lvl);
-            return (
-              <g key={`grid-lvl-${lvl}`}>
-                <line
-                  x1={10}
-                  y1={y}
-                  x2={width - rightAxisWidth}
-                  y2={y}
-                  stroke="#17181c"
-                  strokeWidth="1"
-                  strokeDasharray="2 3"
-                />
-                {/* Price Axis Labels on Right */}
-                <text
-                  x={width - rightAxisWidth + 8}
-                  y={y + 3.5}
-                  fill="#676b78"
-                  fontSize="10"
-                  fontFamily="var(--font-mono)"
-                >
-                  {lvl.toFixed(2)}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Vertical Grid Lines */}
-          {timeTicks.map((t) => {
-            const x = getX(t.idx);
-            return (
-              <line
-                key={`vgrid-${t.label}`}
-                x1={x}
-                y1={8}
-                x2={x}
-                y2={height - bottomAxisHeight}
-                stroke="#151619"
-                strokeWidth="1"
-                strokeDasharray="2 3"
-              />
-            );
-          })}
-
-          {/* Current Live Price Line */}
-          <line
-            x1={10}
-            y1={currentPriceY}
-            x2={width - rightAxisWidth}
-            y2={currentPriceY}
-            stroke="#22c55e"
-            strokeWidth="1"
-            strokeDasharray="3 3"
-            opacity="0.8"
-          />
-
-          {/* Current Live Price Badge on Right Y-Axis */}
-          <g transform={`translate(${width - rightAxisWidth + 4}, ${currentPriceY - 9})`}>
-            <rect
-              width="58"
-              height="18"
-              rx="2"
-              fill="#22c55e"
-            />
-            <text
-              x="29"
-              y="12.5"
-              fill="#062e12"
-              fontSize="10"
-              fontWeight="700"
-              fontFamily="var(--font-mono)"
-              textAnchor="middle"
-            >
-              {lastCandle.close.toFixed(2)}
-            </text>
-          </g>
-
-          {/* Volume sub-pane divider */}
-          <line
-            x1={10}
-            y1={height - bottomAxisHeight - volumeHeight}
-            x2={width - rightAxisWidth}
-            y2={height - bottomAxisHeight - volumeHeight}
-            stroke="#17181c"
-            strokeWidth="1"
-          />
-
-          {/* Volume Label */}
-          <text
-            x={16}
-            y={height - bottomAxisHeight - volumeHeight + 13}
-            fill="#22c55e"
-            fontSize="9.5"
-            fontWeight="600"
-            fontFamily="var(--font-mono)"
-          >
-            Volume 1.245K
-          </text>
-
-          {/* Volume Axis Labels on Right */}
-          <text
-            x={width - rightAxisWidth + 8}
-            y={height - bottomAxisHeight - volumeHeight + 11}
-            fill="#525661"
-            fontSize="9"
-            fontFamily="var(--font-mono)"
-          >
-            10K
-          </text>
-          <text
-            x={width - rightAxisWidth + 8}
-            y={height - bottomAxisHeight - (volumeHeight / 2) + 3}
-            fill="#525661"
-            fontSize="9"
-            fontFamily="var(--font-mono)"
-          >
-            5K
-          </text>
-          <text
-            x={width - rightAxisWidth + 8}
-            y={height - bottomAxisHeight - 4}
-            fill="#525661"
-            fontSize="9"
-            fontFamily="var(--font-mono)"
-          >
-            0
-          </text>
-
-          {/* Volume Bars */}
-          {candles.map((c, idx) => {
-            const x = getX(idx);
-            const isBull = c.close >= c.open;
-            const barWidth = 7;
-            const y = getVolY(c.volume);
-            const h = height - bottomAxisHeight - y;
-            return (
-              <rect
-                key={`vol-${idx}`}
-                x={x - barWidth / 2}
-                y={y}
-                width={barWidth}
-                height={Math.max(h, 1)}
-                fill={isBull ? '#26a69a' : '#ef5350'}
-                opacity={isBull ? '0.5' : '0.5'}
-              />
-            );
-          })}
-
-          {/* EMA 50 Line (Gold/Amber) */}
-          <path
-            d={ema50Path}
-            fill="none"
-            stroke="#f59e0b"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* EMA 20 Line (Cyan) */}
-          <path
-            d={ema20Path}
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-
-          {/* Candlesticks (Wicks and Bodies) */}
-          {candles.map((c, idx) => {
-            const x = getX(idx);
-            const isBull = c.close >= c.open;
-            const candleColor = isBull ? '#26a69a' : '#ef5350';
-            const bodyTop = getY(Math.max(c.open, c.close));
-            const bodyBottom = getY(Math.min(c.open, c.close));
-            const bodyHeight = Math.max(bodyBottom - bodyTop, 1.5);
-            const wickHigh = getY(c.high);
-            const wickLow = getY(c.low);
-            const candleWidth = 7.5;
-
-            return (
-              <g key={`candle-${idx}`}>
-                {/* Wick */}
-                <line
-                  x1={x}
-                  y1={wickHigh}
-                  x2={x}
-                  y2={wickLow}
-                  stroke={candleColor}
-                  strokeWidth="1.2"
-                />
-                {/* Body */}
-                <rect
-                  x={x - candleWidth / 2}
-                  y={bodyTop}
-                  width={candleWidth}
-                  height={bodyHeight}
-                  fill={candleColor}
-                  rx="0.5"
-                />
-              </g>
-            );
-          })}
-
-          {/* Crosshair when hovering */}
-          {hoverIndex !== null && (
-            <g>
-              <line
-                x1={getX(hoverIndex)}
-                y1={8}
-                x2={getX(hoverIndex)}
-                y2={height - bottomAxisHeight}
-                stroke="#676b78"
-                strokeWidth="1"
-                strokeDasharray="3 3"
-              />
-              <line
-                x1={10}
-                y1={getY(candles[hoverIndex].close)}
-                x2={width - rightAxisWidth}
-                y2={getY(candles[hoverIndex].close)}
-                stroke="#676b78"
-                strokeWidth="1"
-                strokeDasharray="3 3"
-              />
-            </g>
-          )}
-
-          {/* Bottom X-Axis Time Ticks */}
-          {timeTicks.map((t) => {
-            const x = getX(t.idx);
-            return (
-              <g key={`time-${t.label}`}>
-                <text
-                  x={x}
-                  y={height - 7}
-                  fill={t.isDay ? '#ffffff' : '#676b78'}
-                  fontSize={t.isDay ? '10.5' : '9.5'}
-                  fontWeight={t.isDay ? '700' : '400'}
-                  fontFamily="var(--font-mono)"
-                  textAnchor="middle"
-                >
-                  {t.label}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-
-      {/* Chart Bottom Controls */}
+      <div ref={containerRef} style={{ width: '100%', height: '320px', backgroundColor: '#0b0c0e' }} />
       <ChartControls
         activeTimeframe={activeTf}
-        onSelectTimeframe={setActiveTf}
+        onSelectTimeframe={(tf) => setActiveTf(tf as ChartTf)}
         activeScaleMode={scaleMode}
         onSelectScaleMode={setScaleMode}
       />
     </div>
   );
 };
+
+function upsertCandle(rows: Candle[], incoming: Candle): Candle[] {
+  if (!incoming.openTime && !incoming.fullTime) return rows;
+  const key = toUnix(incoming);
+  const next = [...rows];
+  const index = next.findIndex((row) => toUnix(row) === key);
+  if (index >= 0) next[index] = { ...next[index], ...incoming };
+  else next.push(incoming);
+  return next;
+}

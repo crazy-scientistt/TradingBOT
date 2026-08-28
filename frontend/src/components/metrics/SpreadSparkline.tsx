@@ -1,43 +1,27 @@
 import React from 'react';
 
-export const SpreadSparkline: React.FC<{ width?: number; height?: number }> = ({
+export const SpreadSparkline: React.FC<{ values?: number[]; width?: number; height?: number }> = ({
+  values = [],
   width = 110,
-  height = 24
+  height = 24,
 }) => {
-  // A smooth sine-wave-like curve matching the image
-  const pathD = "M 0 16 C 18 20, 24 8, 38 12 C 52 16, 60 4, 76 8 C 90 12, 98 6, 110 5";
-  const fillD = `${pathD} L 110 24 L 0 24 Z`;
-
+  if (values.length < 2) {
+    return <span style={{ fontSize: '10px', color: '#676b78' }}>waiting for ticks</span>;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const points = values.map((value, index) => {
+    const x = (index / (values.length - 1)) * width;
+    const y = height - ((value - min) / span) * (height - 2) - 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const pathD = `M ${points.join(' L ')}`;
+  const fillD = `${pathD} L ${width} ${height} L 0 ${height} Z`;
   return (
-    <svg
-      width="100%"
-      height={height}
-      viewBox={`0 0 ${width} ${height}`}
-      style={{ overflow: 'visible' }}
-    >
-      <defs>
-        <linearGradient id="spreadGradient" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.25" />
-          <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
-        </linearGradient>
-        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-          <feGaussianBlur stdDeviation="1.5" result="glow" />
-          <feComposite in="SourceGraphic" in2="glow" operator="over" />
-        </filter>
-      </defs>
-      <path
-        d={fillD}
-        fill="url(#spreadGradient)"
-      />
-      <path
-        d={pathD}
-        fill="none"
-        stroke="#38bdf8"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        filter="url(#glow)"
-      />
+    <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
+      <path d={fillD} fill="rgba(56, 189, 248, 0.15)" />
+      <path d={pathD} fill="none" stroke="#38bdf8" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 };

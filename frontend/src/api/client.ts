@@ -395,4 +395,50 @@ export const api = {
     });
     return () => source.close();
   },
+
+  streamMarket(handlers: {
+    onSnapshot?: (payload: { quote: Quote | null; forming: Record<string, Candle>; source?: string }) => void;
+    onQuote?: (quote: Quote) => void;
+    onKline?: (candle: Candle & { interval?: string; closed?: boolean }) => void;
+    onError?: (error: Error) => void;
+  } = {}): () => void {
+    if (typeof EventSource === 'undefined') {
+      handlers.onError?.(new Error('Live market streaming is unavailable in this browser'));
+      return () => undefined;
+    }
+    const source = new EventSource(`${API_BASE}/market/stream`);
+    const parse = (event: MessageEvent<string>): unknown => {
+      try {
+        return JSON.parse(event.data);
+      } catch {
+        return undefined;
+      }
+    };
+    source.addEventListener('snapshot', (event) => {
+      const payload = parse(event as MessageEvent<string>) as {
+        quote?: Quote | null;
+        forming?: Record<string, Candle>;
+        source?: string;
+      } | undefined;
+      if (payload) {
+        handlers.onSnapshot?.({
+          quote: payload.quote ?? null,
+          forming: payload.forming ?? {},
+          source: payload.source,
+        });
+      }
+    });
+    source.addEventListener('quote', (event) => {
+      const payload = parse(event as MessageEvent<string>);
+      if (payload && typeof payload === 'object') handlers.onQuote?.(payload as Quote);
+    });
+    source.addEventListener('kline', (event) => {
+      const payload = parse(event as MessageEvent<string>);
+      if (payload && typeof payload === 'object') {
+        handlers.onKline?.(payload as Candle & { interval?: string; closed?: boolean });
+      }
+    });
+    source.onerror = () => handlers.onError?.(new Error('Disconnected from the live market stream'));
+    return () => source.close();
+  },
 };

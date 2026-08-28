@@ -17,6 +17,7 @@ dependencies = [
   "pydantic-settings>=2.10,<3",
   "python-multipart>=0.0.20,<1",
   "uvicorn[standard]>=0.35,<1",
+  "websockets>=13,<16",
 ]
 
 [dependency-groups]

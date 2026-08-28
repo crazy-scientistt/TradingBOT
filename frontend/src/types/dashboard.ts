@@ -1,6 +1,8 @@
 export interface Candle {
   time: string; // e.g. "18:00", "21:00", "20", "03:00", etc.
   fullTime?: string;
+  openTime?: string;
+  closeTime?: string;
   open: number;
   high: number;
   low: number;
@@ -11,6 +13,8 @@ export interface Candle {
   rsi14: number | null;
   atr14: number | null;
   volumeRatio: number | null;
+  closed?: boolean;
+  interval?: string;
 }
 
 export interface KpiMetrics {

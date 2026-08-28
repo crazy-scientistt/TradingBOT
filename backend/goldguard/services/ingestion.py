@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,11 @@ from goldguard.config import Settings
 from goldguard.domain.models import Candle, Quote
 from goldguard.market.binance import BinancePublicClient, SymbolFilters
 from goldguard.market.history import verify_candles
+from goldguard.market.live_stream import (
+    CHART_INTERVALS,
+    MarketTickHub,
+    run_binance_socket,
+)
 from goldguard.services.runtime import (
     TradingRuntime,
     is_runtime_error_recorded,
@@ -31,7 +37,8 @@ logger = logging.getLogger("goldguard.ingestion")
 
 HISTORY_LIMIT = 300
 QUOTE_STALE_SECONDS = 120.0
-BUCKET_SECONDS = {"15m": 900, "1h": 3600}
+BUCKET_SECONDS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+RUNTIME_QUOTE_MIN_INTERVAL = 0.25
 
 
 class MarketClient(Protocol):
@@ -80,6 +87,7 @@ class MarketIngestionService:
         self._candle_repo = candle_repo
         self._poll_seconds = poll_seconds
         self._owned_http_client: httpx.AsyncClient | None = None
+        self._live_socket = client is None
         if client is None:
             self._owned_http_client = httpx.AsyncClient()
             client = BinancePublicClient(
@@ -97,6 +105,10 @@ class MarketIngestionService:
         self._detail: str | None = "market ingestion has not run yet"
         self._failures = 0
         self._task: asyncio.Task[None] | None = None
+        self._ws_task: asyncio.Task[None] | None = None
+        self._ws_stop = asyncio.Event()
+        self.hub = MarketTickHub()
+        self._last_runtime_quote = 0.0
 
     # -- lifecycle ----------------------------------------------------------------
 
@@ -111,13 +123,20 @@ class MarketIngestionService:
         except Exception as exc:  # pragma: no cover - network dependent
             self._record_failure(exc)
         self._task = asyncio.create_task(self._run(), name="goldguard-market-ingestion")
+        if self._live_socket:
+            self._ws_stop.clear()
+            self._ws_task = asyncio.create_task(self._run_socket(), name="goldguard-market-ws")
 
     async def aclose(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
+        self._ws_stop.set()
+        for task in (self._ws_task, self._task):
+            if task is None:
+                continue
+            task.cancel()
             with suppress(asyncio.CancelledError, Exception):
-                await self._task
-            self._task = None
+                await task
+        self._ws_task = None
+        self._task = None
         if self._owned_http_client is not None:
             await self._owned_http_client.aclose()
             self._owned_http_client = None
@@ -214,7 +233,9 @@ class MarketIngestionService:
                 closed_entry_candle = appended[-1]
 
         self._latest_quote = quote
-        self._source = "binance-rest"
+        if self.hub.latest_quote is None:
+            self.hub.publish_quote(quote, force=True)
+        self._source = "binance-ws" if self.hub.latest_quote is not None else "binance-rest"
         self._detail = None
         self._failures = 0
         self._refresh_verification()
@@ -223,6 +244,70 @@ class MarketIngestionService:
         if closed_entry_candle is not None:
             await asyncio.to_thread(self._runtime.process_closed_candle, closed_entry_candle, quote)
         await asyncio.to_thread(self._runtime.process_quote, quote)
+
+    async def _run_socket(self) -> None:
+        await run_binance_socket(
+            rest_base_url=self._settings.market_base_url,
+            symbol=self._settings.symbol,
+            on_quote=self._on_live_quote,
+            on_kline=self._on_live_kline,
+            stop=self._ws_stop,
+        )
+
+    def _on_live_quote(self, quote: Quote) -> None:
+        self._latest_quote = quote
+        self._source = "binance-ws"
+        self._detail = None
+        self.hub.publish_quote(quote)
+        now = time.monotonic()
+        if now - self._last_runtime_quote < RUNTIME_QUOTE_MIN_INTERVAL:
+            return
+        self._last_runtime_quote = now
+        self._publish()
+        asyncio.create_task(
+            asyncio.to_thread(self._runtime.process_quote, quote),
+            name="goldguard-ws-quote",
+        )
+
+    def _on_live_kline(self, candle: Candle) -> None:
+        self.hub.publish_kline(candle)
+        if not candle.closed:
+            return
+        if candle.timeframe in ("15m", "1h"):
+            appended = self._merge(candle.timeframe, [candle])
+            if appended and candle.timeframe == self._settings.entry_timeframe:
+                quote = self._latest_quote
+                if quote is not None:
+                    asyncio.create_task(
+                        asyncio.to_thread(self._runtime.process_closed_candle, appended[-1], quote),
+                        name="goldguard-ws-close",
+                    )
+            self._refresh_verification()
+            self._publish()
+
+    async def chart_candles(self, interval: str, limit: int) -> list[Candle]:
+        """Closed history plus the forming bar for the chart. Not used by the strategy."""
+        if interval not in CHART_INTERVALS:
+            raise ValueError(f"unsupported chart interval {interval}")
+        limit = max(1, min(limit, 500))
+        if interval in ("15m", "1h") and self._candles.get(interval):
+            closed = list(self._candles[interval][-limit:])
+        else:
+            closed = await self._client.klines(
+                symbol=self._settings.symbol,
+                interval=interval,
+                limit=limit,
+                include_open=True,
+            )
+        forming = self.hub.forming.get(interval)
+        if forming is None:
+            return closed
+        if closed and closed[-1].open_time == forming.open_time:
+            return [*closed[:-1], forming]
+        if forming.closed:
+            return closed
+        return [*closed, forming]
+
 
     def _merge(self, timeframe: str, fetched: list[Candle]) -> list[Candle]:
         """Store newly closed candles and return the ones this call added, oldest first."""
