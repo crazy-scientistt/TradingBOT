@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Maximize2 } from 'lucide-react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import {
   ColorType,
   CrosshairMode,
@@ -29,8 +29,7 @@ const toUnix = (candle: Candle): UTCTimestamp => {
   const raw = candle.openTime || candle.fullTime || candle.closeTime;
   const ms = raw ? Date.parse(raw) : NaN;
   if (Number.isFinite(ms)) {
-    const openGuess = candle.openTime ? ms : ms - 1;
-    return Math.floor((candle.openTime ? ms : openGuess) / 1000) as UTCTimestamp;
+    return Math.floor((candle.openTime ? ms : ms) / 1000) as UTCTimestamp;
   }
   return Math.floor(Date.now() / 1000) as UTCTimestamp;
 };
@@ -49,38 +48,89 @@ const toVolume = (candle: Candle) => ({
   color: candle.close >= candle.open ? 'rgba(38, 166, 154, 0.5)' : 'rgba(239, 83, 80, 0.5)',
 });
 
+const scaleOptions = (mode: string) => {
+  if (mode === 'log') {
+    return { mode: PriceScaleMode.Logarithmic, autoScale: true };
+  }
+  if (mode === '%') {
+    return { mode: PriceScaleMode.Percentage, autoScale: true };
+  }
+  return { mode: PriceScaleMode.Normal, autoScale: true };
+};
+
 export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   candles: seedCandles,
   quote,
   position,
 }) => {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeries = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const volumeSeries = useRef<ISeriesApi<'Histogram'> | null>(null);
   const ema20Series = useRef<ISeriesApi<'Line'> | null>(null);
   const ema50Series = useRef<ISeriesApi<'Line'> | null>(null);
+  const stickToLive = useRef(true);
+  const replacingData = useRef(false);
+  const lastIndexRef = useRef(0);
   const [activeTf, setActiveTf] = useState<ChartTf>('15m');
   const [scaleMode, setScaleMode] = useState('auto');
   const [rows, setRows] = useState<Candle[]>(seedCandles);
   const [liveQuote, setLiveQuote] = useState<Quote | null>(quote ?? null);
   const [hover, setHover] = useState<Candle | null>(null);
   const [status, setStatus] = useState('Connecting live feed…');
+  const [fullscreen, setFullscreen] = useState(false);
+
+  const applyBars = useCallback((nextRows: Candle[], fit = false) => {
+    if (!candleSeries.current || !chartRef.current) return;
+    const unique = new Map<number, Candle>();
+    for (const row of nextRows) unique.set(toUnix(row), row);
+    const ordered = [...unique.values()].sort((a, b) => toUnix(a) - toUnix(b));
+    lastIndexRef.current = Math.max(ordered.length - 1, 0);
+    const scale = chartRef.current.timeScale();
+    const previous = scale.getVisibleLogicalRange();
+    const pinned = stickToLive.current;
+    replacingData.current = true;
+    candleSeries.current.setData(ordered.map(toBar));
+    volumeSeries.current?.setData(ordered.map(toVolume));
+    ema20Series.current?.setData(
+      ordered
+        .filter((row) => row.ema20 != null)
+        .map((row) => ({ time: toUnix(row), value: row.ema20 as number })),
+    );
+    ema50Series.current?.setData(
+      ordered
+        .filter((row) => row.ema50 != null)
+        .map((row) => ({ time: toUnix(row), value: row.ema50 as number })),
+    );
+    if (fit || !previous) {
+      scale.fitContent();
+      stickToLive.current = true;
+    } else if (pinned) {
+      scale.scrollToRealTime();
+    } else {
+      scale.setVisibleLogicalRange(previous);
+    }
+    replacingData.current = false;
+  }, []);
 
   const load = useCallback(async (tf: ChartTf) => {
     try {
-      const data = await api.getMarketCandles('PAXGUSDT', toApiInterval(tf), 300);
-      setRows(Array.isArray(data) ? data : []);
+      const data = await api.getMarketCandles('PAXGUSDT', toApiInterval(tf), 500);
+      const next = Array.isArray(data) ? data : [];
+      setRows(next);
+      applyBars(next, true);
     } catch {
       /* keep previous bars */
     }
-  }, []);
+  }, [applyBars]);
 
   useEffect(() => {
     if (activeTf === '15m' && seedCandles.length && rows.length === 0) {
       setRows(seedCandles);
+      applyBars(seedCandles, true);
     }
-  }, [activeTf, seedCandles, rows.length]);
+  }, [activeTf, seedCandles, rows.length, applyBars]);
 
   useEffect(() => {
     void load(activeTf);
@@ -95,7 +145,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     if (!el) return;
     const chart = createChart(el, {
       width: el.clientWidth,
-      height: 320,
+      height: el.clientHeight || 460,
       layout: {
         background: { type: ColorType.Solid, color: '#0b0c0e' },
         textColor: '#9498a4',
@@ -106,14 +156,28 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         horzLines: { color: '#17181c' },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#22242a' },
+      rightPriceScale: { borderColor: '#22242a', ...scaleOptions('auto') },
       timeScale: {
         borderColor: '#22242a',
         timeVisible: true,
-        secondsVisible: activeTf === '1m',
+        secondsVisible: false,
+        rightOffset: 4,
+        barSpacing: 8,
+        minBarSpacing: 3,
+        lockVisibleTimeRangeOnResize: true,
       },
-      handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true },
-      handleScale: { axisPressedMouseMove: true, mouseWheel: true, pinch: true },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+        axisDoubleClickReset: true,
+      },
     });
     const candles = chart.addCandlestickSeries({
       upColor: '#26a69a',
@@ -147,12 +211,19 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
     ema20Series.current = ema20;
     ema50Series.current = ema50;
 
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (replacingData.current || !range) return;
+      stickToLive.current = range.to >= lastIndexRef.current - 2;
+    });
+
     chart.subscribeCrosshairMove((param) => {
       if (!param.time) {
         setHover(null);
         return;
       }
-      const bar = param.seriesData.get(candles) as { open: number; high: number; low: number; close: number } | undefined;
+      const bar = param.seriesData.get(candles) as
+        | { open: number; high: number; low: number; close: number }
+        | undefined;
       if (!bar) return;
       setHover({
         time: String(param.time),
@@ -171,7 +242,10 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
     const resize = () => {
       if (!containerRef.current || !chartRef.current) return;
-      chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+      chartRef.current.applyOptions({
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight || 460,
+      });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(el);
@@ -180,27 +254,17 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       chart.remove();
       chartRef.current = null;
     };
-  }, [activeTf]);
+    // Chart is created once; timeframe changes only swap data.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    if (!candleSeries.current || rows.length === 0) return;
-    const unique = new Map<number, Candle>();
-    for (const row of rows) unique.set(toUnix(row), row);
-    const ordered = [...unique.values()].sort((a, b) => toUnix(a) - toUnix(b));
-    candleSeries.current.setData(ordered.map(toBar));
-    volumeSeries.current?.setData(ordered.map(toVolume));
-    ema20Series.current?.setData(
-      ordered
-        .filter((row) => row.ema20 != null)
-        .map((row) => ({ time: toUnix(row), value: row.ema20 as number })),
-    );
-    ema50Series.current?.setData(
-      ordered
-        .filter((row) => row.ema50 != null)
-        .map((row) => ({ time: toUnix(row), value: row.ema50 as number })),
-    );
-    chartRef.current?.timeScale().fitContent();
-  }, [rows]);
+    const onChange = () => {
+      setFullscreen(document.fullscreenElement === shellRef.current);
+    };
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   useEffect(() => {
     const series = candleSeries.current;
@@ -232,7 +296,20 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         if (payload.quote) setLiveQuote(payload.quote);
         const forming = payload.forming?.[interval];
         if (forming) {
-          setRows((previous) => upsertCandle(previous, forming));
+          setRows((previous) => {
+            const next = upsertCandle(previous, forming);
+            lastIndexRef.current = Math.max(next.length - 1, 0);
+            candleSeries.current?.update(toBar(forming));
+            volumeSeries.current?.update(toVolume(forming));
+            if (forming.ema20 != null) {
+              ema20Series.current?.update({ time: toUnix(forming), value: forming.ema20 });
+            }
+            if (forming.ema50 != null) {
+              ema50Series.current?.update({ time: toUnix(forming), value: forming.ema50 });
+            }
+            if (stickToLive.current) chartRef.current?.timeScale().scrollToRealTime();
+            return next;
+          });
         }
         setStatus('Live Binance feed');
       },
@@ -242,7 +319,14 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       },
       onKline: (bar) => {
         if ((bar.interval || interval) !== interval) return;
-        setRows((previous) => upsertCandle(previous, bar));
+        setRows((previous) => {
+          const next = upsertCandle(previous, bar);
+          lastIndexRef.current = Math.max(next.length - 1, 0);
+          candleSeries.current?.update(toBar(bar));
+          volumeSeries.current?.update(toVolume(bar));
+          if (stickToLive.current) chartRef.current?.timeScale().scrollToRealTime();
+          return next;
+        });
       },
       onError: (error) => setStatus(error.message),
     });
@@ -250,17 +334,48 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   }, [activeTf]);
 
   useEffect(() => {
-    chartRef.current?.priceScale('right').applyOptions({
-      mode: scaleMode === 'log' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-    });
+    chartRef.current?.priceScale('right').applyOptions(scaleOptions(scaleMode));
   }, [scaleMode]);
+
+  useEffect(() => {
+    chartRef.current?.timeScale().applyOptions({
+      secondsVisible: activeTf === '1m',
+    });
+  }, [activeTf]);
+
+  const toggleFullscreen = async () => {
+    const shell = shellRef.current;
+    if (!shell) return;
+    try {
+      if (document.fullscreenElement === shell) {
+        await document.exitFullscreen();
+      } else {
+        await shell.requestFullscreen();
+      }
+    } catch {
+      setFullscreen((value) => !value);
+    }
+  };
 
   const last = hover || rows[rows.length - 1];
   const lastClose = liveQuote ? (liveQuote.bid + liveQuote.ask) / 2 : last?.close;
   const bull = last != null && last.close >= last.open;
+  const chartHeight = fullscreen ? 'calc(100vh - 96px)' : '460px';
 
   return (
-    <div className="dashboard-card" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div
+      ref={shellRef}
+      className="dashboard-card"
+      style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        minWidth: 0,
+        backgroundColor: '#0b0c0e',
+        height: fullscreen ? '100vh' : undefined,
+        zIndex: fullscreen ? 1000 : undefined,
+      }}
+    >
       <div style={{
         padding: '10px 16px 6px 16px',
         display: 'flex',
@@ -303,15 +418,18 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
               : '—'}
           </span>
           <button
-            onClick={() => containerRef.current?.parentElement?.requestFullscreen?.()}
+            onClick={() => void toggleFullscreen()}
             style={{ background: 'transparent', border: 'none', color: '#9498a4', cursor: 'pointer', padding: '4px' }}
-            title="Fullscreen"
+            title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
           >
-            <Maximize2 size={15} />
+            {fullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
         </div>
       </div>
-      <div ref={containerRef} style={{ width: '100%', height: '320px', backgroundColor: '#0b0c0e' }} />
+      <div
+        ref={containerRef}
+        style={{ width: '100%', height: chartHeight, flex: fullscreen ? 1 : undefined, backgroundColor: '#0b0c0e' }}
+      />
       <ChartControls
         activeTimeframe={activeTf}
         onSelectTimeframe={(tf) => setActiveTf(tf as ChartTf)}

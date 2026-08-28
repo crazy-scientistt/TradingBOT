@@ -141,6 +141,7 @@ class TradingRuntime:
         self._market_source = market_source
         self._market_verified = market_verified
         self._calendar = calendar
+        self._ai_context: ContextSnapshot | None = None
         self._degraded_reasons: tuple[str, ...] = ()
         self._event_bus = EventBus(sink=AgentEventRepository(database))
         self._ai_veto = self._wrap_ai_gate(ai_veto)
@@ -191,6 +192,9 @@ class TradingRuntime:
             return False
         flagged, _event = self._calendar.is_blackout(when)
         return flagged
+
+    def set_ai_context(self, snapshot: ContextSnapshot | None) -> None:
+        self._ai_context = snapshot
 
     def configure_market_inputs(
         self,
@@ -713,6 +717,23 @@ class TradingRuntime:
                         published_at=event.when,
                         source_indexes=(1,),
                         contradictory=False,
+                    )
+                )
+        if self._ai_context is not None:
+            offset = len(sources)
+            for source in self._ai_context.sources:
+                sources.append(source)
+            for item in self._ai_context.items:
+                shifted = tuple(index + offset for index in item.source_indexes)
+                items.append(
+                    ContextItem(
+                        summary=item.summary,
+                        driver=item.driver,
+                        direction=item.direction,
+                        severity=item.severity,
+                        published_at=item.published_at,
+                        source_indexes=shifted,
+                        contradictory=item.contradictory,
                     )
                 )
         return ContextSnapshot.build(

@@ -88,7 +88,7 @@ export interface BotContextType {
   setSelectedPair: (pair: string) => void;
   refreshAll: () => Promise<void>;
   promoteGenome: (genomeId: string) => Promise<void>;
-  triggerHermesStep: () => Promise<void>;
+  triggerHermesStep: () => Promise<{ status?: string; candidate_genome_id?: string | null; gate_results?: Record<string, unknown> } | null>;
   updateRoute: (role: 'decision' | 'context' | 'hermes', provider: string, model?: string) => Promise<void>;
   probeLatencies: () => Promise<void>;
   triggerKillSwitch: () => Promise<void>;
@@ -372,10 +372,17 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerHermesStep = useCallback(async () => {
     try {
       const result = await api.triggerHermesStep();
-      addToast('success', 'Hermes reasoning step complete', `Candidate ${result.candidate_genome_id ?? result.candidate?.genome_id ?? 'created'}.`);
+      const status = result.status || 'complete';
+      addToast(
+        status.includes('reject') || status.includes('fail') || status.includes('quota') ? 'warning' : 'success',
+        `Hermes: ${status.replace(/_/g, ' ')}`,
+        result.candidate_genome_id ? `Candidate ${result.candidate_genome_id}` : undefined,
+      );
       await refreshAll();
+      return result;
     } catch (error) {
       addToast('error', 'Hermes step failed', error instanceof Error ? error.message : 'The server rejected the research request.');
+      return null;
     }
   }, [addToast, refreshAll]);
 

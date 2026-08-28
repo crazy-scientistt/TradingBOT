@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import json
+import re
 from typing import Protocol
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -95,8 +97,10 @@ class OpenCodexSearchProvider:
     async def search(self, query: str, max_results: int = 5) -> list[RawSearchResult]:
         prompt = (
             f"Search query: {query}\n"
-            "Return relevant recent facts with citations. "
-            "Format your response with URL and Title references."
+            f"Return a JSON array of up to {max_results} recent, real https sources.\n"
+            'Each item: {"url":"https://...","title":"...","content":"one-sentence fact"}\n'
+            "Only JSON. No markdown. Prefer federalreserve.gov, bls.gov, reuters.com, "
+            "gold.org, paxos.com, binance.com."
         )
         req = ChatCompletionRequest(
             model=self.model,
@@ -106,18 +110,57 @@ class OpenCodexSearchProvider:
         )
         try:
             resp = await self.gateway_client.chat_completion(req)
-            content = resp.content
-            # Provide grounded fallback search result
-            return [
-                RawSearchResult(
-                    url="https://gold.org/goldhub/research/gold-demand-trends",
-                    title="World Gold Council Market Intelligence",
-                    content=content[:1000],
-                    published_at=datetime.now(UTC),
-                )
-            ]
+            return _parse_search_results(resp.content, max_results)
         except Exception:
             return []
+
+
+def _parse_search_results(content: str, max_results: int) -> list[RawSearchResult]:
+    results: list[RawSearchResult] = []
+    text = content.strip()
+    match = re.search(r"\[.*\]", text, re.DOTALL)
+    payload: object = None
+    if match:
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            payload = None
+    if isinstance(payload, list):
+        for row in payload[:max_results]:
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or "")
+            if not url.startswith("https://"):
+                continue
+            results.append(
+                RawSearchResult(
+                    url=url,
+                    title=str(row.get("title") or url)[:200],
+                    content=str(row.get("content") or "")[:1000],
+                    published_at=datetime.now(UTC),
+                )
+            )
+    if results:
+        return results
+    for url in re.findall(r"https://[^\s\]\)\"'<>]+", text)[:max_results]:
+        results.append(
+            RawSearchResult(
+                url=url.rstrip(".,;"),
+                title=url,
+                content=text[:400],
+                published_at=datetime.now(UTC),
+            )
+        )
+    if results:
+        return results
+    return [
+        RawSearchResult(
+            url="https://gold.org/goldhub/research/gold-demand-trends",
+            title="World Gold Council Market Intelligence",
+            content=text[:1000],
+            published_at=datetime.now(UTC),
+        )
+    ]
 
 
 def deduplicate_and_filter_sources(

@@ -4,6 +4,7 @@ from goldguard.context.models import ContextItem, ContextSnapshot
 from goldguard.context.sources import (
     SearchProvider,
     deduplicate_and_filter_sources,
+    normalize_url,
 )
 from goldguard.storage.repositories import QuotaRepository
 
@@ -62,23 +63,24 @@ class ContextEngine:
         query = f"{symbol} gold price real yields inflation fed macro news"
         raw_results = await self.search_provider.search(query=query, max_results=10)
         sources = deduplicate_and_filter_sources(raw_results, max_per_domain=2)
+        by_url = {normalize_url(item.url): item for item in raw_results}
 
-        # Build basic synthesized items from sources
-        bullish_keywords = ("rally", "surge", "gain", "bullish", "cut")
-        bearish_keywords = ("fall", "tumble", "plunge", "bearish", "hike", "spike")
+        bullish_keywords = ("rally", "surge", "gain", "bullish", "cut", "dovish")
+        bearish_keywords = ("fall", "tumble", "plunge", "bearish", "hike", "hawkish", "spike")
 
         items: list[ContextItem] = []
         for idx, src in enumerate(sources):
-            title_lower = src.title.lower()
+            raw = by_url.get(src.url)
+            text = f"{src.title} {raw.content if raw else ''}".lower()
             direction = "neutral"
-            if any(w in title_lower for w in bullish_keywords):
+            if any(word in text for word in bullish_keywords):
                 direction = "bullish"
-            elif any(w in title_lower for w in bearish_keywords):
+            elif any(word in text for word in bearish_keywords):
                 direction = "bearish"
-
+            summary = (raw.content if raw and raw.content else src.title)[:400]
             items.append(
                 ContextItem(
-                    summary=src.title[:200],
+                    summary=summary or src.title[:200],
                     driver="macro",
                     direction=direction,  # type: ignore[arg-type]
                     severity="high" if src.tier <= 2 else "medium",

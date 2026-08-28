@@ -26,6 +26,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
   const quota = propQuota || (botContext ? botContext.quota : null);
   const reflections = propReflections || (botContext ? botContext.reflections : []);
   const [internalRunning, setInternalRunning] = useState(false);
+  const [lastStep, setLastStep] = useState<string | null>(null);
   const isRunning = propIsRunning !== undefined ? propIsRunning : internalRunning;
 
   const handleStep = async () => {
@@ -36,7 +37,11 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
     if (botContext) {
       setInternalRunning(true);
       try {
-        await botContext.triggerHermesStep();
+        const result = await botContext.triggerHermesStep();
+        if (result?.status) {
+          const extra = result.candidate_genome_id ? ` · ${result.candidate_genome_id}` : '';
+          setLastStep(`${result.status.replace(/_/g, ' ')}${extra}`);
+        }
       } finally {
         setInternalRunning(false);
       }
@@ -93,6 +98,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
               Self-directed hypothesis testing, bounded mutations &amp; memory bank reflections
+              {lastStep ? ` · last step: ${lastStep}` : ' · also runs in the background, 8/day'}
             </span>
           </div>
         </div>

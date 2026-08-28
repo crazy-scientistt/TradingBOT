@@ -40,7 +40,9 @@ from goldguard.backtest.walk_forward import WalkForwardHarness
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
 from goldguard.context.calendar import EconomicCalendar
+from goldguard.context.engine import ContextEngine
 from goldguard.context.playbook import ProfessionalChecklist
+from goldguard.context.sources import OpenCodexSearchProvider
 from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
@@ -240,10 +242,42 @@ def _research_candles(market: MarketSnapshot) -> tuple[tuple[Any, ...], str]:
 
 
 async def _calendar_worker() -> None:
+    cycles = 0
     while True:
         if _calendar is not None:
             await _calendar.refresh()
+        if cycles % 2 == 0:
+            try:
+                await _refresh_ai_context()
+            except Exception as exc:
+                logger.warning("AI context refresh failed: %s", exc)
+        cycles += 1
         await asyncio.sleep(15 * 60)
+
+
+async def _refresh_ai_context() -> None:
+    settings = _settings
+    if settings is None or not settings.gateway_base_url or _hermes_http_client is None:
+        return
+    gateway = GatewayClient(
+        base_url=settings.gateway_base_url,
+        auth_token=(
+            settings.gateway_data_token.get_secret_value()
+            if settings.gateway_data_token is not None
+            else None
+        ),
+        http_client=_hermes_http_client,
+    )
+    engine = ContextEngine(
+        search_provider=OpenCodexSearchProvider(gateway),
+        quota_repo=_quota_repo,
+        max_daily_searches=settings.research_web_calls_max_per_day,
+    )
+    snapshot = await engine.fetch_snapshot(symbol=settings.symbol)
+    if _ledger_repo is not None and snapshot.items:
+        _ledger_repo.save_context_snapshot(snapshot=snapshot, freshness="live")
+    if _trading_runtime is not None:
+        _trading_runtime.set_ai_context(snapshot)
 
 
 async def _dataset_worker() -> None:
