@@ -32,6 +32,10 @@ class TotpRequired(AuthenticationError):
     pass
 
 
+class TotpReplayRejected(TotpRequired):
+    pass
+
+
 # Descriptive aliases kept for callers that use failure-oriented terminology.
 TotpFailed = TotpRequired
 RateLimitExceeded = AuthenticationThrottled
@@ -53,6 +57,7 @@ class SessionTokens:
     cookie_token: str = field(repr=False)
     csrf_token: str = field(repr=False)
     expires_at: datetime
+    absolute_expires_at: datetime | None = None
 
     def __repr__(self) -> str:
         return f"SessionTokens(expires_at={self.expires_at!r})"

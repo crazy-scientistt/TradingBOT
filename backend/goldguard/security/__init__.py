@@ -14,6 +14,7 @@ from goldguard.security.models import (
     SessionExpired,
     SessionTokens,
     TotpFailed,
+    TotpReplayRejected,
     TotpRequired,
 )
 from goldguard.security.service import AuthService
@@ -33,5 +34,6 @@ __all__ = [
     "SessionExpired",
     "SessionTokens",
     "TotpFailed",
+    "TotpReplayRejected",
     "TotpRequired",
 ]

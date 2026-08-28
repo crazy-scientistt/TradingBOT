@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import secrets
 import uuid
 from collections.abc import Callable
@@ -24,6 +25,7 @@ from goldguard.security.models import (
     RecentTotpRequired,
     SessionExpired,
     SessionTokens,
+    TotpReplayRejected,
     TotpRequired,
 )
 from goldguard.storage.database import Database
@@ -43,6 +45,11 @@ class AuthService:
     password_failure_limit = 5
     totp_failure_limit = 5
     failure_lockout = timedelta(minutes=5)
+    argon2_time_cost = 3
+    argon2_memory_cost = 64 * 1024
+    argon2_parallelism = 4
+    argon2_hash_len = 32
+    argon2_salt_len = 16
 
     def __init__(
         self,
@@ -64,7 +71,13 @@ class AuthService:
         self.absolute_timeout = absolute_timeout
         self.production = production
         self._now = now or (lambda: datetime.now(UTC))
-        self._password_hasher = PasswordHasher()
+        self._password_hasher = PasswordHasher(
+            time_cost=self.argon2_time_cost,
+            memory_cost=self.argon2_memory_cost,
+            parallelism=self.argon2_parallelism,
+            hash_len=self.argon2_hash_len,
+            salt_len=self.argon2_salt_len,
+        )
 
     @staticmethod
     def _utc(value: datetime) -> datetime:
@@ -74,6 +87,11 @@ class AuthService:
 
     def _current_time(self) -> datetime:
         return self._utc(self._now())
+
+    def current_time(self) -> datetime:
+        """Return the injected UTC clock used for session/cookie expiry."""
+
+        return self._current_time()
 
     @staticmethod
     def _timestamp(value: datetime) -> str:
@@ -88,6 +106,35 @@ class AuthService:
     @staticmethod
     def _hash_token(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    def _audit(
+        self,
+        connection: Any,
+        event_type: str,
+        *,
+        actor: str | None,
+        ip: str | None,
+        user_agent: str | None,
+        correlation_id: str,
+        outcome: str,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        details = dict(metadata or {})
+        details["outcome"] = outcome
+        connection.execute(
+            "INSERT INTO security_events "
+            "(event_type, actor, ip_address, user_agent, correlation_id, metadata, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_type,
+                actor,
+                ip,
+                user_agent,
+                correlation_id,
+                json.dumps(details, separators=(",", ":"), sort_keys=True),
+                self._timestamp(self._current_time()),
+            ),
+        )
 
     @staticmethod
     def _validate_totp_secret(secret: str) -> None:
@@ -109,33 +156,86 @@ class AuthService:
         self._validate_totp_secret(secret_value)
         password_hash = self._password_hasher.hash(password_value)
         now = self._timestamp(self._current_time())
+        correlation = uuid.uuid4().hex
+        duplicate = False
 
         with self.database.transaction() as connection:
             existing = connection.execute(
                 "SELECT 1 FROM admin_users WHERE username = ?", (self.username,)
             ).fetchone()
             if existing is not None:
-                raise AdminAlreadyBootstrapped("admin is already bootstrapped")
-            connection.execute(
-                "INSERT INTO admin_users(username, password_hash, totp_secret, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (self.username, password_hash, secret_value, now),
-            )
+                duplicate = True
+                self._audit(
+                    connection,
+                    "admin_bootstrap_rejected",
+                    actor=self.username,
+                    ip=None,
+                    user_agent=None,
+                    correlation_id=correlation,
+                    outcome="rejected",
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO admin_users(username, password_hash, totp_secret, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (self.username, password_hash, secret_value, now),
+                )
+                self._audit(
+                    connection,
+                    "admin_bootstrapped",
+                    actor=self.username,
+                    ip=None,
+                    user_agent=None,
+                    correlation_id=correlation,
+                    outcome="success",
+                )
+        if duplicate:
+            raise AdminAlreadyBootstrapped("admin is already bootstrapped")
 
-    def _check_throttle(self, kind: str, subject: str, now: datetime) -> None:
-        with self.database.connect() as connection:
+    def _check_throttle(
+        self,
+        kind: str,
+        subject: str,
+        now: datetime,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+        correlation_id: str,
+    ) -> None:
+        blocked = False
+        with self.database.transaction() as connection:
             failure = connection.execute(
                 "SELECT locked_until FROM admin_auth_failures "
                 "WHERE kind = ? AND subject = ?",
                 (kind, subject),
             ).fetchone()
-        if failure is None:
-            return
-        locked_until = self._parse_timestamp(failure["locked_until"])
-        if locked_until is not None and locked_until > now:
+            if failure is not None:
+                locked_until = self._parse_timestamp(failure["locked_until"])
+                blocked = locked_until is not None and locked_until > now
+            if blocked:
+                self._audit(
+                    connection,
+                    "login_throttled" if kind == "password" else "totp_throttled",
+                    actor=self.username,
+                    ip=ip,
+                    user_agent=user_agent,
+                    correlation_id=correlation_id,
+                    outcome="throttled",
+                )
+        if blocked:
             raise AuthenticationThrottled("authentication temporarily throttled")
 
-    def _record_failure(self, kind: str, subject: str, now: datetime, limit: int) -> None:
+    def _record_failure(
+        self,
+        kind: str,
+        subject: str,
+        now: datetime,
+        limit: int,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+        correlation_id: str,
+    ) -> None:
         now_text = self._timestamp(now)
         lock_text = self._timestamp(now + self.failure_lockout)
         with self.database.transaction() as connection:
@@ -159,35 +259,86 @@ class AuthService:
                     lock_text if failures >= limit else None,
                 ),
             )
-
-    def _clear_failures(self, kind: str, subject: str) -> None:
-        with self.database.transaction() as connection:
-            connection.execute(
-                "DELETE FROM admin_auth_failures WHERE kind = ? AND subject = ?",
-                (kind, subject),
+            self._audit(
+                connection,
+                "login_failed" if kind == "password" else "totp_failed",
+                actor=self.username,
+                ip=ip,
+                user_agent=user_agent,
+                correlation_id=correlation_id,
+                outcome="failure",
+                metadata={"failure_count": failures, "throttled": failures >= limit},
             )
 
-    def login(self, password: SecretStr, ip: str, user_agent: str) -> SessionTokens:
+    def _clear_failures(self, kind: str, subject: str, now: datetime) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                "DELETE FROM admin_auth_failures WHERE kind = ? AND subject = ? "
+                "AND (locked_until IS NULL OR locked_until <= ?)",
+                (kind, subject, self._timestamp(now)),
+            )
+
+    def login(
+        self,
+        password: SecretStr,
+        ip: str,
+        user_agent: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> SessionTokens:
         now = self._current_time()
+        correlation = correlation_id or uuid.uuid4().hex
         subject = ip or "unknown"
-        self._check_throttle("password", subject, now)
+        self._check_throttle(
+            "password",
+            subject,
+            now,
+            ip=ip,
+            user_agent=user_agent,
+            correlation_id=correlation,
+        )
         with self.database.connect() as connection:
             admin = connection.execute(
-                "SELECT password_hash FROM admin_users WHERE username = ?", (self.username,)
+                "SELECT password_hash FROM admin_users WHERE username = ?",
+                (self.username,),
             ).fetchone()
         valid = False
+        password_hash = None if admin is None else str(admin["password_hash"])
         if admin is not None:
             try:
                 valid = self._password_hasher.verify(
-                    str(admin["password_hash"]), password.get_secret_value()
+                    password_hash or "", password.get_secret_value()
                 )
             except (InvalidHashError, VerificationError, VerifyMismatchError):
                 valid = False
         if not valid:
-            self._record_failure("password", subject, now, self.password_failure_limit)
+            self._record_failure(
+                "password",
+                subject,
+                now,
+                self.password_failure_limit,
+                ip=ip,
+                user_agent=user_agent,
+                correlation_id=correlation,
+            )
             raise InvalidCredentials("invalid credentials")
-        self._clear_failures("password", subject)
-        return self._create_session(self.username, ip, user_agent, now)
+        if password_hash is not None and self._password_hasher.check_needs_rehash(password_hash):
+            upgraded_hash = self._password_hasher.hash(password.get_secret_value())
+            with self.database.transaction() as connection:
+                connection.execute(
+                    "UPDATE admin_users SET password_hash = ? "
+                    "WHERE username = ? AND password_hash = ?",
+                    (upgraded_hash, self.username, password_hash),
+                )
+        self._clear_failures("password", subject, now)
+        return self._create_session(
+            self.username,
+            ip,
+            user_agent,
+            now,
+            correlation_id=correlation,
+            event_type="login_succeeded",
+        )
 
     def _create_session(
         self,
@@ -198,6 +349,8 @@ class AuthService:
         *,
         last_totp_at: datetime | None = None,
         absolute_expires_at: datetime | None = None,
+        correlation_id: str | None = None,
+        event_type: str | None = None,
     ) -> SessionTokens:
         cookie_token = secrets.token_urlsafe(32)
         csrf_token = secrets.token_urlsafe(32)
@@ -222,7 +375,17 @@ class AuthService:
                     user_agent,
                 ),
             )
-        return SessionTokens(cookie_token, cookie_token, csrf_token, expires)
+            if event_type is not None:
+                self._audit(
+                    connection,
+                    event_type,
+                    actor=username,
+                    ip=ip,
+                    user_agent=user_agent,
+                    correlation_id=correlation_id or uuid.uuid4().hex,
+                    outcome="success",
+                )
+        return SessionTokens(cookie_token, cookie_token, csrf_token, expires, absolute)
 
     def _session_row(self, token: str) -> Any:
         with self.database.connect() as connection:
@@ -285,11 +448,19 @@ class AuthService:
     def verify_totp(self, session_id: str, code: str) -> AuthSession:
         current = self.authenticate(session_id)
         now = self._current_time()
-        subject = self._hash_token(session_id)
-        self._check_throttle("totp", subject, now)
+        correlation = uuid.uuid4().hex
+        subject = self.username
+        self._check_throttle(
+            "totp",
+            subject,
+            now,
+            ip=current.ip,
+            user_agent=current.user_agent,
+            correlation_id=correlation,
+        )
         with self.database.connect() as connection:
             row = connection.execute(
-                "SELECT totp_secret FROM admin_users WHERE username = ?",
+                "SELECT totp_secret, last_totp_step FROM admin_users WHERE username = ?",
                 (current.username,),
             ).fetchone()
         valid = False
@@ -303,55 +474,103 @@ class AuthService:
             except (TypeError, ValueError):
                 valid = False
         if not valid:
-            self._record_failure("totp", subject, now, self.totp_failure_limit)
-            with self.database.transaction() as connection:
-                connection.execute(
-                    "UPDATE admin_sessions SET totp_failures = totp_failures + 1, "
-                    "totp_locked_until = CASE WHEN totp_failures + 1 >= ? THEN ? ELSE NULL END "
-                    "WHERE session_hash = ?",
-                    (self.totp_failure_limit, self._timestamp(now + self.failure_lockout), subject),
-                )
+            self._record_failure(
+                "totp",
+                subject,
+                now,
+                self.totp_failure_limit,
+                ip=current.ip,
+                user_agent=current.user_agent,
+                correlation_id=correlation,
+            )
             raise TotpRequired("valid TOTP is required")
 
-        self._clear_failures("totp", subject)
+        totp = pyotp.TOTP(str(row["totp_secret"])) if row is not None else None
+        step = int(now.timestamp()) // (totp.interval if totp is not None else 30)
+        replay = False
         with self.database.transaction() as connection:
             old = connection.execute(
                 "SELECT * FROM admin_sessions WHERE session_hash = ?",
-                (subject,),
+                (self._hash_token(session_id),),
             ).fetchone()
             if old is None:
                 raise SessionExpired("session is invalid or expired")
             absolute = self._parse_timestamp(str(old["absolute_expires_at"]))
             if absolute is None or now >= absolute:
-                connection.execute("DELETE FROM admin_sessions WHERE session_hash = ?", (subject,))
+                connection.execute(
+                    "DELETE FROM admin_sessions WHERE session_hash = ?",
+                    (self._hash_token(session_id),),
+                )
                 raise SessionExpired("session is invalid or expired")
-            new_cookie = secrets.token_urlsafe(32)
-            new_csrf = secrets.token_urlsafe(32)
-            new_expires = min(now + self.idle_timeout, absolute)
-            connection.execute("DELETE FROM admin_sessions WHERE session_hash = ?", (subject,))
-            connection.execute(
-                "INSERT INTO admin_sessions "
-                "(session_hash, username, csrf_hash, expires_at, absolute_expires_at, "
-                "last_seen_at, created_at, last_totp_at, ip_address, user_agent, "
-                "totp_failures, totp_locked_until) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)",
-                (
-                    self._hash_token(new_cookie),
-                    str(old["username"]),
-                    self._hash_token(new_csrf),
-                    self._timestamp(new_expires),
-                    self._timestamp(absolute),
-                    self._timestamp(now),
-                    str(old["created_at"]),
-                    self._timestamp(now),
-                    str(old["ip_address"]),
-                    str(old["user_agent"]),
-                ),
-            )
-            new_row = connection.execute(
-                "SELECT * FROM admin_sessions WHERE session_hash = ?",
-                (self._hash_token(new_cookie),),
+            admin = connection.execute(
+                "SELECT last_totp_step FROM admin_users WHERE username = ?",
+                (current.username,),
             ).fetchone()
+            previous_step = None if admin is None else admin["last_totp_step"]
+            if previous_step is not None and int(previous_step) >= step:
+                replay = True
+                self._audit(
+                    connection,
+                    "totp_replay",
+                    actor=current.username,
+                    ip=current.ip,
+                    user_agent=current.user_agent,
+                    correlation_id=correlation,
+                    outcome="rejected",
+                    metadata={"timestep": step},
+                )
+            else:
+                updated = connection.execute(
+                    "UPDATE admin_users SET last_totp_step = ? WHERE username = ? "
+                    "AND (last_totp_step IS NULL OR last_totp_step < ?)",
+                    (step, current.username, step),
+                )
+                replay = updated.rowcount != 1
+            if replay:
+                new_row = None
+            else:
+                new_cookie = secrets.token_urlsafe(32)
+                new_csrf = secrets.token_urlsafe(32)
+                new_expires = min(now + self.idle_timeout, absolute)
+                connection.execute(
+                    "DELETE FROM admin_sessions WHERE session_hash = ?",
+                    (self._hash_token(session_id),),
+                )
+                connection.execute(
+                    "INSERT INTO admin_sessions "
+                    "(session_hash, username, csrf_hash, expires_at, absolute_expires_at, "
+                    "last_seen_at, created_at, last_totp_at, ip_address, user_agent) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        self._hash_token(new_cookie),
+                        str(old["username"]),
+                        self._hash_token(new_csrf),
+                        self._timestamp(new_expires),
+                        self._timestamp(absolute),
+                        self._timestamp(now),
+                        str(old["created_at"]),
+                        self._timestamp(now),
+                        str(old["ip_address"]),
+                        str(old["user_agent"]),
+                    ),
+                )
+                self._audit(
+                    connection,
+                    "totp_succeeded",
+                    actor=current.username,
+                    ip=current.ip,
+                    user_agent=current.user_agent,
+                    correlation_id=correlation,
+                    outcome="success",
+                    metadata={"timestep": step, "session_rotated": True},
+                )
+                new_row = connection.execute(
+                    "SELECT * FROM admin_sessions WHERE session_hash = ?",
+                    (self._hash_token(new_cookie),),
+                ).fetchone()
+        if replay:
+            raise TotpReplayRejected("TOTP code was already accepted")
+        self._clear_failures("totp", subject, now)
         if new_row is None:
             raise RuntimeError("rotated session was not persisted")
         return self._auth_session_from_row(
@@ -384,26 +603,87 @@ class AuthService:
             headers = getattr(request, "headers", {})
             user_agent = user_agent or headers.get("user-agent", "")
             correlation_id = correlation_id or headers.get("x-correlation-id")
-        if not session_cookie or not csrf_header:
-            raise CsrfValidationError("session cookie and CSRF token are required")
+        correlation = correlation_id or uuid.uuid4().hex
+        if not session_cookie:
+            with self.database.transaction() as connection:
+                self._audit(
+                    connection,
+                    "mutation_auth_failed",
+                    actor=None,
+                    ip=ip,
+                    user_agent=user_agent,
+                    correlation_id=correlation,
+                    outcome="failure",
+                    metadata={"reason": "missing_session"},
+                )
+            raise SessionExpired("session is missing")
+        if not csrf_header:
+            with self.database.transaction() as connection:
+                self._audit(
+                    connection,
+                    "mutation_auth_failed",
+                    actor=None,
+                    ip=ip,
+                    user_agent=user_agent,
+                    correlation_id=correlation,
+                    outcome="failure",
+                    metadata={"reason": "missing_csrf"},
+                )
+            raise CsrfValidationError("CSRF token is required")
         session = self.authenticate(session_cookie)
         row = self._session_row(session_cookie)
         if row is None or not hmac.compare_digest(
             str(row["csrf_hash"]), self._hash_token(csrf_header)
         ):
+            with self.database.transaction() as connection:
+                self._audit(
+                    connection,
+                    "mutation_auth_failed",
+                    actor=session.username,
+                    ip=ip or session.ip,
+                    user_agent=user_agent or session.user_agent,
+                    correlation_id=correlation,
+                    outcome="failure",
+                    metadata={"reason": "invalid_csrf"},
+                )
             raise CsrfValidationError("CSRF token is invalid")
+        with self.database.transaction() as connection:
+            self._audit(
+                connection,
+                "mutation_authenticated",
+                actor=session.username,
+                ip=ip or session.ip,
+                user_agent=user_agent or session.user_agent,
+                correlation_id=correlation,
+                outcome="success",
+            )
         return AuthPrincipal(
             username=session.username,
             session_id=session.session_id,
             ip=session.ip,
             user_agent=session.user_agent,
             last_totp_at=session.last_totp_at,
-            correlation_id=correlation_id or uuid.uuid4().hex,
+            correlation_id=correlation,
         )
 
     def revoke(self, session_id: str) -> None:
         with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT username, ip_address, user_agent FROM admin_sessions "
+                "WHERE session_hash = ?",
+                (self._hash_token(session_id),),
+            ).fetchone()
             connection.execute(
                 "DELETE FROM admin_sessions WHERE session_hash = ?",
                 (self._hash_token(session_id),),
+            )
+            self._audit(
+                connection,
+                "session_revoked",
+                actor=None if row is None else str(row["username"]),
+                ip=None if row is None else str(row["ip_address"]),
+                user_agent=None if row is None else str(row["user_agent"]),
+                correlation_id=uuid.uuid4().hex,
+                outcome="success" if row is not None else "not_found",
+                metadata={"revoked": row is not None},
             )

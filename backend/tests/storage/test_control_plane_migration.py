@@ -149,3 +149,49 @@ def test_migration_executor_accepts_multiple_statements_on_one_line(
         connection.close()
 
     assert {"first_table", "second_table"}.issubset(tables)
+
+
+def test_security_migration_upgrades_an_existing_version3_database(tmp_path: Path) -> None:
+    database = Database(tmp_path / "upgrade.db")
+    schema = Path("backend/goldguard/storage/schema.sql").read_text(encoding="utf-8")
+    migration = Path("backend/goldguard/storage/migrations/003_control_plane.sql").read_text(
+        encoding="utf-8"
+    )
+    with database.connect() as connection:
+        connection.executescript(schema)
+        _execute_migration_script(connection, migration, Path("003_control_plane.sql"))
+        connection.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (3, 'now')"
+        )
+
+    database.migrate()
+    database.migrate()
+
+    with database.connect() as connection:
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(admin_sessions)").fetchall()
+        }
+        admin_columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(admin_users)").fetchall()
+        }
+        failure_tables = {
+            str(row["name"])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        assert connection.execute(
+            "SELECT COUNT(*) FROM schema_migrations WHERE version = 4"
+        ).fetchone()[0] == 1
+
+    assert {
+        "csrf_hash",
+        "absolute_expires_at",
+        "last_seen_at",
+        "ip_address",
+        "user_agent",
+    }.issubset(columns)
+    assert "last_totp_step" in admin_columns
+    assert "admin_auth_failures" in failure_tables
