@@ -79,7 +79,9 @@ SAFE_DEFAULT_V1 = StrategySettings()
 
 def strategy_settings_from_app(settings: object) -> StrategySettings:
     """Copy live app knobs onto the frozen risk preset without loosening hard ceilings."""
-    paper_balance = getattr(settings, "paper_starting_balance", SAFE_DEFAULT_V1.paper_starting_balance)
+    paper_balance = getattr(
+        settings, "paper_starting_balance", SAFE_DEFAULT_V1.paper_starting_balance
+    )
     risk = getattr(settings, "paper_risk_per_trade", SAFE_DEFAULT_V1.risk_per_trade)
     cash = getattr(settings, "paper_cash_utilization", SAFE_DEFAULT_V1.cash_utilization)
     spread = getattr(settings, "maximum_spread_rate", SAFE_DEFAULT_V1.maximum_spread_rate)
@@ -97,4 +99,3 @@ def strategy_settings_from_app(settings: object) -> StrategySettings:
         }
     )
     return StrategySettings.model_validate(payload)
-

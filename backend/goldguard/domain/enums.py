@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from enum import StrEnum
 
 
@@ -53,3 +55,23 @@ class ExitReason(StrEnum):
 class ChecklistAction(StrEnum):
     PASS = "PASS"
     HOLD = "HOLD"
+
+
+class ExecutionMode(StrEnum):
+    PAPER = "paper"
+    LIVE = "live"
+
+
+class StrategyMode(StrEnum):
+    LEGACY = "legacy"
+    AUTONOMOUS = "autonomous"
+
+
+class AutonomousProfileKind(StrEnum):
+    MICRO_TRADE = "micro_trade"
+    STANDARD = "standard"
+
+
+class ProductKind(StrEnum):
+    SPOT = "spot"
+    FUTURES = "futures"
