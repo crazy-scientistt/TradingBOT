@@ -17,6 +17,15 @@ export interface Candle {
   interval?: string;
 }
 
+export interface Quote {
+  symbol?: string;
+  bid: number;
+  ask: number;
+  spread: number;
+  spread_rate: number;
+  observed_at: string;
+}
+
 export interface KpiMetrics {
   equity: number;
   equityCurrency: string;

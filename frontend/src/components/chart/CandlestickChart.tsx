@@ -6,6 +6,7 @@ import {
   IChartApi,
   ISeriesApi,
   LineStyle,
+  PriceScaleMode,
   UTCTimestamp,
   createChart,
 } from 'lightweight-charts';
@@ -250,7 +251,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
   useEffect(() => {
     chartRef.current?.priceScale('right').applyOptions({
-      mode: scaleMode === 'log' ? 1 : 0,
+      mode: scaleMode === 'log' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
     });
   }, [scaleMode]);
 
