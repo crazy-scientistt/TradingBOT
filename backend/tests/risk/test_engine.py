@@ -52,6 +52,21 @@ def test_risk_engine_sizes_exact_decimal_plan_with_atr_stop_and_two_r_target() -
     assert result.genome_hash == "sha256-test-hash-valid"
 
 
+def test_cash_capped_size_never_exceeds_risk_budget() -> None:
+    context = replace(
+        valid_context(),
+        equity=Decimal("10000"),
+        available_cash=Decimal("10000"),
+        entry=Decimal("4600"),
+        atr=Decimal("8"),
+    )
+    result = RiskEngine(SAFE_DEFAULT_V1).plan_entry(context)
+    assert result.approved is True
+    assert result.plan is not None
+    budget = context.equity * SAFE_DEFAULT_V1.risk_per_trade
+    assert result.plan.risk_amount <= budget
+
+
 def test_stop_distance_is_clamped_to_approved_bounds() -> None:
     engine = RiskEngine(SAFE_DEFAULT_V1)
 

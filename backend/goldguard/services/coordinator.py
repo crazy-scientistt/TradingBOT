@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -62,6 +63,7 @@ class TradingCoordinator:
         ai_veto: AiVetoGate | None,
         filters: SymbolFilters | None,
         lease_name: str = "coordinator_worker",
+        blackout_check: Callable[[datetime], bool] | None = None,
     ) -> None:
         self.broker = broker
         self.genome_repo = genome_repo
@@ -72,7 +74,11 @@ class TradingCoordinator:
         self.ai_veto = ai_veto
         self.filters = filters
         self.lease_name = lease_name
+        self.blackout_check = blackout_check
         self._processed_candles: set[str] = set()
+
+    def _event_blackout(self, when: datetime) -> bool:
+        return bool(self.blackout_check(when)) if self.blackout_check is not None else False
 
     def scan_closed_candle(
         self,
@@ -158,7 +164,7 @@ class TradingCoordinator:
                     complete_trade_plan=True,
                     risk_budget_available=True,
                     cooldown_clear=True,
-                    event_blackout=False,
+                    event_blackout=self._event_blackout(quote.observed_at),
                 )
             )
             if checklist_result.action is not ChecklistAction.PASS:
@@ -255,7 +261,7 @@ class TradingCoordinator:
             open_positions=1 if self.broker.position is not None else 0,
             data_healthy=features.sufficient_history and features.contiguous,
             spread_acceptable=features.spread_rate <= 0.0015,
-            event_blackout=False,
+            event_blackout=self._event_blackout(quote.observed_at),
             lease_owned=True,
             promotion_churn=0,
             quota_exhausted=False,

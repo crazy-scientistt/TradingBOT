@@ -83,10 +83,17 @@ class RiskEngine:
             return RiskDecision(False, ("BELOW_MINIMUM_QUANTITY",), genome_hash=context.genome_hash)
         if quantity * context.entry < context.filters.minimum_notional:
             return RiskDecision(False, ("BELOW_MINIMUM_NOTIONAL",), genome_hash=context.genome_hash)
-
+        actual_risk = quantity * actual_distance
+        if actual_risk > risk_budget:
+            capped = floor_to_increment(risk_budget / actual_distance, context.filters.step_size)
+            if capped < context.filters.minimum_quantity or capped * context.entry < context.filters.minimum_notional:
+                return RiskDecision(False, ("INSUFFICIENT_CASH_FOR_RISK",), genome_hash=context.genome_hash)
+            quantity = capped
+            actual_risk = quantity * actual_distance
+        if actual_risk > risk_budget:
+            return RiskDecision(False, ("RISK_BUDGET_EXCEEDED",), genome_hash=context.genome_hash)
         target_unrounded = context.entry + (actual_distance * self.settings.reward_r_multiple)
         target = floor_to_increment(target_unrounded, context.filters.tick_size)
-        actual_risk = quantity * actual_distance
         expected_fees = quantity * context.entry * context.fee_rate * Decimal("2")
         plan = TradePlan(
             entry=context.entry,

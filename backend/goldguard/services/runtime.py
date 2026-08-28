@@ -17,6 +17,7 @@ from goldguard.ai.gemini import AiAssessment, DecisionRequest
 from goldguard.broker.base import ClosedPaperTrade, PaperFill, PaperPosition
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
+from goldguard.context.calendar import CalendarEvent, EconomicCalendar
 from goldguard.context.models import ContextItem, ContextSnapshot, ContextSource
 from goldguard.domain.enums import BotState, ExitReason, OrderSide
 from goldguard.domain.models import Candle, Quote, TradePlan
@@ -39,6 +40,13 @@ from goldguard.strategy.runtime import FeatureSnapshot, GenomeRuntime
 _MARKET_SOURCE_URL = (
     "https://developers.binance.com/docs/binance-spot-api-docs/rest-api/market-data-endpoints"
 )
+
+
+def _calendar_item_summary(event: CalendarEvent, *, active: bool) -> str:
+    flag = "BLACKOUT — " if active else ""
+    when = event.when.strftime("%Y-%m-%d %H:%M UTC")
+    return f"{flag}{event.title} ({event.country} {event.impact}) at {when}"
+
 
 _RUNTIME_ERROR_RECORDED_ATTR = "_goldguard_runtime_error_recorded"
 
@@ -119,6 +127,7 @@ class TradingRuntime:
         ai_veto: AiVetoGate | AsyncAiVetoGate | None = None,
         market_source: str = "startup-degraded",
         market_verified: bool = False,
+        calendar: EconomicCalendar | None = None,
     ) -> None:
         self._database = database
         self._settings = settings
@@ -131,6 +140,7 @@ class TradingRuntime:
         self._latest_quote = latest_quote
         self._market_source = market_source
         self._market_verified = market_verified
+        self._calendar = calendar
         self._degraded_reasons: tuple[str, ...] = ()
         self._event_bus = EventBus(sink=AgentEventRepository(database))
         self._ai_veto = self._wrap_ai_gate(ai_veto)
@@ -143,6 +153,7 @@ class TradingRuntime:
             checklist=checklist,
             ai_veto=self._ai_veto,
             filters=filters,
+            blackout_check=self._is_event_blackout,
         )
         self._paper_account_id = (
             self._ledger_repo.current_paper_session_id()
@@ -154,6 +165,12 @@ class TradingRuntime:
         self._halted = False
         self._restore_runtime_state()
         self._refresh_market_status()
+
+    def _is_event_blackout(self, when: datetime) -> bool:
+        if self._calendar is None:
+            return False
+        flagged, _event = self._calendar.is_blackout(when)
+        return flagged
 
     def configure_market_inputs(
         self,
@@ -635,31 +652,54 @@ class TradingRuntime:
         quote: Quote,
         features: FeatureSnapshot,
     ) -> ContextSnapshot:
+        sources = [
+            ContextSource(
+                url=_MARKET_SOURCE_URL,
+                title="Binance market data endpoints",
+                published_at=None,
+            )
+        ]
+        items = [
+            ContextItem(
+                summary=(
+                    f"Closed {candle.symbol} candle at {candle.close_time.isoformat()} "
+                    f"with spread rate {float(quote.spread_rate):0.6f}; "
+                    f"{'contiguous history' if features.contiguous else 'history gap'}."
+                ),
+                driver="market-data",
+                direction="neutral",
+                severity="low" if features.quote_fresh else "medium",
+                published_at=quote.observed_at,
+                source_indexes=(0,),
+                contradictory=False,
+            )
+        ]
+        if self._calendar is not None:
+            sources.append(
+                ContextSource(
+                    url="https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+                    title="USD high-impact event calendar",
+                    published_at=self._calendar.updated_at,
+                )
+            )
+            blackout, active = self._calendar.is_blackout(quote.observed_at)
+            for event in self._calendar.upcoming(limit=4):
+                items.append(
+                    ContextItem(
+                        summary=_calendar_item_summary(event, active=blackout and active is event),
+                        driver="macro",
+                        direction="neutral",
+                        severity="high" if event.high_impact_usd else "medium",
+                        published_at=event.when,
+                        source_indexes=(1,),
+                        contradictory=False,
+                    )
+                )
         return ContextSnapshot.build(
             fetched_at=quote.observed_at,
-            sources=(
-                ContextSource(
-                    url=_MARKET_SOURCE_URL,
-                    title="Binance market data endpoints",
-                    published_at=None,
-                ),
-            ),
-            items=(
-                ContextItem(
-                    summary=(
-                        f"Closed {candle.symbol} candle at {candle.close_time.isoformat()} "
-                        f"with spread rate {float(quote.spread_rate):0.6f}; "
-                        f"{'contiguous history' if features.contiguous else 'history gap'}."
-                    ),
-                    driver="market-data",
-                    direction="neutral",
-                    severity="low" if features.quote_fresh else "medium",
-                    published_at=quote.observed_at,
-                    source_indexes=(0,),
-                    contradictory=False,
-                ),
-            ),
-            conflict_level="LOW",
+            sources=tuple(sources),
+            items=tuple(items),
+            conflict_level="HIGH" if self._is_event_blackout(quote.observed_at) else "LOW",
         )
 
     @staticmethod

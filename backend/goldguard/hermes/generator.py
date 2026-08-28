@@ -99,7 +99,13 @@ class StrategyProposalGenerator:
 
         # Validate parameter bounds
         validated_changes: dict[str, Decimal] = {}
+        aliases = {
+            "rsi_entry_recovery": "rsi_recovery",
+            "min_atr_rate": "minimum_atr_rate",
+            "max_atr_rate": "maximum_atr_rate",
+        }
         for param_str, val_str in parsed.parameter_changes.items():
+            param_str = aliases.get(param_str, param_str)
             if param_str not in PARAMETER_BOUNDS:
                 raise ProposalValidationError(f"Unknown parameter: {param_str}")
             try:
@@ -131,8 +137,8 @@ class StrategyProposalGenerator:
                         right=new_vol,
                     )
 
-        if "rsi_entry_recovery" in validated_changes:
-            new_rsi = validated_changes["rsi_entry_recovery"]
+        if "rsi_recovery" in validated_changes:
+            new_rsi = validated_changes["rsi_recovery"]
             for i, cond in enumerate(new_entry):
                 if isinstance(cond.left, IndicatorSpec) and cond.left.indicator == "rsi":
                     new_entry[i] = Condition(
@@ -141,13 +147,13 @@ class StrategyProposalGenerator:
                         right=new_rsi,
                     )
 
-        if "min_atr_rate" in validated_changes or "max_atr_rate" in validated_changes:
+        if "minimum_atr_rate" in validated_changes or "maximum_atr_rate" in validated_changes:
             new_guard = GuardBounds(
                 min_atr_rate=validated_changes.get(
-                    "min_atr_rate", parent_genome.guard.min_atr_rate
+                    "minimum_atr_rate", parent_genome.guard.min_atr_rate
                 ),
                 max_atr_rate=validated_changes.get(
-                    "max_atr_rate", parent_genome.guard.max_atr_rate
+                    "maximum_atr_rate", parent_genome.guard.max_atr_rate
                 ),
                 max_spread_rate=parent_genome.guard.max_spread_rate,
             )

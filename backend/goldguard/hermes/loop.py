@@ -77,6 +77,8 @@ class HermesResearchLoop:
         self.promotion_controller = promotion_controller
         self.config = config or HermesLoopConfig()
         self.consecutive_failures = 0
+        self._steps_date = ""
+        self._steps_today = 0
 
     async def step(
         self,
@@ -99,6 +101,25 @@ class HermesResearchLoop:
                 quota_used=self.quota_repo.get_usage(date_str),
                 gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
             )
+
+        if self._steps_date != date_str:
+            self._steps_date = date_str
+            self._steps_today = 0
+        if self._steps_today >= self.config.max_iterations_per_day:
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="quota_exhausted",
+                quota_used=self.quota_repo.get_usage(date_str),
+                gate_results={"reason": "daily hermes iteration cap reached"},
+            )
+        if self._is_circuit_breaker_tripped():
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="circuit_open",
+                quota_used=self.quota_repo.get_usage(date_str),
+                circuit_breaker_tripped=True,
+            )
+        self._steps_today += 1
 
         # 1. Budget and Quota check
         usage = self.quota_repo.get_usage(date_str)

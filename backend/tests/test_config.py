@@ -30,7 +30,7 @@ def test_safe_paper_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     assert settings.symbol == "PAXGUSDT"
     assert settings.entry_timeframe == "15m"
     assert settings.regime_timeframe == "1h"
-    assert settings.paper_starting_balance == Decimal("100")
+    assert settings.paper_starting_balance == Decimal("10000")
     assert settings.paper_risk_per_trade == Decimal("0.005")
     assert settings.live_capability_enabled is False
     assert settings.live_max_capital == Decimal("0")

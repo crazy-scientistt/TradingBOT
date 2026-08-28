@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # the deployment region is eligible.
     market_base_url: str = "https://data-api.binance.vision"
 
-    paper_starting_balance: Decimal = Field(default=Decimal("100"), gt=0)
+    paper_starting_balance: Decimal = Field(default=Decimal("10000"), gt=0)
     paper_risk_per_trade: Decimal = Field(
         default=Decimal("0.005"),
         ge=Decimal("0.0005"),

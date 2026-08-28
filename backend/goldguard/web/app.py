@@ -39,10 +39,13 @@ from goldguard.backtest.engine import BacktestEngine, FrictionConfig
 from goldguard.backtest.walk_forward import WalkForwardHarness
 from goldguard.broker.paper import PaperBroker
 from goldguard.config import Settings
+from goldguard.context.calendar import EconomicCalendar
 from goldguard.context.playbook import ProfessionalChecklist
-from goldguard.domain.defaults import SAFE_DEFAULT_V1
+from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
 from goldguard.hermes.generator import StrategyProposalGenerator
-from goldguard.hermes.loop import HermesResearchLoop
+from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
+from goldguard.market.binance import BinancePublicClient
+from goldguard.market.dataset_service import DatasetService
 from goldguard.market.live_stream import CHART_INTERVALS, candle_payload
 from goldguard.memory.engine import MemoryBank
 from goldguard.observability.events import AgentEvent
@@ -115,6 +118,9 @@ _promotion_repo: PromotionRepository | None = None
 _promotion_controller: PromotionController | None = None
 _hermes_loop: HermesResearchLoop | None = None
 _hermes_http_client: httpx.AsyncClient | None = None
+_calendar: EconomicCalendar | None = None
+_dataset_service: DatasetService | None = None
+_background_tasks: list[asyncio.Task[None]] = []
 
 # Probe results live in memory only: the providers table has no latency column, and a
 # latency measured in a previous process is not a fact about this one.
@@ -168,16 +174,11 @@ def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
     shadow_days = 0
     if opened:
         shadow_days = max((datetime.now(UTC) - min(opened)).days, 0)
-    # Slippage is only accepted when paper fills exist to measure; an empty history is
-    # insufficient evidence and therefore cannot pass the shadow gate.
+    candles, dataset_id = _research_candles(market)
     return EvidenceDataset(
-        dataset_id=(
-            f"app:{market.source}:{market.observed_at.isoformat()}"
-            if market.observed_at
-            else f"app:{market.source}:unobserved"
-        ),
-        verified=market.verified,
-        candles_15m=tuple(market.candles_15m),
+        dataset_id=dataset_id,
+        verified=True if dataset_id.startswith("history:") else market.verified,
+        candles_15m=tuple(candles),
         shadow=ShadowEvidence(
             days=shadow_days,
             net_pnl=net_pnl,
@@ -185,6 +186,76 @@ def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
             slippage_acceptable=bool(closed),
         ),
     )
+
+
+def _research_candles(market: MarketSnapshot) -> tuple[tuple[Any, ...], str]:
+    settings = _settings
+    if _dataset_service is not None and settings is not None:
+        try:
+            history = _dataset_service.load_verified(settings.symbol, "15m")
+        except Exception:
+            history = ()
+        if len(history) >= 100:
+            return history, f"history:{settings.symbol}:verified"
+    return tuple(market.candles_15m), (
+        f"app:{market.source}:{market.observed_at.isoformat()}"
+        if market.observed_at
+        else f"app:{market.source}:unobserved"
+    )
+
+
+async def _calendar_worker() -> None:
+    while True:
+        if _calendar is not None:
+            await _calendar.refresh()
+        await asyncio.sleep(15 * 60)
+
+
+async def _dataset_worker() -> None:
+    global _dataset_service
+    settings = _settings
+    if settings is None:
+        return
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        service = DatasetService(
+            BinancePublicClient(http_client=client, base_url=settings.market_base_url),
+            settings.data_dir,
+        )
+        _dataset_service = service
+        end = datetime.now(UTC)
+        start = end - timedelta(days=365 * 3)
+        try:
+            logger.info("Bootstrapping 3-year %s dataset from %s", settings.symbol, start.date())
+            await service.bootstrap(settings.symbol, start, end)
+            logger.info("3-year dataset verified for %s", settings.symbol)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Dataset bootstrap failed: %s", exc)
+        while True:
+            await asyncio.sleep(24 * 60 * 60)
+
+
+async def _hermes_worker() -> None:
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if _hermes_loop is not None and _is_full_autonomy():
+                market = _market()
+                candles, _dataset_id = _research_candles(market)
+                if len(candles) >= 100:
+                    result = await _hermes_loop.step(
+                        candles_15m=candles,
+                        market_summary=market.detail or "",
+                        dataset=_hermes_dataset(market),
+                        now=datetime.now(UTC),
+                    )
+                    logger.info("Hermes background step: %s", result.status)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Hermes background step failed: %s", exc)
+        await asyncio.sleep(3 * 60 * 60)
 
 
 def _observe_canary() -> dict[str, Any]:
@@ -341,10 +412,14 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
     global _ingestion, _provider_http_client, _hermes_http_client
     global _promotion_controller, _hermes_loop
+    global _calendar, _dataset_service, _background_tasks
 
     _promotion_controller = None
     _hermes_loop = None
     _hermes_http_client = None
+    _calendar = EconomicCalendar()
+    _dataset_service = None
+    _background_tasks = []
 
     try:
         _settings = Settings()
@@ -409,9 +484,25 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                     role, "opencodex", "google-antigravity/gemini-3.7-flash", pinned=True
                 )
 
-        if _ledger_repo.current_paper_session_id() is None:
+        current_session = _ledger_repo.current_paper_session_id()
+        if current_session is None:
             session_id = _ledger_repo.create_paper_session(_settings.paper_starting_balance)
             logger.info("Created initial paper session: %s", session_id)
+        else:
+            session = _ledger_repo.get_paper_session(current_session)
+            trades = _ledger_repo.list_trades(current_session)
+            if (
+                session is not None
+                and not trades
+                and session.initial_balance != _settings.paper_starting_balance
+            ):
+                session_id = _ledger_repo.create_paper_session(_settings.paper_starting_balance)
+                logger.info(
+                    "Reset unused paper session from %s to %s: %s",
+                    session.initial_balance,
+                    _settings.paper_starting_balance,
+                    session_id,
+                )
     except Exception as exc:
         logger.error("Database migration error (degraded mode): %s", exc, exc_info=True)
 
@@ -420,7 +511,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         fee_rate=_settings.taker_fee_rate,
         slippage_rate=_settings.slippage_rate,
     )
-    _risk_engine = RiskEngine(SAFE_DEFAULT_V1)
+    _risk_engine = RiskEngine(strategy_settings_from_app(_settings))
     _runtime = GenomeRuntime()
     _backtest_engine = BacktestEngine(
         FrictionConfig(
@@ -475,6 +566,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             ai_veto=ai_veto,
             market_source="startup-degraded",
             market_verified=False,
+            calendar=_calendar,
         )
 
     # Hermes and promotion are built from the same durable repositories as the runtime.
@@ -531,6 +623,11 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             memory_bank=MemoryBank(_reflection_repo),
             autonomy_repo=_autonomy_repo,
             promotion_controller=_promotion_controller,
+            config=HermesLoopConfig(
+                max_iterations_per_day=8,
+                max_backtest_calls=_settings.research_backtest_max_per_day,
+                max_web_calls=_settings.research_web_calls_max_per_day,
+            ),
         )
 
     if _trading_runtime is not None and _candle_repo is not None:
@@ -541,8 +638,20 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         )
         await _ingestion.start()
 
+    if _settings is not None and _settings.environment != "test":
+        _background_tasks = [
+            asyncio.create_task(_calendar_worker(), name="goldguard-calendar"),
+            asyncio.create_task(_dataset_worker(), name="goldguard-dataset"),
+            asyncio.create_task(_hermes_worker(), name="goldguard-hermes"),
+        ]
+
     yield
 
+    for task in _background_tasks:
+        task.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await task
+    _background_tasks = []
     if _ingestion is not None:
         await _ingestion.aclose()
     if _trading_runtime is not None:
@@ -1033,6 +1142,17 @@ async def live_context() -> dict[str, Any]:
     snapshot = ledger.latest_context_snapshot()
     items = snapshot["summary"].get("items", []) if snapshot else []
     if not snapshot or not items:
+        if _calendar is not None:
+            rows = _calendar.as_context_rows()
+            if rows:
+                return _env(
+                    rows,
+                    availability="available" if _calendar.detail is None else "degraded",
+                    source=_calendar.source,
+                    observed_at=_calendar.updated_at,
+                    stale=_calendar.updated_at is None,
+                    detail=_calendar.detail or "economic calendar",
+                )
         return _env(
             [],
             availability="unavailable",
@@ -1159,7 +1279,8 @@ async def run_backtest(req: BacktestRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid genome format: {exc}") from exc
 
     market = _market()
-    if not market.verified or len(market.candles_15m) < 100 or len(market.candles_1h) < 50:
+    candles, dataset_id = _research_candles(market)
+    if len(candles) < 100 and (not market.verified or len(market.candles_15m) < 100):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -1169,13 +1290,13 @@ async def run_backtest(req: BacktestRequest) -> dict[str, Any]:
                 "Bootstrap the dataset before backtesting."
             ),
         )
-
+    settings = _require(_settings, "settings")
     try:
         result = engine.run(
             genome=genome,
-            candles_15m=list(market.candles_15m),
+            candles_15m=list(candles),
             candles_1h=list(market.candles_1h),
-            initial_equity=Decimal("100"),
+            initial_equity=settings.paper_starting_balance,
         )
     except Exception as exc:
         logger.error("Backtest execution failed: %s", exc, exc_info=True)
@@ -1249,14 +1370,15 @@ async def hermes_step() -> dict[str, Any]:
             detail="autonomy is revoked; re-enable autonomy before running research steps",
         )
     market = _market()
-    if not market.verified:
+    candles, dataset_id = _research_candles(market)
+    if len(candles) < 100 and not market.verified:
         raise HTTPException(
             status_code=409,
             detail="Hermes requires verified market candles; ingestion has not supplied them",
         )
     dataset = _hermes_dataset(market)
     result = await loop.step(
-        candles_15m=market.candles_15m,
+        candles_15m=candles,
         market_summary=market.detail or "",
         dataset=dataset,
         now=datetime.now(UTC),

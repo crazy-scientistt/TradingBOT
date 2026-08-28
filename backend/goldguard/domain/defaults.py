@@ -75,3 +75,26 @@ class StrategySettings(BaseModel):
 
 
 SAFE_DEFAULT_V1 = StrategySettings()
+
+
+def strategy_settings_from_app(settings: object) -> StrategySettings:
+    """Copy live app knobs onto the frozen risk preset without loosening hard ceilings."""
+    paper_balance = getattr(settings, "paper_starting_balance", SAFE_DEFAULT_V1.paper_starting_balance)
+    risk = getattr(settings, "paper_risk_per_trade", SAFE_DEFAULT_V1.risk_per_trade)
+    cash = getattr(settings, "paper_cash_utilization", SAFE_DEFAULT_V1.cash_utilization)
+    spread = getattr(settings, "maximum_spread_rate", SAFE_DEFAULT_V1.maximum_spread_rate)
+    daily = getattr(settings, "daily_loss_halt", SAFE_DEFAULT_V1.daily_loss_halt)
+    drawdown = getattr(settings, "emergency_drawdown_halt", SAFE_DEFAULT_V1.emergency_drawdown_halt)
+    payload = SAFE_DEFAULT_V1.model_dump()
+    payload.update(
+        {
+            "paper_starting_balance": paper_balance,
+            "risk_per_trade": risk,
+            "cash_utilization": min(cash, Decimal("0.95")),
+            "maximum_spread_rate": spread,
+            "daily_loss_halt": daily,
+            "emergency_drawdown_halt": drawdown,
+        }
+    )
+    return StrategySettings.model_validate(payload)
+
