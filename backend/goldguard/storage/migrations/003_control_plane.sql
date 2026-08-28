@@ -58,9 +58,26 @@ CREATE TABLE admin_users (
 CREATE TABLE admin_sessions (
     session_hash TEXT PRIMARY KEY,
     username TEXT NOT NULL REFERENCES admin_users(username),
+    csrf_hash TEXT NOT NULL,
     expires_at TEXT NOT NULL,
+    absolute_expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now')),
-    last_totp_at TEXT
+    last_totp_at TEXT,
+    ip_address TEXT NOT NULL,
+    user_agent TEXT NOT NULL,
+    totp_failures INTEGER NOT NULL DEFAULT 0,
+    totp_locked_until TEXT
+);
+
+CREATE TABLE admin_auth_failures (
+    kind TEXT NOT NULL CHECK (kind IN ('password', 'totp')),
+    subject TEXT NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT,
+    last_failed_at TEXT,
+    locked_until TEXT,
+    PRIMARY KEY (kind, subject)
 );
 
 CREATE TABLE security_events (
