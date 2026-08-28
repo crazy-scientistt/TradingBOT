@@ -36,3 +36,12 @@ class AutonomousProfile(BaseModel):
     futures_pairs: tuple[str, ...]
     risk: RiskCeilings
     notifications: NotificationPreferences = NotificationPreferences()
+
+
+class ActiveProfile(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    profile: AutonomousProfile
+    hash: str
+    created_at: str
+    created_by: str
+    correlation_id: str

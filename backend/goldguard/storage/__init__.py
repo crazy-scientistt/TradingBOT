@@ -1,6 +1,7 @@
 """SQLite persistence and immutable ledger repositories."""
 
 from goldguard.storage.database import Database
+from goldguard.storage.profile_repository import ProfileRepository
 from goldguard.storage.repositories import (
     AgentEventRepository,
     EvaluationRepository,
@@ -21,6 +22,7 @@ __all__ = [
     "GenomeRepository",
     "LedgerRepository",
     "PaperSession",
+    "ProfileRepository",
     "ProviderRepository",
     "ProviderRow",
     "QuotaRepository",
