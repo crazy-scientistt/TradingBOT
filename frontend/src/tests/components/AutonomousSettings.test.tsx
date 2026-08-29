@@ -19,9 +19,9 @@ const spotOnlyProfile: AutonomousProfileView = {
 
 describe('AutonomousSettings', () => {
   it('shows USDT equivalents beneath percentage ceilings', async () => {
-    render(<AutonomousSettings equityUsdt="10000" />);
-    expect(await screen.findByText('50.00 USDT maximum for one trade')).toBeInTheDocument();
-    expect(screen.getByText('2,000.00 USDT maximum total exposure')).toBeInTheDocument();
+    render(<AutonomousSettings equityUsdt="100" />);
+    expect(await screen.findByText('0.50 USDT maximum for one trade')).toBeInTheDocument();
+    expect(screen.getByText('20.00 USDT maximum total exposure')).toBeInTheDocument();
   });
 
   it('does not invent equity when none is observed', async () => {

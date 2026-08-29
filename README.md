@@ -7,6 +7,16 @@
 
 GoldGuard is an autonomous quantitative algorithmic trading engine designed for PAXG/USDT (Tokenized Physical Gold on Binance Spot). It blends deterministic state machines, pure AST strategy genomes, real-time macro context ingestion, multi-provider LLM veto gating via OpenCodex Proxy (`google-antigravity/gemini-3.7-flash` high effort reasoning), and an isolated autonomous strategy research loop (Hermes).
 
+**Local development is paper-only.** On your PC:
+
+```bash
+sh scripts/bootstrap_local_env.sh   # once
+sh scripts/start_local.sh
+python scripts/verify_local_stack.py
+```
+
+Open http://localhost:8000 (GoldGuard), http://localhost:10100 (OpenCodex — add Antigravity/Gemini). Live stays disarmed. Full steps: [docs/operations/local-opencodex.md](docs/operations/local-opencodex.md).
+
 ---
 
 ## 🏛 System Architecture

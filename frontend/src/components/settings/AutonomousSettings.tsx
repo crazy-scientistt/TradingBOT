@@ -20,7 +20,7 @@ const DEFAULT_PROFILE: AutonomousProfileView = {
   futures_enabled: true,
   risk: {
     max_capital_per_trade_rate: '0.005',
-    max_futures_leverage: 5,
+    max_futures_leverage: 2,
     max_total_exposure_rate: '0.20',
     rolling_24h_loss_limit_rate: '0.03',
   },

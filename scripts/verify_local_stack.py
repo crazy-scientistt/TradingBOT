@@ -112,7 +112,10 @@ def main() -> int:
             failed = True
 
     if model_count == 0 and ocx_ok:
-        print("  [INFO] OpenCodex is up but listed no models. Add Gemini in http://localhost:10100")
+        print("  [INFO] OpenCodex is up but listed no models. Add Antigravity/Gemini at http://localhost:10100")
+
+    print("  [INFO] envelope: paper · 100 USDT if GOLDGUARD_PAPER_STARTING_BALANCE=100 · live disarmed")
+    print("  [INFO] do not set GOLDGUARD_MODE=live")
 
     return 1 if failed else 0
 

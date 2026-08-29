@@ -1,15 +1,28 @@
 # Run OpenCodex locally on your PC
 
-Paper-only. Live stays disarmed. You do not need Binance keys to confirm
-OpenCodex, Hermes, and GoldGuard talk to each other.
+**Development / paper only.** Live stays disarmed. You do not need Binance
+trade keys to confirm OpenCodex, Hermes, and GoldGuard talk to each other.
+
+This is the stack to test on your machine. The Grok preview desk is a
+separate in-browser copy; Compose serves the GoldGuard UI at port 8000.
 
 ## What you get
 
 | Service | URL | Purpose |
 |---------|-----|---------|
-| GoldGuard | http://localhost:8000 | Paper cockpit and API |
-| OpenCodex | http://localhost:10100 | AI gateway dashboard. Add Gemini / Antigravity here |
-| Hermes | http://localhost:8642/health | Isolated researcher. Private on Railway; exposed here so you can probe it |
+| GoldGuard | http://localhost:8000 | Paper cockpit and API (bundled frontend) |
+| OpenCodex | http://localhost:10100 | AI gateway. Add Antigravity / Gemini here |
+| Hermes | http://localhost:8642/health | Isolated researcher |
+
+Local paper envelope:
+
+- Mode `paper`, `GOLDGUARD_LIVE_CAPABILITY_ENABLED=false`
+- Starting book **100 USDT** (override with `GOLDGUARD_PAPER_STARTING_BALANCE`)
+- Entries on **15m**, regime on **1h**
+- Spot `PAXGUSDT` cash 1x
+- Futures `BTCUSDT` + `SOLUSDT`, isolated, **≤2x** (ceiling is not the default)
+- `ETHUSDT` new entries off
+- Hermes SOUL: HOLD in chop, no 1h fade, cost gate, no orders
 
 GoldGuard never stores provider keys. Keys live only in OpenCodex.
 
@@ -17,7 +30,7 @@ GoldGuard never stores provider keys. Keys live only in OpenCodex.
 
 - Docker Desktop (Windows, macOS, or Linux)
 - This repository cloned
-- Optional: a Gemini / Google AI Studio key, entered in the OpenCodex dashboard (never committed)
+- Optional: Antigravity Google login or a Gemini key in the OpenCodex dashboard (never committed)
 
 ## One-time env file
 
@@ -34,9 +47,17 @@ sh scripts/bootstrap_local_env.sh
 ```
 
 This creates `.env.autonomous` with random tokens. It will not overwrite an
-existing file. Optional: add `GEMINI_API_KEY=...` to that file so OpenCodex
-can list Gemini models on first boot. You can also paste the key later in
+existing file. Optional: add `GEMINI_API_KEY=...` so OpenCodex can list
+Gemini models on first boot. You can also paste the key later at
 http://localhost:10100.
+
+If you already have `.env.autonomous` from an older checkout, add:
+
+```
+GOLDGUARD_PAPER_STARTING_BALANCE=100
+GOLDGUARD_LIVE_CAPABILITY_ENABLED=false
+GOLDGUARD_MODE=paper
+```
 
 ## Start the three services
 
@@ -58,8 +79,7 @@ Equivalent compose command:
 docker compose -f docker-compose.local.yml --env-file .env.autonomous up --build
 ```
 
-First start pulls the Hermes image and builds OpenCodex + GoldGuard. That can
-take several minutes.
+First start pulls Hermes and builds OpenCodex + GoldGuard. That can take several minutes.
 
 ## Confirm it works
 
@@ -67,59 +87,19 @@ take several minutes.
 python scripts/verify_local_stack.py
 ```
 
-Expected when OpenCodex is up:
+Expected:
 
 - GoldGuard `/api/health/live` → alive
 - GoldGuard `/api/health/ready` → ready
 - OpenCodex `/healthz` → ok
 - Hermes `/health` → ok (research degrades if this fails; paper trading still runs)
 - `GET /api/diagnostics` lists OpenCodex / Hermes as pass or a named blocker
-- `GET /api/providers/catalog` is empty until you add a provider in OpenCodex,
-  then lists real model ids. It never invents models.
+- `GET /api/providers/catalog` is empty until you add a provider in OpenCodex
 
-In the GoldGuard UI, open **Providers** and click **Test connection**.
+In the GoldGuard UI: **Providers → Test connection**. Then **Start** paper.
+Do not paste Binance secrets in chat.
 
-## Add a model
+## What is not ready
 
-1. Open http://localhost:10100
-2. Sign in with the OpenCodex token from `.env.autonomous` (`OPENCODEX_API_AUTH_TOKEN`)
-3. Add Google / Gemini / Antigravity
-4. Refresh GoldGuard Providers. Models appear from `/v1/models`
-5. Pick the same model for trade veto, news reader, and Hermes
-
-Until a model exists, entries that need an AI veto fail closed. Protective
-exits do not wait on AI.
-
-## Native OpenCodex (no Docker) — optional
-
-If Docker is unavailable you can run only the gateway:
-
-```bash
-cd gateway
-export OPENCODEX_API_AUTH_TOKEN=dev-token
-bun install
-sh start.sh
-```
-
-Then point GoldGuard at `OPENCODEX_BASE_URL=http://127.0.0.1:10100`. Hermes
-still needs Docker or a native Hermes install.
-
-## Stop
-
-```bash
-docker compose -f docker-compose.local.yml --env-file .env.autonomous down
-```
-
-Volumes keep OpenCodex provider config and the paper ledger. Remove them only
-if you want a clean slate:
-
-```bash
-docker compose -f docker-compose.local.yml --env-file .env.autonomous down -v
-```
-
-## What this does not do
-
-- Does not arm Live
-- Does not deploy Railway
-- Does not require Telegram or Binance keys
-- Does not claim profitability
+Live arming, Telegram, TOTP, and sealed holdout. Qualify will HOLD those on
+purpose. Overnight paper on 15m is the local test, not a 1m trade quota.

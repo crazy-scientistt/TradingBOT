@@ -16,7 +16,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
-  const [balance, setBalance] = useState('10000');
+  const [balance, setBalance] = useState('100');
   const [riskPercent, setRiskPercent] = useState('0.5');
 
   useEffect(() => {
@@ -139,7 +139,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           {saved && <div role="status" style={{ color: '#10b981', fontSize: '12px' }}>{saved}</div>}
 
           <AutonomousSettings
-            equityUsdt={balance || '10000'}
+            equityUsdt={balance || '100'}
             initialProfile={{
               execution_mode: isPaperMode ? 'paper' : 'live',
               spot_enabled: true,
