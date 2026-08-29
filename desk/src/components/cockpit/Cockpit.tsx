@@ -584,6 +584,7 @@ function MarketView() {
 
 function LastCandlePanel() {
   const candles = useDesk((s) => s.candles);
+  const patterns = useDesk((s) => s.patterns);
   const last = candles[candles.length - 1];
   return (
     <div className="px-5 py-4">
@@ -598,6 +599,23 @@ function LastCandlePanel() {
         </dl>
       ) : (
         <p className="mt-3 text-sm text-muted">No candle has been observed yet.</p>
+      )}
+      <div className="mt-5 text-sm font-medium">Detected patterns</div>
+      <p className="mt-1 text-2xs text-subtle">OHLC rules (ChartSchool / BabyPips). Not image vision.</p>
+      {patterns.length === 0 ? (
+        <p className="mt-2 text-xs text-muted">Waiting for 15m structure.</p>
+      ) : (
+        <ul className="mt-2 space-y-2">
+          {patterns.map((p) => (
+            <li key={p.id} className="rounded-sm bg-bg-subtle px-2 py-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-medium">{p.name}</span>
+                <span className="text-2xs uppercase tracking-wider text-muted">{p.side}</span>
+              </div>
+              <p className="mt-1 text-2xs leading-relaxed text-muted">{p.detail}</p>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

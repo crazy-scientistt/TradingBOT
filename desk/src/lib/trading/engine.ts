@@ -1,4 +1,5 @@
 import { atr, ema, last, rsi } from "./indicators";
+import { patternAllows, scanPatterns } from "./patterns";
 import {
   ATR_STOP_MULT,
   ATR_TP_MULT,
@@ -71,6 +72,7 @@ export function emptyState(startingCash = STARTING_CASH): EngineState {
     ],
     evidence: seedEvidence(),
     genomes: seedGenomes(),
+    patterns: [],
     feedSource: "synthetic",
     lastTickAt: null,
     error: null,
@@ -147,6 +149,7 @@ export function hydrate(state: EngineState, candles: Candle[], source: Quote["so
       ...state,
       candles,
       quote,
+      patterns: scanPatterns(candles),
       feedSource: source,
       equity,
       peakEquity: Math.max(state.peakEquity, equity),
@@ -191,10 +194,12 @@ export function tick(state: EngineState, now = Date.now(), incoming?: Candle, mo
 
   const candles = [...state.candles.slice(-399), next];
   const quote = quoteFrom(next, state.feedSource);
+  const patterns = scanPatterns(candles);
   let nextState: EngineState = {
     ...state,
     candles,
     quote,
+    patterns,
     lastTickAt: now,
     equity: markToMarket({ ...state, candles, quote }, next.c),
   };
@@ -281,12 +286,22 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
     r < 64 &&
     candle.c >= fast * 0.994 &&
     candle.c <= slow * 1.003;
-  const side: Side | null = longSetup ? "LONG" : shortSetup ? "SHORT" : null;
+  let side: Side | null = longSetup ? "LONG" : shortSetup ? "SHORT" : null;
+  const hits = state.patterns.length ? state.patterns : scanPatterns(state.candles);
+  if (side) {
+    const gate = patternAllows(hits, side);
+    if (!gate.ok) {
+      if (state.candles.length % 8 === 0) {
+        return mark({ ...state, patterns: hits }, "market", "HOLD", gate.reason);
+      }
+      return { ...state, patterns: hits };
+    }
+  }
   if (!side) {
     if (state.candles.length % 8 === 0) {
-      return mark(state, "market", "HOLD", `No qualified ${state.symbol} setup. Autonomous default is HOLD.`);
+      return mark({ ...state, patterns: hits }, "market", "HOLD", `No qualified ${state.symbol} setup. Autonomous default is HOLD.`);
     }
-    return state;
+    return { ...state, patterns: hits };
   }
   const reduce = state.evidence.some((e) => e.disposition === "REDUCE" && e.source !== "Forum commentary");
   const stopDist = Math.max(a * ATR_STOP_MULT, candle.c * MIN_STOP_PCT);
@@ -347,6 +362,7 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
   return mark(
     {
       ...state,
+      patterns: hits,
       position: pos,
       cash: state.cash - margin - fee,
       fees: state.fees + fee,

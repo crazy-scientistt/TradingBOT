@@ -125,6 +125,15 @@ export type EvidenceItem = {
   url: string;
 };
 
+export type PatternHit = {
+  id: string;
+  name: string;
+  kind: "continuation" | "reversal" | "structure";
+  side: Side | "FLAT";
+  score: number;
+  detail: string;
+};
+
 export type Genome = {
   id: string;
   name: string;
@@ -161,6 +170,7 @@ export type EngineState = {
   events: AgentEvent[];
   evidence: EvidenceItem[];
   genomes: Genome[];
+  patterns: PatternHit[];
   feedSource: Quote["source"];
   lastTickAt: number | null;
   error: string | null;

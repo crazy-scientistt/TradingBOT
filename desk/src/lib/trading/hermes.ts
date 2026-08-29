@@ -15,7 +15,7 @@ export const runHermesResearch = createServerFn({ method: "POST" }).handler(asyn
     product: "SPOT",
     partition: "development",
     instruction:
-      "Propose exactly one bounded paper-only genome tweak as JSON: {proposal_id, parent_version, change, rationale, evidence_refs}. No orders. No secrets. Holdout stays sealed.",
+      "You see OHLC + detected patterns, not screenshots. Propose one bounded paper-only genome tweak as JSON: {proposal_id, parent_version, change, rationale, evidence_refs, keep_hold_when}. Respect 15m engine, 1h bias, cost gate, no 1m micro, no ETH entries, no orders.",
   };
   try {
     const res = await fetch("http://127.0.0.1:8642/v1/chat/completions", {
