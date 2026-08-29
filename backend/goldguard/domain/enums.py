@@ -44,6 +44,45 @@ class OrderSide(StrEnum):
     SELL = "SELL"
 
 
+class PositionSide(StrEnum):
+    LONG = "LONG"
+    SHORT = "SHORT"
+    BOTH = "BOTH"
+
+
+class OrderType(StrEnum):
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP_MARKET = "STOP_MARKET"
+    TAKE_PROFIT_MARKET = "TAKE_PROFIT_MARKET"
+
+
+class OrderStatus(StrEnum):
+    PENDING = "PENDING"
+    OPEN = "OPEN"
+    FILLED = "FILLED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+
+
+class MarginMode(StrEnum):
+    ISOLATED = "isolated"
+    CROSS = "cross"
+
+
+class PositionStatus(StrEnum):
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
+class TimeInForce(StrEnum):
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
+
+
 class ExitReason(StrEnum):
     STOP_LOSS = "STOP_LOSS"
     TAKE_PROFIT = "TAKE_PROFIT"
