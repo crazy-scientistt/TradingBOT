@@ -1,7 +1,7 @@
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import json
 import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
