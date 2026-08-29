@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Annotated
 
-from fastapi import Cookie, Header, HTTPException, Request, Response
+from fastapi import Cookie, Depends, Header, HTTPException, Request, Response
 
 from goldguard.security.models import (
     AuthenticationThrottled,
@@ -48,6 +49,22 @@ def require_mutation_auth(
         raise HTTPException(status_code=401, detail="authentication required") from exc
     except (CsrfValidationError, RecentTotpRequired, TotpRequired) as exc:
         raise HTTPException(status_code=403, detail="forbidden") from exc
+
+
+def require_sensitive_mutation_auth(
+    principal: Annotated[AuthPrincipal, Depends(require_mutation_auth)],
+) -> AuthPrincipal:
+    try:
+        get_auth_service().require_recent_totp(
+            principal.session_id,
+            max_age=timedelta(minutes=5),
+            correlation_id=principal.correlation_id,
+        )
+    except RecentTotpRequired as exc:
+        raise HTTPException(status_code=403, detail="recent 2FA verification required") from exc
+    except (SessionExpired, AuthenticationThrottled) as exc:
+        raise HTTPException(status_code=401, detail="authentication required") from exc
+    return principal
 
 
 def set_session_cookie(

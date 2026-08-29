@@ -97,6 +97,16 @@ class Settings(BaseSettings):
         default_factory=lambda: SecretStr(secrets.token_urlsafe(32)),
         repr=False,
     )
+    admin_bootstrap_password: SecretStr | None = Field(
+        default=None,
+        validation_alias="GOLDGUARD_ADMIN_PASSWORD",
+        repr=False,
+    )
+    admin_totp_secret: SecretStr | None = Field(
+        default=None,
+        validation_alias="GOLDGUARD_ADMIN_TOTP_SECRET",
+        repr=False,
+    )
     binance_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="BINANCE_API_KEY",
@@ -118,8 +128,21 @@ class Settings(BaseSettings):
             return tuple(str(origin).strip() for origin in value if str(origin).strip())
         return ()
 
+    @field_validator("admin_bootstrap_password", "admin_totp_secret", mode="before")
+    @classmethod
+    def normalize_optional_bootstrap_secret(cls, value: object) -> object:
+        raw = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if isinstance(raw, str) and not raw.strip():
+            return None
+        return value
+
     @model_validator(mode="after")
     def validate_safety_gates(self) -> Self:
+        if (self.admin_bootstrap_password is None) != (self.admin_totp_secret is None):
+            raise ValueError(
+                "GOLDGUARD_ADMIN_PASSWORD and GOLDGUARD_ADMIN_TOTP_SECRET "
+                "must be configured together"
+            )
         if self.live_capability_enabled and self.live_max_capital <= 0:
             raise ValueError("live capability requires a positive live capital ceiling")
         if self.mode == "live":

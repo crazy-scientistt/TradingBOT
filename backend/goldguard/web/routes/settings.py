@@ -12,7 +12,10 @@ from goldguard.services.settings_service import (
     RuntimeSafetySnapshot,
     get_settings_service,
 )
-from goldguard.web.auth_dependencies import require_mutation_auth
+from goldguard.web.auth_dependencies import (
+    require_mutation_auth,
+    require_sensitive_mutation_auth,
+)
 from goldguard.web.schemas.control import (
     ProfilePreviewResponse,
     ProfileResponse,
@@ -20,6 +23,23 @@ from goldguard.web.schemas.control import (
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+
+
+def _risk_ceiling_increased(current: object, candidate: object) -> bool:
+    from goldguard.domain.profile import AutonomousProfile
+
+    if not isinstance(current, AutonomousProfile) or not isinstance(candidate, AutonomousProfile):
+        return True
+    return any(
+        (
+            candidate.risk.max_capital_per_trade_rate
+            > current.risk.max_capital_per_trade_rate,
+            candidate.risk.max_futures_leverage > current.risk.max_futures_leverage,
+            candidate.risk.max_total_exposure_rate > current.risk.max_total_exposure_rate,
+            candidate.risk.rolling_24h_loss_limit_rate
+            > current.risk.rolling_24h_loss_limit_rate,
+        )
+    )
 
 
 def _get_runtime_snapshot() -> RuntimeSafetySnapshot:
@@ -91,6 +111,9 @@ def activate_profile(
     service = get_settings_service()
     runtime = _get_runtime_snapshot()
     candidate = payload.to_domain()
+    current = service._repository.active()
+    if current is None or _risk_ceiling_increased(current.profile, candidate):
+        require_sensitive_mutation_auth(principal)
     try:
         active = service.activate(
             candidate,

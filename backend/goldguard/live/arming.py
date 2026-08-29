@@ -82,7 +82,7 @@ class ArmingService:
                     f"preflight gate failed: {check.id} - {check.detail}"
                 )
 
-        if not report.ready and any(c.status == "fail" for c in report.checks):
+        if not report.ready:
             raise LiveArmingRejected("preflight report is not ready")
 
         # 3. Check active profile version

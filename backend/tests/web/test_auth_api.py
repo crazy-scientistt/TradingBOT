@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Iterator
 from pathlib import Path
 
 import pyotp
 import pytest
 from fastapi.testclient import TestClient
-from goldguard.web.auth_dependencies import COOKIE_NAME, get_auth_service
-from pydantic import SecretStr
+from goldguard.web.auth_dependencies import COOKIE_NAME
 
 
 @pytest.fixture
@@ -18,16 +16,12 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     monkeypatch.setenv("GOLDGUARD_MARKET_INGESTION_ENABLED", "false")
     monkeypatch.setenv("GOLDGUARD_GATEWAY_BASE_URL", "")
     monkeypatch.setenv("OPENCODEX_BASE_URL", "")
+    monkeypatch.setenv("GOLDGUARD_ADMIN_PASSWORD", "correct-admin-password")
+    monkeypatch.setenv("GOLDGUARD_ADMIN_TOTP_SECRET", "JBSWY3DPEHPK3PXP")
 
     from goldguard.web import app as app_module
 
     with TestClient(app_module.app) as test_client:
-        service = get_auth_service()
-        with contextlib.suppress(Exception):
-            service.bootstrap_admin(
-                SecretStr("correct-admin-password"),
-                SecretStr("JBSWY3DPEHPK3PXP"),
-            )
         yield test_client
 
 
@@ -74,4 +68,3 @@ def test_auth_flow_login_totp_session_logout(client: TestClient) -> None:
     session_end = client.get("/api/auth/session")
     assert session_end.status_code == 200
     assert session_end.json()["authenticated"] is False
-

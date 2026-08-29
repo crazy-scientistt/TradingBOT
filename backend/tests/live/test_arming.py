@@ -15,7 +15,7 @@ from goldguard.live.models import (
 )
 from goldguard.security.models import AuthPrincipal
 from goldguard.security.service import AuthService
-from goldguard.services.preflight import PreflightReport, PreflightService
+from goldguard.services.preflight import PreflightCheck, PreflightReport, PreflightService
 from goldguard.storage.database import Database
 from goldguard.storage.profile_repository import ProfileRepository
 from pydantic import SecretStr
@@ -61,7 +61,13 @@ def active_profile(profile_repository: ProfileRepository) -> AutonomousProfile:
 
 @pytest.fixture
 def passing_report(active_profile: AutonomousProfile) -> PreflightReport:
-    return PreflightService().evaluate(active_profile)
+    return PreflightReport(
+        ready=True,
+        checks=tuple(
+            PreflightCheck(id=gate_id, label=label, status="pass", detail=detail)
+            for gate_id, label, detail in PreflightService.GATE_DEFINITIONS
+        ),
+    )
 
 
 @pytest.fixture
@@ -135,3 +141,24 @@ def test_restart_preserves_intent_but_blocks_entries_until_reconciled(
     assert restarted.status == ArmingStatus.ARMED_PENDING_RECONCILIATION
     assert restarted.new_entries_allowed is False
 
+
+def test_not_ready_report_cannot_arm_even_without_failed_checks(
+    arming_service: ArmingService,
+    profile_repository: ProfileRepository,
+    active_profile: AutonomousProfile,
+    recent_totp_principal: AuthPrincipal,
+) -> None:
+    report = PreflightReport(
+        ready=False,
+        checks=tuple(
+            PreflightCheck(id=gate_id, label=label, status="warn", detail="pending")
+            for gate_id, label, _ in PreflightService.GATE_DEFINITIONS
+        ),
+    )
+
+    with pytest.raises(LiveArmingRejected, match="not ready"):
+        arming_service.arm(
+            valid_arm_request(profile_repository),
+            recent_totp_principal,
+            report,
+        )

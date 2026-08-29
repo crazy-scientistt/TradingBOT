@@ -104,3 +104,18 @@ def test_profile_mutation_requires_auth_and_csrf(client: TestClient) -> None:
     assert body["created_by"] == "admin"
     assert body["equivalents"]["max_capital_per_trade_usdt"] == "50.00"
 
+
+def test_risk_ceiling_increase_requires_recent_totp(client: TestClient) -> None:
+    assert client.get("/api/settings/profile").status_code == 200
+    login_res = client.post("/api/auth/login", json={"password": "correct-admin-password"})
+    assert login_res.status_code == 200
+    payload = valid_profile_payload()
+    payload["risk"]["max_capital_per_trade_rate"] = "0.01"
+
+    response = client.post(
+        "/api/settings/profile",
+        json=payload,
+        headers={"X-CSRF-Token": login_res.json()["csrf_token"]},
+    )
+
+    assert response.status_code == 403

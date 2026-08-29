@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from goldguard.domain.profile import AutonomousProfile
@@ -45,6 +46,9 @@ class PreflightReport:
 
     def has_failure(self, check_id: str) -> bool:
         return any(c.id == check_id and c.status == "fail" for c in self.checks)
+
+
+PreflightProbe = Callable[[AutonomousProfile], PreflightCheck]
 
 
 class PreflightService:
@@ -96,13 +100,43 @@ class PreflightService:
         ),
     )
 
+    def __init__(self, probes: Mapping[str, PreflightProbe] | None = None) -> None:
+        self._probes = dict(probes or {})
+
     def evaluate(self, profile: AutonomousProfile) -> PreflightReport:
         checks: list[PreflightCheck] = []
-        all_passed = True
 
-        for gate_id, label, detail in self.GATE_DEFINITIONS:
-            status = "pass"
-            checks.append(PreflightCheck(id=gate_id, label=label, status=status, detail=detail))
+        for gate_id, label, _detail in self.GATE_DEFINITIONS:
+            probe = self._probes.get(gate_id)
+            if probe is None:
+                checks.append(
+                    PreflightCheck(
+                        id=gate_id,
+                        label=label,
+                        status="fail",
+                        detail="runtime observation is not configured; Live remains blocked",
+                    )
+                )
+                continue
+            try:
+                check = probe(profile)
+            except Exception:
+                check = PreflightCheck(
+                    id=gate_id,
+                    label=label,
+                    status="fail",
+                    detail="runtime observation failed; Live remains blocked",
+                )
+            if check.id != gate_id or check.status not in {"pass", "warn", "fail"}:
+                check = PreflightCheck(
+                    id=gate_id,
+                    label=label,
+                    status="fail",
+                    detail="runtime observation was invalid; Live remains blocked",
+                )
+            checks.append(check)
 
-        return PreflightReport(ready=all_passed, checks=tuple(checks))
-
+        return PreflightReport(
+            ready=all(check.status == "pass" for check in checks),
+            checks=tuple(checks),
+        )

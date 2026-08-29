@@ -105,6 +105,8 @@ from goldguard.web.routes.settings import router as settings_router
 
 logger = logging.getLogger("goldguard.web")
 
+_bootstrap_settings = Settings()
+
 AGENT_EVENT_DISPLAY_LIMIT = 30
 SSE_HEARTBEAT_SECONDS = 15.0
 CANDLE_PAGE_LIMIT = 500
@@ -112,7 +114,7 @@ CANDLE_PAGE_LIMIT = 500
 # ---------------------------------------------------------------------------
 # Application Singletons
 # ---------------------------------------------------------------------------
-_settings: Settings | None = None
+_settings: Settings | None = _bootstrap_settings
 _db: Database | None = None
 _genome_repo: GenomeRepository | None = None
 _ledger_repo: LedgerRepository | None = None
@@ -510,8 +512,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     try:
         _settings = Settings()
     except Exception as exc:
-        logger.error("Failed to load settings from environment: %s", exc)
-        _settings = Settings(environment="development")
+        logger.critical("Failed to load settings from environment: %s", exc)
+        raise
 
     data_dir = _settings.data_dir
     try:
@@ -549,6 +551,21 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         configure_settings_service(_settings_service)
         _auth_service = AuthService(_db, production=_settings.environment == "production")
         configure_auth_service(_auth_service)
+        if (
+            not _auth_service.admin_configured()
+            and _settings.admin_bootstrap_password is not None
+            and _settings.admin_totp_secret is not None
+        ):
+            _auth_service.bootstrap_admin(
+                _settings.admin_bootstrap_password,
+                _settings.admin_totp_secret,
+            )
+            logger.info("Bootstrapped the single administrator from sealed configuration")
+        elif not _auth_service.admin_configured():
+            logger.warning(
+                "Administrator is not configured; authenticated control mutations "
+                "remain unavailable"
+            )
         _arming_service = ArmingService(_db, _profile_repo, _auth_service)
         configure_arming_service(_arming_service)
         _arming_service.on_restart()
@@ -771,7 +788,11 @@ app.include_router(qualification_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=list(_settings.cors_origins) if _settings is not None else ["*"],
+    allow_origins=(
+        [_bootstrap_settings.cors_origins]
+        if isinstance(_bootstrap_settings.cors_origins, str)
+        else list(_bootstrap_settings.cors_origins)
+    ),
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "X-CSRF-Token"],

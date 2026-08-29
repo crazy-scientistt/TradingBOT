@@ -20,6 +20,8 @@ def test_safe_paper_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         "GOLDGUARD_HERMES_BRIDGE_TOKEN",
         "GOLDGUARD_HERMES_BASE_URL",
         "GOLDGUARD_AUTOPROMOTION_ENABLED",
+        "GOLDGUARD_ADMIN_PASSWORD",
+        "GOLDGUARD_ADMIN_TOTP_SECRET",
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
@@ -47,6 +49,8 @@ def test_safe_paper_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     assert settings.research_candles_max_per_call == 50_000
     assert settings.research_web_calls_max_per_day == 50
     assert settings.autopromotion_enabled is False
+    assert settings.admin_bootstrap_password is None
+    assert settings.admin_totp_secret is None
 
 
 def test_live_capability_requires_positive_capital(
@@ -82,6 +86,8 @@ def test_secret_values_are_not_in_repr(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.setenv("GOLDGUARD_GATEWAY_DATA_TOKEN", "synthetic-gateway-token")
     monkeypatch.setenv("GOLDGUARD_GATEWAY_MANAGEMENT_TOKEN", "synthetic-mgmt-token")
     monkeypatch.setenv("GOLDGUARD_HERMES_BRIDGE_TOKEN", "synthetic-hermes-token")
+    monkeypatch.setenv("GOLDGUARD_ADMIN_PASSWORD", "synthetic-admin-password")
+    monkeypatch.setenv("GOLDGUARD_ADMIN_TOTP_SECRET", "JBSWY3DPEHPK3PXP")
 
     settings = Settings(
         _env_file=None,
@@ -94,6 +100,34 @@ def test_secret_values_are_not_in_repr(monkeypatch: pytest.MonkeyPatch, tmp_path
         "synthetic-gateway-token",
         "synthetic-mgmt-token",
         "synthetic-hermes-token",
+        "synthetic-admin-password",
+        "JBSWY3DPEHPK3PXP",
         "synthetic-session-secret",
     ):
         assert secret not in repr_str
+
+
+def test_admin_bootstrap_secrets_must_be_configured_as_a_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("GOLDGUARD_ADMIN_PASSWORD", "correct-admin-password")
+    monkeypatch.delenv("GOLDGUARD_ADMIN_TOTP_SECRET", raising=False)
+
+    with pytest.raises(ValueError, match="configured together"):
+        Settings(_env_file=None)
+
+
+def test_blank_admin_bootstrap_values_mean_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("GOLDGUARD_ADMIN_PASSWORD", "")
+    monkeypatch.setenv("GOLDGUARD_ADMIN_TOTP_SECRET", "")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.admin_bootstrap_password is None
+    assert settings.admin_totp_secret is None

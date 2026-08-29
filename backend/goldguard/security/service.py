@@ -192,6 +192,14 @@ class AuthService:
         if duplicate:
             raise AdminAlreadyBootstrapped("admin is already bootstrapped")
 
+    def admin_configured(self) -> bool:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM admin_users WHERE username = ?",
+                (self.username,),
+            ).fetchone()
+        return row is not None
+
     def _check_throttle(
         self,
         kind: str,

@@ -59,7 +59,9 @@ def test_preflight_route(client: TestClient) -> None:
     assert len(data["checks"]) >= 5
 
 
-def test_arm_and_disarm_flow(client: TestClient) -> None:
+def test_arm_is_blocked_without_runtime_evidence_and_disarm_remains_available(
+    client: TestClient,
+) -> None:
     headers = login_full_auth(client)
     profile_res = client.get("/api/settings/profile")
     assert profile_res.status_code == 200
@@ -70,7 +72,6 @@ def test_arm_and_disarm_flow(client: TestClient) -> None:
     assert active is not None
     confirmation = expected_confirmation(active.profile)
 
-    # 1. Arm live
     arm_res = client.post(
         "/api/live/arm",
         json={
@@ -80,15 +81,24 @@ def test_arm_and_disarm_flow(client: TestClient) -> None:
         },
         headers=headers,
     )
-    assert arm_res.status_code == 200
-    arm_data = arm_res.json()
-    assert arm_data["status"] == "armed_ready"
-    assert arm_data["new_entries_allowed"] is True
+    assert arm_res.status_code == 409
+    assert "paper_qualification" in arm_res.json()["detail"]
 
-    # 2. Disarm
     disarm_res = client.post("/api/live/disarm", headers=headers)
     assert disarm_res.status_code == 200
     disarm_data = disarm_res.json()
     assert disarm_data["status"] == "disarmed"
     assert disarm_data["new_entries_allowed"] is False
 
+
+@pytest.mark.parametrize("path", ["/api/control/cancel-all", "/api/control/close-all"])
+def test_emergency_mutations_require_recent_totp(client: TestClient, path: str) -> None:
+    login_res = client.post("/api/auth/login", json={"password": "correct-admin-password"})
+    assert login_res.status_code == 200
+
+    response = client.post(
+        path,
+        headers={"X-CSRF-Token": login_res.json()["csrf_token"]},
+    )
+
+    assert response.status_code == 403

@@ -41,6 +41,20 @@ def test_login_cookie_and_csrf_are_distinct(auth_service: AuthService) -> None:
     assert tokens.csrf_token not in repr(tokens)
 
 
+def test_admin_configured_reports_persisted_bootstrap_state(tmp_path: Path) -> None:
+    database = Database(tmp_path / "admin-configured.db")
+    database.migrate()
+    service = AuthService(database)
+    assert service.admin_configured() is False
+
+    service.bootstrap_admin(
+        SecretStr("correct horse battery staple"),
+        SecretStr("JBSWY3DPEHPK3PXP"),
+    )
+
+    assert service.admin_configured() is True
+
+
 def test_password_is_argon2_hashed_and_raw_session_values_are_not_stored(
     auth_service: AuthService,
 ) -> None:

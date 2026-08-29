@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.middleware.cors import CORSMiddleware
 from goldguard.config import Settings
+from goldguard.web.app import app
 from pydantic import ValidationError
 
 
@@ -33,3 +35,12 @@ def test_core_has_no_direct_antigravity_key_field() -> None:
     fields = Settings.model_fields
     assert "gemini_api_key" not in fields
     assert "openrouter_api_key" not in fields
+
+
+def test_running_application_never_defaults_to_wildcard_cors() -> None:
+    cors = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls is CORSMiddleware
+    )
+    assert cors.kwargs["allow_origins"] != ["*"]

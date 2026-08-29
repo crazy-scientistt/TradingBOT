@@ -10,7 +10,10 @@ from goldguard.live.models import ArmRequest, LiveArmingRejected
 from goldguard.security.models import AuthPrincipal
 from goldguard.services.preflight import PreflightService
 from goldguard.services.settings_service import get_settings_service
-from goldguard.web.auth_dependencies import require_mutation_auth
+from goldguard.web.auth_dependencies import (
+    require_mutation_auth,
+    require_sensitive_mutation_auth,
+)
 
 router = APIRouter(tags=["control"])
 
@@ -83,18 +86,17 @@ def control_pause(
 
 @router.post("/api/control/cancel-all")
 def control_cancel_all(
-    principal: Annotated[AuthPrincipal, Depends(require_mutation_auth)],
+    principal: Annotated[AuthPrincipal, Depends(require_sensitive_mutation_auth)],
 ) -> dict[str, Any]:
     return {"status": "cancelled", "orders_cancelled": 0}
 
 
 @router.post("/api/control/close-all")
 def control_close_all(
-    principal: Annotated[AuthPrincipal, Depends(require_mutation_auth)],
+    principal: Annotated[AuthPrincipal, Depends(require_sensitive_mutation_auth)],
 ) -> dict[str, Any]:
     from goldguard.web import app as app_module
 
     if app_module._trading_runtime is not None:
         app_module._trading_runtime.stop()
     return {"status": "positions_closed", "positions_closed_count": 0}
-
