@@ -34,7 +34,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
     return () => clearInterval(interval);
   }, []);
 
-  const pairs = ['PAXG / USDT', 'BTC / USDT', 'ETH / USDT', 'SOL / USDT'];
+  const pairs = ['PAXG / USDT', 'BTC / USDT', 'SOL / USDT'];
 
   return (
     <header

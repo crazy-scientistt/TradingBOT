@@ -1,20 +1,20 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-app: #08090b;
-  --bg-sidebar: #090a0c;
-  --bg-card: #121316;
-  --bg-card-header: #15161a;
-  --bg-card-hover: #18191d;
-  --border-color: #1f2127;
+  --bg-app: #000000;
+  --bg-sidebar: #05070c;
+  --bg-card: #0b1018;
+  --bg-card-header: #0e1420;
+  --bg-card-hover: #121a28;
+  --border-color: #1a2436;
   --border-subtle: rgba(255, 255, 255, 0.06);
-  --border-focus: #d4a017;
+  --border-focus: #3d7eff;
   
-  --gold-primary: #f0b90b;
-  --gold-accent: #e5a93c;
-  --gold-dark: #b8860b;
-  --gold-bg-subtle: rgba(240, 185, 11, 0.08);
-  --gold-border: rgba(240, 185, 11, 0.35);
+  --gold-primary: #3d7eff;
+  --gold-accent: #5b91ff;
+  --gold-dark: #2a5fd4;
+  --gold-bg-subtle: rgba(61, 126, 255, 0.10);
+  --gold-border: rgba(61, 126, 255, 0.35);
 
   --green-bull: #22c55e;
   --green-dark: #16a34a;

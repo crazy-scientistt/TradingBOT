@@ -51,6 +51,7 @@ def test_all_conditions_produce_one_entry_candidate() -> None:
         ("atr_rate", 0.0004, "ATR_OUT_OF_RANGE"),
         ("atr_rate", 0.016, "ATR_OUT_OF_RANGE"),
         ("spread_rate", 0.0016, "SPREAD_TOO_WIDE"),
+        ("atr_rate", 0.0006, "COST_EDGE"),
         ("sufficient_history", False, "INSUFFICIENT_HISTORY"),
         ("contiguous", False, "DATA_NOT_CONTIGUOUS"),
         ("quote_fresh", False, "STALE_QUOTE"),

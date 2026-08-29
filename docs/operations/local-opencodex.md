@@ -99,7 +99,16 @@ Expected:
 In the GoldGuard UI: **Providers → Test connection**. Then **Start** paper.
 Do not paste Binance secrets in chat.
 
-## What is not ready
+## What you need from me (and what you do not)
 
-Live arming, Telegram, TOTP, and sealed holdout. Qualify will HOLD those on
-purpose. Overnight paper on 15m is the local test, not a 1m trade quota.
+**Do not paste Binance keys, TOTP, or passwords in Grok chat.** Put them only in `.env.autonomous` on your PC, never committed.
+
+| Goal | You add | I already shipped |
+| --- | --- | --- |
+| Paper local test | Docker. Optional: Antigravity/Gemini in OpenCodex at :10100 | Stack, 15m/1h genome, 100 USDT book, live flag off |
+| Hermes research | Same AI login in OpenCodex | SOUL + compose Hermes |
+| Live canary later | Binance API key+secret on the PC, withdrawals OFF, admin password + TOTP | Preflight, arming phrase, fail-closed. Compose will not auto-arm |
+
+Paper uses the **public** Binance Vision feed. No trade key required until you deliberately arm live.
+
+There is one app: Python GoldGuard + the bundled UI on :8000 + OpenCodex + Hermes. The extra `desk/` TypeScript engine was removed so local is not a second brain.

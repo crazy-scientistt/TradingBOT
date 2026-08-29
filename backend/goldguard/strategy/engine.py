@@ -84,6 +84,13 @@ class StrategyEngine:
             return StrategyResult(CandidateAction.NO_ACTION, ("ATR_OUT_OF_RANGE",))
         if features.spread_rate > float(self.settings.maximum_spread_rate):
             return StrategyResult(CandidateAction.NO_ACTION, ("SPREAD_TOO_WIDE",))
+        stop_rate = max(
+            features.atr_rate * float(self.settings.stop_atr_multiple),
+            float(self.settings.minimum_stop_rate),
+        )
+        round_trip = 0.0024  # 2× taker 0.001 + 2× slip 0.0002; spread is gated above
+        if stop_rate <= 0 or round_trip > 0.35 * stop_rate:
+            return StrategyResult(CandidateAction.NO_ACTION, ("COST_EDGE",))
         return StrategyResult(
             CandidateAction.ENTRY_CANDIDATE,
             ("TREND_PULLBACK_RECOVERY",),
