@@ -46,6 +46,7 @@ from goldguard.context.sources import OpenCodexSearchProvider
 from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
+from goldguard.live.arming import ArmingService, configure_arming_service
 from goldguard.market.binance import BinancePublicClient
 from goldguard.market.dataset_service import DatasetService
 from goldguard.market.live_stream import CHART_INTERVALS, candle_payload
@@ -96,6 +97,7 @@ from goldguard.strategy.promotion import PromotionPipeline
 from goldguard.strategy.runtime import GenomeRuntime
 from goldguard.web.auth_dependencies import configure_auth_service
 from goldguard.web.routes.auth import router as auth_router
+from goldguard.web.routes.control import router as control_router
 from goldguard.web.routes.settings import router as settings_router
 
 logger = logging.getLogger("goldguard.web")
@@ -544,6 +546,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         configure_settings_service(_settings_service)
         _auth_service = AuthService(_db, production=_settings.environment == "production")
         configure_auth_service(_auth_service)
+        _arming_service = ArmingService(_db, _profile_repo, _auth_service)
+        configure_arming_service(_arming_service)
+        _arming_service.on_restart()
 
         if _genome_repo.get_active_genome() is None:
             baseline = trend_pullback_v1()
@@ -762,6 +767,7 @@ app = FastAPI(
 
 app.include_router(auth_router)
 app.include_router(settings_router)
+app.include_router(control_router)
 
 app.add_middleware(
     CORSMiddleware,

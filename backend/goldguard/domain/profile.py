@@ -37,6 +37,14 @@ class AutonomousProfile(BaseModel):
     risk: RiskCeilings
     notifications: NotificationPreferences = NotificationPreferences()
 
+    def enabled_product_labels(self) -> tuple[str, ...]:
+        labels: list[str] = []
+        if self.spot_enabled:
+            labels.append("SPOT")
+        if self.futures_enabled:
+            labels.append("FUTURES")
+        return tuple(labels) if labels else ("NONE",)
+
 
 class ActiveProfile(BaseModel):
     model_config = ConfigDict(frozen=True)
