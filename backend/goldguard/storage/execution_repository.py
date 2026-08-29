@@ -16,6 +16,7 @@ from goldguard.execution.models import (
     OrderIntent,
     OrderRecord,
     PositionRecord,
+    ProtectionPlan,
 )
 from goldguard.storage.database import Database
 
@@ -125,6 +126,28 @@ class ExecutionRepository:
                 ),
             )
 
+    def ensure_intent_for_order(self, order: OrderRecord) -> OrderIntent:
+        intent = OrderIntent(
+            intent_id=order.intent_id,
+            client_order_id=order.client_order_id,
+            mode=order.mode,
+            product=order.product,
+            symbol=order.symbol,
+            side=order.side,
+            position_side=order.position_side,
+            order_type=order.order_type,
+            quantity=order.quantity,
+            price=order.price,
+            stop_price=order.stop_price,
+            margin_mode=order.margin_mode,
+            leverage=order.leverage,
+            reduce_only=order.reduce_only,
+            created_at=order.created_at,
+            correlation_id=f"broker-generated:{order.order_id}",
+        )
+        saved, _created = self.create_intent_once(intent)
+        return saved
+
     def save_position(self, position: PositionRecord) -> None:
         with self.database.transaction() as tx:
             tx.execute(
@@ -157,6 +180,45 @@ class ExecutionRepository:
                     position.opened_at,
                     position.updated_at,
                 ),
+            )
+
+    def save_protection(self, protection: ProtectionPlan) -> None:
+        with self.database.transaction() as tx:
+            tx.execute(
+                "INSERT OR REPLACE INTO execution_protections "
+                "(position_id, stop_loss_price_text, take_profit_price_text, "
+                "trailing_stop_delta_text, max_drawdown_limit_text) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    protection.position_id,
+                    (
+                        str(protection.stop_loss_price)
+                        if protection.stop_loss_price is not None
+                        else None
+                    ),
+                    (
+                        str(protection.take_profit_price)
+                        if protection.take_profit_price is not None
+                        else None
+                    ),
+                    (
+                        str(protection.trailing_stop_delta)
+                        if protection.trailing_stop_delta is not None
+                        else None
+                    ),
+                    (
+                        str(protection.max_drawdown_limit)
+                        if protection.max_drawdown_limit is not None
+                        else None
+                    ),
+                ),
+            )
+
+    def delete_protection(self, position_id: str) -> None:
+        with self.database.transaction() as tx:
+            tx.execute(
+                "DELETE FROM execution_protections WHERE position_id = ?",
+                (position_id,),
             )
 
     def get_open_positions(self, mode: ExecutionMode) -> list[PositionRecord]:
@@ -195,4 +257,3 @@ class ExecutionRepository:
                 )
                 for r in rows
             ]
-

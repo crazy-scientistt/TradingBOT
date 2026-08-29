@@ -52,6 +52,13 @@ class PaperSpotBroker:
     def cash(self) -> Decimal:
         return self._cash
 
+    def open_positions(self) -> tuple[PositionRecord, ...]:
+        return tuple(
+            position
+            for position in self._positions.values()
+            if position.status == PositionStatus.OPEN
+        )
+
     def on_price(self, symbol: str, price: Decimal) -> None:
         self._prices[symbol] = price
         if symbol in self._positions:
@@ -71,7 +78,9 @@ class PaperSpotBroker:
 
         now = datetime.now(UTC).isoformat()
         symbol = intent.symbol
-        price = intent.price or self._prices.get(symbol) or Decimal("1000.00")
+        price = intent.price or self._prices.get(symbol)
+        if price is None:
+            raise SpotOrderRejected(f"market price is unavailable for {symbol}")
 
         if intent.side == OrderSide.BUY:
             fill_price = price * (Decimal("1") + self._slippage_rate)

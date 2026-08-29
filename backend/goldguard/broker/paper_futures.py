@@ -53,6 +53,13 @@ class PaperFuturesBroker:
     def collateral(self) -> Decimal:
         return self._collateral
 
+    def open_positions(self) -> tuple[PositionRecord, ...]:
+        return tuple(
+            position
+            for position in self._positions.values()
+            if position.status == PositionStatus.OPEN
+        )
+
     def on_price(self, symbol: str, price: Decimal) -> None:
         self._prices[symbol] = price
         for (sym, side), pos in list(self._positions.items()):
@@ -99,7 +106,24 @@ class PaperFuturesBroker:
         )
         key = (symbol, pos_side)
 
-        price = intent.price or self._prices.get(symbol) or Decimal("60000.00")
+        price = intent.price or self._prices.get(symbol)
+        if price is None:
+            raise FuturesOrderRejected(f"market price is unavailable for {symbol}")
+        if not intent.reduce_only:
+            opposing = next(
+                (
+                    position
+                    for (open_symbol, open_side), position in self._positions.items()
+                    if open_symbol == symbol
+                    and open_side != pos_side
+                    and position.status == PositionStatus.OPEN
+                ),
+                None,
+            )
+            if opposing is not None:
+                raise FuturesOrderRejected(
+                    f"one-way mode already has an opposing {opposing.side.value} position"
+                )
         slip = self._slippage_rate if side == OrderSide.BUY else -self._slippage_rate
         fill_price = price * (Decimal("1") + slip)
         notional = fill_price * intent.quantity
@@ -306,4 +330,3 @@ class PaperFuturesBroker:
             positions_count=open_count,
             observed_at=datetime.now(UTC).isoformat(),
         )
-

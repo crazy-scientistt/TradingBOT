@@ -60,8 +60,7 @@ class RuntimeSupervisor:
         return self._daily_trade_count < 1000
 
     def protection_active(self, position_id: str) -> bool:
-        # Existing positions are always protected even if scope is disabled
-        return True
+        return self._broker.protection_active(position_id)
 
     async def start(self) -> None:
         self._running = True
@@ -73,4 +72,3 @@ class RuntimeSupervisor:
     async def stop(self) -> None:
         self._running = False
         await self._market.stop()
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from goldguard.broker.paper_futures import PaperFuturesBroker
+from goldguard.broker.paper_futures import FuturesOrderRejected, PaperFuturesBroker
 from goldguard.domain.enums import (
     ExecutionMode,
     ExitReason,
@@ -63,3 +63,59 @@ async def test_futures_position_is_isolated_and_cost_adjusted(
     assert close_res.position is not None
     assert close_res.position.status == PositionStatus.CLOSED
 
+
+@pytest.mark.asyncio
+async def test_futures_rejects_order_without_observed_or_explicit_price() -> None:
+    broker = PaperFuturesBroker(starting_collateral=Decimal("1000.00"))
+    intent = OrderIntent(
+        intent_id="missing-price",
+        client_order_id="missing-price",
+        mode=ExecutionMode.PAPER,
+        product=ProductKind.FUTURES,
+        symbol="BTCUSDT",
+        side=OrderSide.BUY,
+        position_side=PositionSide.LONG,
+        quantity=Decimal("0.01"),
+        margin_mode=MarginMode.ISOLATED,
+        leverage=2,
+    )
+
+    with pytest.raises(FuturesOrderRejected, match="market price"):
+        await broker.submit(intent)
+
+
+@pytest.mark.asyncio
+async def test_futures_one_way_mode_rejects_opposing_open_position() -> None:
+    broker = PaperFuturesBroker(starting_collateral=Decimal("10000.00"))
+    await broker.submit(
+        OrderIntent(
+            intent_id="long",
+            client_order_id="long",
+            mode=ExecutionMode.PAPER,
+            product=ProductKind.FUTURES,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            position_side=PositionSide.LONG,
+            quantity=Decimal("0.01"),
+            price=Decimal("60000"),
+            margin_mode=MarginMode.ISOLATED,
+            leverage=2,
+        )
+    )
+
+    with pytest.raises(FuturesOrderRejected, match="one-way"):
+        await broker.submit(
+            OrderIntent(
+                intent_id="short",
+                client_order_id="short",
+                mode=ExecutionMode.PAPER,
+                product=ProductKind.FUTURES,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                position_side=PositionSide.SHORT,
+                quantity=Decimal("0.01"),
+                price=Decimal("60000"),
+                margin_mode=MarginMode.ISOLATED,
+                leverage=2,
+            )
+        )

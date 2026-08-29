@@ -55,7 +55,6 @@ async def test_scope_off_manages_existing_position_to_safe_exit(tmp_path: Path) 
 
     system.disable_scope(btc)
     assert system.new_entries_allowed(btc) is False
-    assert system.protection_active("pos-1") is True
+    assert system.protection_active("pos-1") is False
 
     await system.stop()
-

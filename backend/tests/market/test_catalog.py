@@ -103,3 +103,13 @@ async def test_catalog_rejects_wrong_product_and_nontrading_symbol(
     with pytest.raises(SymbolNotEligible, match="not actively trading"):
         catalog.require(ProductKind.SPOT, "INACTIVESPOT")
 
+
+@pytest.mark.asyncio
+async def test_catalog_without_exchange_evidence_never_seeds_tradable_symbols() -> None:
+    catalog = SymbolCatalog()
+    snapshot = await catalog.refresh()
+
+    assert snapshot.spot_rules == {}
+    assert snapshot.futures_rules == {}
+    with pytest.raises(SymbolNotEligible, match="not found"):
+        catalog.require(ProductKind.SPOT, "PAXGUSDT")

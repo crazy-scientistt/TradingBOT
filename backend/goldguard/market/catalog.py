@@ -125,43 +125,6 @@ class SymbolCatalog:
             except Exception:
                 pass
 
-        # Seed defaults if client was empty
-        if not spot_rules:
-            spot_rules["PAXGUSDT"] = SymbolRule(
-                product=ProductKind.SPOT,
-                symbol="PAXGUSDT",
-                trading_status="TRADING",
-                base_asset="PAXG",
-                quote_asset="USDT",
-                tick_size=Decimal("0.01"),
-                step_size=Decimal("0.0001"),
-                min_notional=Decimal("5.00"),
-                min_quantity=Decimal("0.0001"),
-                max_quantity=Decimal("1000"),
-                max_leverage=1,
-                observed_at=now,
-            )
-        if not futures_rules:
-            for f_sym, tick, step in (
-                ("BTCUSDT", Decimal("0.10"), Decimal("0.001")),
-                ("ETHUSDT", Decimal("0.01"), Decimal("0.001")),
-                ("SOLUSDT", Decimal("0.01"), Decimal("0.01")),
-            ):
-                futures_rules[f_sym] = SymbolRule(
-                    product=ProductKind.FUTURES,
-                    symbol=f_sym,
-                    trading_status="TRADING",
-                    base_asset=f_sym.replace("USDT", ""),
-                    quote_asset="USDT",
-                    tick_size=tick,
-                    step_size=step,
-                    min_notional=Decimal("5.00"),
-                    min_quantity=step,
-                    max_quantity=Decimal("100000"),
-                    max_leverage=125,
-                    observed_at=now,
-                )
-
         snapshot = CatalogSnapshot(
             spot_rules=spot_rules,
             futures_rules=futures_rules,
@@ -189,4 +152,3 @@ class SymbolCatalog:
                 f"symbol {symbol} is not actively trading (status: {rule.trading_status})"
             )
         return rule
-

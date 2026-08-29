@@ -3,7 +3,11 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from goldguard.broker.paper_spot import InsufficientBalance, PaperSpotBroker
+from goldguard.broker.paper_spot import (
+    InsufficientBalance,
+    PaperSpotBroker,
+    SpotOrderRejected,
+)
 from goldguard.domain.enums import (
     ExecutionMode,
     OrderSide,
@@ -42,6 +46,23 @@ async def test_spot_cannot_spend_more_than_available_cash(
     )
     with pytest.raises(InsufficientBalance):
         await spot_broker.submit(intent)
+
+
+@pytest.mark.asyncio
+async def test_spot_rejects_order_without_observed_or_explicit_price() -> None:
+    broker = PaperSpotBroker(starting_cash=Decimal("1000.00"))
+    intent = OrderIntent(
+        intent_id="missing-price",
+        client_order_id="missing-price",
+        mode=ExecutionMode.PAPER,
+        product=ProductKind.SPOT,
+        symbol="PAXGUSDT",
+        side=OrderSide.BUY,
+        quantity=Decimal("0.1"),
+    )
+
+    with pytest.raises(SpotOrderRejected, match="market price"):
+        await broker.submit(intent)
 
 
 @pytest.mark.asyncio
@@ -87,4 +108,3 @@ async def test_spot_buy_and_sell_cycle(spot_broker: PaperSpotBroker) -> None:
     assert sell_res.success is True
     assert sell_res.position is not None
     assert sell_res.position.status == PositionStatus.CLOSED
-

@@ -9,10 +9,10 @@ import pytest
 from goldguard.broker.paper_futures import PaperFuturesBroker
 from goldguard.broker.paper_portfolio import PaperPortfolioBroker
 from goldguard.broker.paper_spot import PaperSpotBroker
-from goldguard.domain.enums import ExecutionMode, ProductKind
+from goldguard.domain.enums import ExecutionMode, OrderSide, PositionSide, ProductKind
 from goldguard.domain.models import Candle, Quote
 from goldguard.execution.models import MarketScope
-from goldguard.services.execution_coordinator import ExecutionCoordinator
+from goldguard.services.execution_coordinator import EntryPlan, ExecutionCoordinator
 from goldguard.storage.database import Database
 from goldguard.storage.execution_repository import ExecutionRepository
 
@@ -30,7 +30,90 @@ def coordinator(database: Database) -> ExecutionCoordinator:
     futures = PaperFuturesBroker(starting_collateral=Decimal("10000.00"))
     broker = PaperPortfolioBroker(spot=spot, futures=futures)
     repo = ExecutionRepository(database)
-    return ExecutionCoordinator(broker=broker, repository=repo, database=database)
+    return ExecutionCoordinator(
+        broker=broker,
+        repository=repo,
+        database=database,
+        entry_planner=lambda _scope, _candle: EntryPlan(
+            approved=True,
+            reason="qualified_test_entry",
+            side=OrderSide.BUY,
+            position_side=PositionSide.LONG,
+            quantity=Decimal("0.01"),
+            leverage=1,
+            stop_loss_price=Decimal("2495.00"),
+            take_profit_price=Decimal("2600.00"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_entry_planner_never_opens_a_trade(
+    database: Database,
+) -> None:
+    broker = PaperPortfolioBroker(
+        spot=PaperSpotBroker(starting_cash=Decimal("10000.00")),
+        futures=PaperFuturesBroker(starting_collateral=Decimal("10000.00")),
+    )
+    coordinator = ExecutionCoordinator(
+        broker=broker,
+        repository=ExecutionRepository(database),
+        database=database,
+    )
+    outcome = await coordinator.evaluate(spot_scope("PAXGUSDT"), closed_candle())
+
+    assert outcome.action == "HOLD"
+    assert outcome.intent_created is False
+    assert outcome.reason == "entry_planner_unconfigured"
+
+
+@pytest.mark.asyncio
+async def test_entry_without_deterministic_protection_is_rejected(database: Database) -> None:
+    broker = PaperPortfolioBroker(
+        spot=PaperSpotBroker(starting_cash=Decimal("10000.00")),
+        futures=PaperFuturesBroker(starting_collateral=Decimal("10000.00")),
+    )
+    coordinator = ExecutionCoordinator(
+        broker=broker,
+        repository=ExecutionRepository(database),
+        database=database,
+        entry_planner=lambda _scope, _candle: EntryPlan(
+            approved=True,
+            reason="missing_protection",
+            quantity=Decimal("0.01"),
+        ),
+    )
+
+    outcome = await coordinator.evaluate(spot_scope("PAXGUSDT"), closed_candle())
+
+    assert outcome.action == "HOLD"
+    assert outcome.reason == "entry_plan_protection_missing"
+
+
+@pytest.mark.asyncio
+async def test_entry_installs_protection_and_stop_closes_position(
+    coordinator: ExecutionCoordinator,
+    database: Database,
+) -> None:
+    entered = await coordinator.evaluate(spot_scope("PAXGUSDT"), closed_candle())
+    assert entered.result is not None and entered.result.position is not None
+    position_id = entered.result.position.position_id
+    assert coordinator.broker.protection_active(position_id) is True
+
+    stopped = await coordinator.manage_positions(spot_scope("PAXGUSDT"), stop_quote())
+
+    assert stopped.action == "STOP"
+    assert coordinator.broker.protection_active(position_id) is False
+    assert ExecutionRepository(database).get_open_positions(ExecutionMode.PAPER) == []
+    with database.connect() as conn:
+        closing_orders = conn.execute(
+            "SELECT COUNT(*) AS count FROM execution_orders WHERE reduce_only = 1"
+        ).fetchone()
+        assert closing_orders is not None and closing_orders["count"] == 1
+        remaining_protections = conn.execute(
+            "SELECT COUNT(*) AS count FROM execution_protections"
+        ).fetchone()
+        assert remaining_protections is not None and remaining_protections["count"] == 0
 
 
 def spot_scope(symbol: str) -> MarketScope:
@@ -81,5 +164,5 @@ async def test_pause_blocks_entry_but_keeps_position_management(
     hold_res = await coordinator.evaluate(spot_scope("PAXGUSDT"), closed_candle())
     assert hold_res.action == "HOLD"
     stop_res = await coordinator.manage_positions(spot_scope("PAXGUSDT"), stop_quote())
-    assert stop_res.action == "STOP"
-
+    assert stop_res.action == "HOLD"
+    assert stop_res.reason == "no_exit_triggered"
