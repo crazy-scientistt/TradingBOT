@@ -28,6 +28,7 @@ dev = [
   "pytest>=8.4,<9",
   "pytest-asyncio>=1.1,<2",
   "pytest-cov>=6.2,<7",
+  "pyyaml>=6,<7",
   "ruff>=0.12,<1",
 ]
 
@@ -37,7 +38,7 @@ packages = ["backend/goldguard"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --import-mode=importlib"
 testpaths = ["backend/tests"]
-pythonpath = ["backend"]
+pythonpath = ["backend", "."]
 asyncio_mode = "auto"
 
 [tool.ruff]

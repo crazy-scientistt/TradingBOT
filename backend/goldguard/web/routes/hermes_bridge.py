@@ -16,6 +16,15 @@ router = APIRouter(prefix="/internal/hermes/tools", tags=["hermes_bridge"])
 _tool_registry = HermesToolRegistry()
 
 
+def configure_tool_registry(registry: HermesToolRegistry) -> None:
+    global _tool_registry
+    _tool_registry = registry
+
+
+def get_tool_registry() -> HermesToolRegistry:
+    return _tool_registry
+
+
 def _require_bridge_auth(authorization: str | None) -> None:
     settings = Settings()
     token = settings.hermes_bridge_token
@@ -47,7 +56,7 @@ async def execute_hermes_tool(
     _ = request
     _require_bridge_auth(authorization)
     try:
-        return await _tool_registry.call(tool_name, payload)
+        return await get_tool_registry().call(tool_name, payload)
     except SealedHoldoutAccessError as exc:
         raise HTTPException(
             status_code=403,

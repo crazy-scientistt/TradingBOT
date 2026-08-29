@@ -6,8 +6,8 @@
 | :--- | :--- | :--- | :--- |
 | **OpenCodex Proxy Gateway** | `:10100` | Multi-provider hub routing to `google-antigravity/gemini-3.7-flash` | Degraded / Fallback |
 | **GoldGuard Core Engine** | `:8000` | SQLite Ledger, RiskEngine, GenomeRuntime, TradingCoordinator | Fail-Closed on Entry, Fail-Open on Position Protection |
-| **Hermes Strategy Loop** | Background Task | Autonomous hypothesis testing, backtesting, walk-forward gating | Strict daily budget (10 iter, 50 backtests, 20 web calls) |
-| **Frontend Cockpit & Studio** | `:5173` | Rich dashboard, visual genome builder, route matrix, emergency halts | Real-time SSE / REST |
+| **Hermes Strategy Loop** | `:8642` | Isolated researcher; proposals only | Degraded / fail-closed |
+| **Frontend Cockpit & Studio** | served by GoldGuard `:8000` | Dashboard, studio, emergency halts | Real-time SSE / REST |
 
 ---
 
@@ -58,6 +58,8 @@ The writer replica stores SQLite/WAL on `/data`. Do not use ad-hoc sqlite
 - Full procedure: `docs/operations/backup-restore.md`
 - Topology: `docs/operations/railway-topology.md`
 - Operator leftovers: `docs/operations/operator-handoff.md`
+- Local PC bring-up: `docs/operations/local-opencodex.md`
+
 ## 5. Verified Market-Dataset Bootstrap
 
 Historical candles are downloaded from Binance's public market-data API. The

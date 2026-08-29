@@ -8,10 +8,51 @@ services:
     ports:
       - "10100:10100"
     environment:
-      - PORT=10100
-      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+      PORT: "10100"
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+      OPENCODEX_ADMIN_AUTH_TOKEN: ${OPENCODEX_ADMIN_AUTH_TOKEN:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     volumes:
       - gateway-data:/app/.opencodex
+    networks:
+      - goldguard-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "fetch('http://127.0.0.1:10100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
+
+  hermes:
+    build:
+      context: ./hermes
+      dockerfile: Dockerfile
+    container_name: goldguard-hermes
+    command: ["gateway", "run"]
+    restart: unless-stopped
+    ports:
+      - "8642:8642"
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_PORT: "8642"
+      API_SERVER_KEY: ${HERMES_BRIDGE_TOKEN:-dev-hermes-bridge-token}
+      OPENAI_BASE_URL: http://gateway:10100/v1
+      OPENAI_API_KEY: ${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+      OPENCODEX_BASE_URL: http://gateway:10100/v1
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+    volumes:
+      - hermes-data:/opt/data
+    depends_on:
+      gateway:
+        condition: service_healthy
     networks:
       - goldguard-net
 
@@ -24,20 +65,36 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENCODEX_BASE_URL=http://gateway:10100
-      - OPENCODEX_API_AUTH_TOKEN=${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
-      - GOLDGUARD_ENVIRONMENT=development
-      - GOLDGUARD_MODE=paper
+      OPENCODEX_BASE_URL: http://gateway:10100
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN:-dev-opencodex-token}
+      GOLDGUARD_ENVIRONMENT: development
+      GOLDGUARD_MODE: paper
+      GOLDGUARD_DATA_DIR: /data
+      GOLDGUARD_LIVE_CAPABILITY_ENABLED: "false"
+      GOLDGUARD_HERMES_BASE_URL: http://hermes:8642
+      GOLDGUARD_HERMES_BRIDGE_TOKEN: ${HERMES_BRIDGE_TOKEN:-dev-hermes-bridge-token}
+      HERMES_API_KEY: ${HERMES_BRIDGE_TOKEN:-dev-hermes-bridge-token}
+      GOLDGUARD_SESSION_SECRET: ${GOLDGUARD_SESSION_SECRET:-local-dev-session-secret-not-for-prod}
     depends_on:
-      - gateway
+      gateway:
+        condition: service_healthy
+      hermes:
+        condition: service_started
     volumes:
-      - backend-data:/app/data
+      - backend-data:/data
     networks:
       - goldguard-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
 
 volumes:
   gateway-data:
   backend-data:
+  hermes-data:
 
 networks:
   goldguard-net:

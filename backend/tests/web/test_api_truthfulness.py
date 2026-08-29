@@ -207,6 +207,7 @@ def test_dashboard_snapshot_covers_every_polled_section(client: TestClient) -> N
         "agentEvents",
         "preflight",
         "promotionCanary",
+        "diagnostics",
     ):
         assert section in body, f"{section} missing from the dashboard snapshot"
 

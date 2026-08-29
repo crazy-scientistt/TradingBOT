@@ -28,11 +28,14 @@ function New-Token {
 $content = @"
 GOLDGUARD_ENVIRONMENT=development
 GOLDGUARD_MODE=paper
-GOLDGUARD_DATA_DIR=/app/data
+GOLDGUARD_DATA_DIR=/data
+GOLDGUARD_LIVE_CAPABILITY_ENABLED=false
 GOLDGUARD_SESSION_SECRET=$(New-Token)
 OPENCODEX_API_AUTH_TOKEN=$(New-Token)
 OPENCODEX_ADMIN_AUTH_TOKEN=$(New-Token)
 HERMES_BRIDGE_TOKEN=$(New-Token)
+GEMINI_API_KEY=
+GOOGLE_API_KEY=
 BINANCE_API_KEY=
 BINANCE_API_SECRET=
 TELEGRAM_BOT_TOKEN=
@@ -64,3 +67,4 @@ finally {
 }
 
 Write-Output 'created .env.autonomous'
+Write-Output 'Start with: powershell -ExecutionPolicy Bypass -File scripts/start_local.ps1'

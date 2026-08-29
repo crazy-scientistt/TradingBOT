@@ -15,13 +15,23 @@ token and then **picks models** that OpenCodex already listed.
 
 ## Local
 
-```bash
-export OPENCODEX_API_AUTH_TOKEN=dev-token
-docker compose up gateway
+Preferred: start the three-service stack from the repo root.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/start_local.ps1
 ```
 
 Dashboard: `http://localhost:10100`  
-Header the bot sends: `x-opencodex-api-key: dev-token`
+Header GoldGuard sends: `x-opencodex-api-key` plus `Authorization: Bearer`.
+
+Standalone gateway only:
+
+```bash
+export OPENCODEX_API_AUTH_TOKEN=dev-token
+docker compose -f docker-compose.local.yml --env-file .env.autonomous up opencodex
+```
+
+See [docs/operations/local-opencodex.md](../docs/operations/local-opencodex.md).
 
 ## Railway
 

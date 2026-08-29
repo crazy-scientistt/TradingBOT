@@ -70,13 +70,33 @@ GoldGuard is an autonomous quantitative algorithmic trading engine designed for 
 
 ## 🚀 Quick Start
 
+### Run OpenCodex + Hermes + GoldGuard on your PC
+
+Docker Desktop required. Live stays disarmed.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap_local_env.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start_local.ps1
+python scripts/verify_local_stack.py
+```
+
+macOS / Linux:
+
+```bash
+sh scripts/bootstrap_local_env.sh
+sh scripts/start_local.sh
+python scripts/verify_local_stack.py
+```
+
+Then open http://localhost:8000 (GoldGuard) and http://localhost:10100 (OpenCodex dashboard — add Gemini there). Details: [local OpenCodex](docs/operations/local-opencodex.md).
+
 ### 1. Run Complete Test Matrix
 
 ```bash
-# Run backend pytest suite (207 tests)
+# Run backend pytest suite
 uv run pytest backend/tests -q
 
-# Run frontend vitest suite (8 tests)
+# Run frontend vitest suite
 npm --prefix frontend test
 
 # Run static typechecks & linters
@@ -113,7 +133,13 @@ timestamps when a reproducible range is needed.
 python scripts/health_check.py --db data/goldguard.db --gateway-url http://localhost:10100
 ```
 
-### 5. Single-Command Docker Deployment
+### 5. Local Docker (paper only)
+
+```bash
+docker compose -f docker-compose.local.yml --env-file .env.autonomous up --build
+```
+
+### 6. Single-Command Docker Deployment (legacy compose)
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d
@@ -123,6 +149,8 @@ docker compose -f docker-compose.prod.yml up -d
 
 ## 📚 Documentation
 
+- [Local OpenCodex on your PC](docs/operations/local-opencodex.md)
+- [Operator handoff](docs/operations/operator-handoff.md)
 - [Production Runbook](docs/RUNBOOK.md)
 - [Autonomy & Strategy Specification](docs/AUTONOMY_SPEC.md)
 - [Full Master Implementation Plan](docs/superpowers/plans/2026-08-26-hermes-autonomous-gold-trader.md)

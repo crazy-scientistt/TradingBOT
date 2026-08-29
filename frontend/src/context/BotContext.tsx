@@ -241,6 +241,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snapshot.botState,
         snapshot.agentEvents,
         snapshot.promotionCanary,
+        snapshot.diagnostics,
       ];
 
       setSystemHealthy(snapshot.health?.status === 'ok');
@@ -266,6 +267,9 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAgentEvents((sectionData(snapshot.agentEvents) ?? []).slice(0, 30));
 
       const runtime = runtimeFromSnapshot(status, botStateData);
+      const diagnostics = sectionData(snapshot.diagnostics);
+      const opencodexCheck = diagnostics?.checks?.find((item) => item.name === 'opencodex_model');
+      const hermesCheck = diagnostics?.checks?.find((item) => item.name === 'hermes_memory_restart');
       setRiskHealth([
         {
           id: 'database',
@@ -283,6 +287,20 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: 'runtime',
           label: runtime?.state ? `Runtime: ${runtime.state}` : 'Runtime unavailable',
           status: runtime?.state ? 'OK' : 'ERROR',
+          icon: 'gemini',
+        },
+        {
+          id: 'opencodex',
+          label: opencodexCheck
+            ? `OpenCodex: ${opencodexCheck.status}`
+            : 'OpenCodex: not probed',
+          status: opencodexCheck?.status === 'pass' ? 'OK' : 'WARNING',
+          icon: 'gemini',
+        },
+        {
+          id: 'hermes',
+          label: hermesCheck ? `Hermes: ${hermesCheck.status}` : 'Hermes: not probed',
+          status: hermesCheck?.status === 'pass' ? 'OK' : 'WARNING',
           icon: 'gemini',
         },
       ]);

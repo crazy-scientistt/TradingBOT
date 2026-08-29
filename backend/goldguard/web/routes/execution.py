@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from goldguard.domain.enums import ExecutionMode
+from goldguard.operations.stack import collect_stack_diagnostics
 from goldguard.readmodels.dashboard import DashboardReadModel
 from goldguard.storage.execution_repository import ExecutionRepository
 from goldguard.web.schemas.dashboard import (
@@ -51,21 +52,21 @@ def get_orders() -> dict[str, Any]:
             rows = conn.execute(
                 "SELECT * FROM execution_orders ORDER BY created_at DESC LIMIT 100"
             ).fetchall()
-            for r in rows:
+            for row in rows:
                 orders.append(
                     {
-                        "order_id": str(r["order_id"]),
-                        "client_order_id": str(r["client_order_id"]),
-                        "symbol": str(r["symbol"]),
-                        "product": str(r["product"]),
-                        "side": str(r["side"]),
-                        "order_type": str(r["order_type"]),
-                        "quantity": str(r["quantity_text"]),
+                        "order_id": str(row["order_id"]),
+                        "client_order_id": str(row["client_order_id"]),
+                        "symbol": str(row["symbol"]),
+                        "product": str(row["product"]),
+                        "side": str(row["side"]),
+                        "order_type": str(row["order_type"]),
+                        "quantity": str(row["quantity_text"]),
                         "price": (
-                            str(r["price_text"]) if r["price_text"] is not None else None
+                            str(row["price_text"]) if row["price_text"] is not None else None
                         ),
-                        "status": str(r["status"]),
-                        "created_at": str(r["created_at"]),
+                        "status": str(row["status"]),
+                        "created_at": str(row["created_at"]),
                     }
                 )
 
@@ -143,13 +144,21 @@ def get_pnl() -> dict[str, Any]:
 
 
 @router.get("/diagnostics")
-def get_diagnostics() -> dict[str, Any]:
+async def get_diagnostics() -> dict[str, Any]:
     from goldguard.web import app as app_module
 
-    blockers: list[str] = []
-    if app_module._db is None:
-        blockers.append("DATABASE_UNINITIALIZED")
-    data = {"blockers": blockers, "checks": []}
+    settings = app_module._settings
+    if settings is None:
+        from goldguard.config import Settings
+
+        settings = Settings()
+    data = await collect_stack_diagnostics(
+        settings=settings,
+        database_ready=app_module._db is not None,
+        paper_broker_ready=app_module._broker is not None,
+        http_client=app_module._provider_http_client,
+    )
+    blockers = list(data.get("blockers") or [])
     return _envelope(
         data,
         source="runtime",

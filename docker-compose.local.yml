@@ -1,22 +1,36 @@
-name: goldguard-autonomous
+name: goldguard-local
+
+# Local PC stack: OpenCodex + Hermes + GoldGuard (paper only).
+# Usage:
+#   scripts/bootstrap_local_env.ps1   # or scripts/bootstrap_local_env.sh
+#   docker compose -f docker-compose.local.yml --env-file .env.autonomous up --build
+#
+# Open in the browser:
+#   GoldGuard     http://localhost:8000
+#   OpenCodex     http://localhost:10100  (add Gemini / Antigravity key here)
+#   Hermes health http://localhost:8642/health
+#
+# Live stays disarmed. Do not set GOLDGUARD_MODE=live.
 
 services:
   opencodex:
     build:
       context: ./gateway
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
-      - "18100:10100"
+      - "10100:10100"
     environment:
       PORT: "10100"
       OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
-      OPENCODEX_ADMIN_AUTH_TOKEN: ${OPENCODEX_ADMIN_AUTH_TOKEN}
+      OPENCODEX_ADMIN_AUTH_TOKEN: ${OPENCODEX_ADMIN_AUTH_TOKEN:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENCODEX_PUBLIC_ORIGIN: http://localhost:10100
     volumes:
-      - autonomous-opencodex:/app/.opencodex
+      - local-opencodex:/app/.opencodex
     networks:
-      - autonomous-net
+      - goldguard-local
     healthcheck:
       test:
         [
@@ -25,15 +39,20 @@ services:
           "-e",
           "fetch('http://127.0.0.1:10100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
         ]
-      interval: 15s
+      interval: 10s
       timeout: 5s
-      retries: 8
+      retries: 12
       start_period: 40s
 
   hermes:
-    image: nousresearch/hermes-agent:latest
+    build:
+      context: ./hermes
+      dockerfile: Dockerfile
+    image: goldguard-hermes:local
     command: ["gateway", "run"]
     restart: unless-stopped
+    ports:
+      - "8642:8642"
     environment:
       API_SERVER_ENABLED: "true"
       API_SERVER_HOST: "0.0.0.0"
@@ -44,42 +63,54 @@ services:
       OPENCODEX_BASE_URL: http://opencodex:10100/v1
       OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
     volumes:
-      - hermes-data:/opt/data
+      - local-hermes:/opt/data
+      - ./hermes/config.yaml:/app/config.yaml:ro
+      - ./hermes/SOUL.md:/app/SOUL.md:ro
+      - ./hermes/skills:/app/skills:ro
     depends_on:
       opencodex:
         condition: service_healthy
     networks:
-      - autonomous-net
+      - goldguard-local
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
-  backend:
+  goldguard:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     ports:
-      - "18000:8000"
+      - "8000:8000"
     environment:
+      PORT: "8000"
       GOLDGUARD_ENVIRONMENT: development
       GOLDGUARD_MODE: paper
-      GOLDGUARD_DATA_DIR: /app/data
+      GOLDGUARD_DATA_DIR: /data
       GOLDGUARD_LIVE_CAPABILITY_ENABLED: "false"
       GOLDGUARD_SESSION_SECRET: ${GOLDGUARD_SESSION_SECRET}
       GOLDGUARD_ADMIN_PASSWORD: ${GOLDGUARD_ADMIN_PASSWORD:-}
       GOLDGUARD_ADMIN_TOTP_SECRET: ${GOLDGUARD_ADMIN_TOTP_SECRET:-}
-      GOLDGUARD_HERMES_BRIDGE_TOKEN: ${HERMES_BRIDGE_TOKEN}
-      GOLDGUARD_HERMES_BASE_URL: http://hermes:8642
-      HERMES_API_KEY: ${HERMES_BRIDGE_TOKEN}
+      GOLDGUARD_CORS_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000,http://127.0.0.1:3000"
       OPENCODEX_BASE_URL: http://opencodex:10100
       OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
-      GOLDGUARD_CORS_ORIGINS: "http://localhost:18000,http://127.0.0.1:18000,http://localhost:8000,http://127.0.0.1:8000"
+      OPENCODEX_ADMIN_AUTH_TOKEN: ${OPENCODEX_ADMIN_AUTH_TOKEN:-}
+      GOLDGUARD_HERMES_BASE_URL: http://hermes:8642
+      GOLDGUARD_HERMES_BRIDGE_TOKEN: ${HERMES_BRIDGE_TOKEN}
+      HERMES_API_KEY: ${HERMES_BRIDGE_TOKEN}
+    volumes:
+      - local-ledger:/data
     depends_on:
       opencodex:
         condition: service_healthy
       hermes:
         condition: service_started
-    volumes:
-      - autonomous-ledger:/app/data
     networks:
-      - autonomous-net
+      - goldguard-local
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health/live"]
       interval: 15s
@@ -88,9 +119,9 @@ services:
       start_period: 30s
 
 volumes:
-  autonomous-opencodex: {}
-  autonomous-ledger: {}
-  hermes-data: {}
+  local-opencodex: {}
+  local-hermes: {}
+  local-ledger: {}
 
 networks:
-  autonomous-net: {}
+  goldguard-local: {}

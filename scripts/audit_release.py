@@ -766,6 +766,8 @@ def run_release_audit(
     findings: list[AuditFinding] = []
     findings.extend(audit_compose_file(root_path / "docker-compose.yml", root=root_path))
     findings.extend(audit_compose_file(root_path / "docker-compose.prod.yml", root=root_path))
+    findings.extend(audit_compose_file(root_path / "docker-compose.local.yml", root=root_path))
+    findings.extend(audit_compose_file(root_path / "docker-compose.autonomous.yml", root=root_path))
     findings.extend(audit_production_compose_safety(root_path / "docker-compose.prod.yml"))
     # Railway and other single-image deployments use the root Dockerfile directly,
     # outside either Compose manifest, so audit its package-copy order as well.

@@ -19,7 +19,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("goldguard.health")
 
 
-async def check_health(db_path: Path, gateway_url: str) -> dict[str, str]:
+async def check_health(
+    db_path: Path, gateway_url: str, hermes_url: str | None = None
+) -> dict[str, str]:
     results: dict[str, str] = {}
 
     # 1. Database Check
@@ -52,7 +54,18 @@ async def check_health(db_path: Path, gateway_url: str) -> dict[str, str]:
             else:
                 results["gateway"] = f"DEGRADED ({resp.status_code})"
     except Exception:
-        results["gateway"] = "UNREACHABLE (local fallback active)"
+        results["gateway"] = "UNREACHABLE"
+
+    if hermes_url:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                resp = await client.get(f"{hermes_url.rstrip('/')}/health")
+                if resp.status_code == 200:
+                    results["hermes"] = "OK (200 OK)"
+                else:
+                    results["hermes"] = f"DEGRADED ({resp.status_code})"
+        except Exception:
+            results["hermes"] = "UNREACHABLE"
 
     return results
 
@@ -63,9 +76,12 @@ def main() -> int:
     parser.add_argument(
         "--gateway-url", default="http://localhost:10100", help="OpenCodex Gateway URL"
     )
+    parser.add_argument(
+        "--hermes-url", default="http://localhost:8642", help="Hermes API URL"
+    )
     args = parser.parse_args()
 
-    results = asyncio.run(check_health(Path(args.db), args.gateway_url))
+    results = asyncio.run(check_health(Path(args.db), args.gateway_url, args.hermes_url))
     logger.info("=== GoldGuard Production System Health ===")
     all_ok = True
     for component, status in results.items():

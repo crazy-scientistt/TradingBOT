@@ -44,3 +44,16 @@ def test_hermes_bridge_holdout_stays_sealed(client: TestClient) -> None:
     )
     assert res.status_code == 403
     assert res.json()["detail"]["code"] == "SEALED_HOLDOUT"
+
+
+def test_hermes_bridge_get_candles_is_empty_not_synthetic(client: TestClient) -> None:
+    res = client.post(
+        "/internal/hermes/tools/get_candles",
+        json={"symbol": "PAXGUSDT"},
+        headers={"Authorization": "Bearer bridge-secret"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["available"] is True
+    assert body["candles"] == []
+

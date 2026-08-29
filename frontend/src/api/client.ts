@@ -90,6 +90,22 @@ export interface PreflightResponse {
   observed_at: string;
 }
 
+export interface DiagnosticCheck {
+  name: string;
+  status: 'pass' | 'fail' | 'not_run';
+  detail: string;
+}
+
+export interface DiagnosticsData {
+  blockers: string[];
+  checks: DiagnosticCheck[];
+  live_armed: boolean;
+  real_orders_placed: number;
+  mode?: string;
+  opencodex_host?: string | null;
+  hermes_host?: string | null;
+}
+
 export interface AgentEvent {
   event_id: string;
   action: string;
@@ -143,6 +159,7 @@ export interface DashboardSnapshot {
   agentEvents: ApiEnvelope<AgentEvent[]>;
   preflight: PreflightResponse;
   promotionCanary: ApiEnvelope<Record<string, unknown> | null>;
+  diagnostics?: ApiEnvelope<DiagnosticsData | null>;
 }
 
 function isApiEnvelope(value: unknown): value is ApiEnvelope<unknown> {
@@ -194,6 +211,10 @@ export const api = {
 
   async preflight(): Promise<PreflightResponse> {
     return fetchJson(`${API_BASE}/preflight`);
+  },
+
+  async getDiagnostics(): Promise<DiagnosticsData> {
+    return fetchJson(`${API_BASE}/diagnostics`);
   },
 
   // KPI Metrics

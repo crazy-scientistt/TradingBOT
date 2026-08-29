@@ -1,8 +1,31 @@
 # Operator handoff
 
-Code for all eight phases is in `main`. The items below cannot be finished
-without credentials or a production account you control. Live stays disarmed
-until you complete them.
+Code for all eight phases is in `main`. Live stays disarmed until you complete
+the items below. The local OpenCodex path does **not** need Binance, Telegram,
+or Railway.
+
+## 0. Run it on your PC first (OpenCodex + Hermes + GoldGuard)
+
+From the repo root, with Docker Desktop running:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/bootstrap_local_env.ps1
+powershell -ExecutionPolicy Bypass -File scripts/start_local.ps1
+python scripts/verify_local_stack.py
+```
+
+macOS / Linux: `sh scripts/bootstrap_local_env.sh` then `sh scripts/start_local.sh`.
+
+Then open:
+
+- GoldGuard: http://localhost:8000
+- OpenCodex dashboard: http://localhost:10100 — paste a Gemini / Antigravity key here
+- Hermes health: http://localhost:8642/health
+
+Full walkthrough: `docs/operations/local-opencodex.md`.
+
+Paper trading runs without those keys. AI veto / Hermes research stay fail-closed
+until OpenCodex lists a model.
 
 ## 1. Secrets (Railway or local `.env`, never chat)
 

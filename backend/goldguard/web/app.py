@@ -44,8 +44,10 @@ from goldguard.context.engine import ContextEngine
 from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.context.sources import OpenCodexSearchProvider
 from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
+from goldguard.hermes.bindings import build_tool_bindings
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
+from goldguard.hermes.tools import HermesToolRegistry
 from goldguard.live.arming import ArmingService, configure_arming_service
 from goldguard.market.binance import BinancePublicClient
 from goldguard.market.dataset_service import DatasetService
@@ -70,6 +72,7 @@ from goldguard.services.settings_service import (
     configure_settings_service,
 )
 from goldguard.storage.database import Database
+from goldguard.storage.evidence_repository import EvidenceRepository
 from goldguard.storage.profile_repository import ProfileRepository
 from goldguard.storage.repositories import (
     AutonomyRepository,
@@ -98,9 +101,15 @@ from goldguard.strategy.runtime import GenomeRuntime
 from goldguard.web.auth_dependencies import configure_auth_service
 from goldguard.web.routes.auth import router as auth_router
 from goldguard.web.routes.control import router as control_router
+from goldguard.web.routes.execution import get_diagnostics
 from goldguard.web.routes.execution import router as execution_router
 from goldguard.web.routes.health import router as health_router
-from goldguard.web.routes.hermes_bridge import router as hermes_bridge_router
+from goldguard.web.routes.hermes_bridge import (
+    configure_tool_registry,
+)
+from goldguard.web.routes.hermes_bridge import (
+    router as hermes_bridge_router,
+)
 from goldguard.web.routes.qualification import router as qualification_router
 from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.settings import router as settings_router
@@ -737,6 +746,22 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 max_backtest_calls=_settings.research_backtest_max_per_day,
                 max_web_calls=_settings.research_web_calls_max_per_day,
             ),
+        )
+        evidence_repo = EvidenceRepository(_db) if _db is not None else None
+        evaluation_repo = EvaluationRepository(_db) if _db is not None else None
+        configure_tool_registry(
+            HermesToolRegistry(
+                bindings=build_tool_bindings(
+                    candle_repo=_candle_repo,
+                    ledger_repo=_ledger_repo,
+                    genome_repo=_genome_repo,
+                    reflection_repo=_reflection_repo,
+                    evidence_repo=evidence_repo,
+                    evaluation_repo=evaluation_repo,
+                    backtest_engine=_backtest_engine,
+                    symbol=_settings.symbol,
+                )
+            )
         )
 
     if _trading_runtime is not None and _candle_repo is not None:
@@ -1624,7 +1649,7 @@ async def provider_catalog() -> dict[str, Any]:
             stale=True,
             detail=(
                 "OpenCodex is not configured. "
-                "Add the second Railway service, then pick models here."
+                "Add the OpenCodex service (local compose or Railway), then pick models here."
             ),
         )
     try:
@@ -1659,9 +1684,12 @@ async def provider_catalog() -> dict[str, Any]:
         source="opencodex",
         availability="available" if rows else "unavailable",
         detail=(
-            None if rows else (
-            "OpenCodex is up but has no models yet. Add a provider in its dashboard."
-        )
+            None
+            if rows
+            else (
+                "OpenCodex is up but has no models yet. Add a provider in its dashboard "
+                "(http://localhost:10100 when running locally)."
+            )
         ),
     )
 
@@ -1709,14 +1737,21 @@ async def probe_providers() -> dict[str, Any]:
         )
 
     now = datetime.now(UTC)
+    gateway = _gateway_client()
     for provider in providers:
         started = perf_counter()
         try:
-            response = await _provider_http_client.get(provider.base_url, timeout=5.0)
+            if provider.name == "opencodex" and gateway is not None:
+                await gateway.healthz()
+                status_code = 200
+            else:
+                health_url = provider.base_url.rstrip("/") + "/healthz"
+                response = await _provider_http_client.get(health_url, timeout=5.0)
+                status_code = response.status_code
             _provider_probes[provider.name] = {
                 "latency_ms": int((perf_counter() - started) * 1000),
-                "probe_status": "ok" if response.status_code < 500 else "error",
-                "probe_detail": f"HTTP {response.status_code}",
+                "probe_status": "ok" if status_code < 500 else "error",
+                "probe_detail": f"HTTP {status_code}",
                 "probed_at": now.isoformat(),
             }
         except Exception as exc:
@@ -2311,6 +2346,7 @@ _DASHBOARD_SECTIONS: tuple[tuple[str, Callable[[], Awaitable[Any]]], ...] = (
     ("agentEvents", agent_events),
     ("preflight", preflight),
     ("promotionCanary", promotion_canary),
+    ("diagnostics", get_diagnostics),
 )
 
 

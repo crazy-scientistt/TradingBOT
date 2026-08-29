@@ -34,3 +34,8 @@ single replica each unless their own storage model is redesigned.
 - GoldGuard liveness: `GET /api/health/live` (process loop only).
 - GoldGuard readiness: `GET /api/health/ready` (database initialised).
 - Trading readiness blockers live on `GET /api/diagnostics`, not on liveness.
+
+Local equivalent (not Railway): `docker-compose.local.yml` binds OpenCodex
+`:10100`, Hermes `:8642`, and GoldGuard `:8000` on localhost. See
+`docs/operations/local-opencodex.md`.
+

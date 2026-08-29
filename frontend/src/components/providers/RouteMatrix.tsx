@@ -134,8 +134,10 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
             fontSize: '13px',
           }}
         >
-          OpenCodex has not listed any models yet. After the second Railway service is up,
-          add Gemini / Antigravity in the OpenCodex dashboard. They will appear here automatically.
+          OpenCodex has not listed any models yet. Start the local stack
+          (http://localhost:10100) or the Railway OpenCodex service, add Gemini /
+          Antigravity in that dashboard, then click Test connection. GoldGuard never
+          stores those keys.
         </div>
       )}
 
