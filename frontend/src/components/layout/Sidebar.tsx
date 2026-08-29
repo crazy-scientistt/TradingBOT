@@ -84,7 +84,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
   };
 
   return (
-    <aside style={{
+    <aside className="gg-sidebar" style={{
       width: '210px',
       minWidth: '210px',
       backgroundColor: '#090a0c',

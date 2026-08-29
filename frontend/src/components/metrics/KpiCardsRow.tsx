@@ -9,12 +9,7 @@ interface KpiCardsRowProps {
 
 export const KpiCardsRow: React.FC<KpiCardsRowProps> = ({ data, spreadHistory = [] }) => {
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: 'repeat(5, 1fr)',
-      gap: '10px',
-      width: '100%'
-    }}>
+    <div className="gg-kpis">
       {/* 1. EQUITY */}
       <div className="dashboard-card" style={{ padding: '12px 14px', minHeight: '82px', justifyContent: 'space-between' }}>
         <div style={{ fontSize: '10.5px', fontWeight: 600, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>

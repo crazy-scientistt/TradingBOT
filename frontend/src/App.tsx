@@ -111,30 +111,12 @@ const MainDashboard: React.FC = () => {
   };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        width: '100vw',
-        minHeight: '100vh',
-        backgroundColor: 'var(--bg-app)',
-        color: 'var(--text-main)',
-        overflowX: 'hidden',
-      }}
-    >
+    <div className="gg-shell" style={{ backgroundColor: 'var(--bg-app)', color: 'var(--text-main)', overflowX: 'hidden' }}>
       {/* Left Sidebar */}
       <Sidebar activeTab={activeTab} onSelectTab={handleSelectTab} />
 
       {/* Main Content Area */}
-      <div
-        style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          minWidth: 0,
-          backgroundColor: 'var(--bg-app)',
-          minHeight: '100vh',
-        }}
-      >
+      <div className="gg-main" style={{ backgroundColor: 'var(--bg-app)', minHeight: '100vh' }}>
         {/* Top Header */}
         <TopHeader onOpenSettings={() => setIsSettingsOpen(true)} />
         <ConnectionBanner />
@@ -160,14 +142,7 @@ const MainDashboard: React.FC = () => {
               )}
 
               {/* Row 2: Middle Section - Chart (Left) + Open Position & Pipeline (Right) */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '10px',
-                  alignItems: 'stretch',
-                  width: '100%',
-                }}
-              >
+              <div className="gg-row">
                 <CandlestickChart candles={candles} quote={quote} position={position} />
                 {position ? (
                   <OpenPositionCard position={position} pipelineSteps={pipelineSteps} />
@@ -177,14 +152,7 @@ const MainDashboard: React.FC = () => {
               </div>
 
               {/* Row 3: Bottom Section - Equity Curve (Left) + Live Context (Middle) + Risk & Health (Right) */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '10px',
-                  alignItems: 'stretch',
-                  width: '100%',
-                }}
-              >
+              <div className="gg-row">
                 <EquityCurveCard data={equityHistory} />
                 <LiveContextCard items={liveContext} />
                 <RiskHealthCard items={riskHealth} />
