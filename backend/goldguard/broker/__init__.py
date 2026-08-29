@@ -1,16 +1,29 @@
-"""Execution adapters for paper and explicitly armed live trading."""
-
-from goldguard.broker.base import Broker, ClosedPaperTrade, PaperFill, PaperPosition
+from goldguard.broker.base import ClosedPaperTrade, PaperFill, PaperPosition
 from goldguard.broker.paper import PaperBroker, PaperOrderRejected
-from goldguard.broker.safety_guard import SafetyGuardError, check_safe_url
+from goldguard.broker.paper_futures import (
+    FuturesOrderRejected,
+    InsufficientMargin,
+    PaperFuturesBroker,
+)
+from goldguard.broker.paper_portfolio import PaperPortfolioBroker
+from goldguard.broker.paper_spot import (
+    InsufficientBalance,
+    PaperSpotBroker,
+    SpotOrderRejected,
+)
 
 __all__ = [
-    "Broker",
     "ClosedPaperTrade",
+    "FuturesOrderRejected",
+    "InsufficientBalance",
+    "InsufficientMargin",
     "PaperBroker",
     "PaperFill",
+    "PaperFuturesBroker",
     "PaperOrderRejected",
+    "PaperPortfolioBroker",
     "PaperPosition",
-    "SafetyGuardError",
-    "check_safe_url",
+    "PaperSpotBroker",
+    "SpotOrderRejected",
 ]
+
