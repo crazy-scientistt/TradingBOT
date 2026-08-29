@@ -1,6 +1,6 @@
 """Binance market data ingestion and validation."""
 
-from goldguard.market.binance import BinancePublicClient, SymbolFilters
+from goldguard.market.binance import BinanceFuturesPublicClient, BinancePublicClient, SymbolFilters
 from goldguard.market.history import (
     BootstrapManifest,
     DatasetManifest,
@@ -13,6 +13,7 @@ from goldguard.market.history import (
 )
 
 __all__ = [
+    "BinanceFuturesPublicClient",
     "BinancePublicClient",
     "BootstrapManifest",
     "DatasetManifest",

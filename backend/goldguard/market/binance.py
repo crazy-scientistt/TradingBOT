@@ -21,6 +21,10 @@ class SymbolFilters:
 
 
 class BinancePublicClient:
+    exchange_info_path = "/api/v3/exchangeInfo"
+    quote_path = "/api/v3/ticker/bookTicker"
+    klines_path = "/api/v3/klines"
+
     def __init__(
         self,
         *,
@@ -67,14 +71,20 @@ class BinancePublicClient:
         payload = await self._get_json("/sapi/v1/system/status")
         return isinstance(payload, dict) and payload.get("status") == 0
 
+    async def exchange_info(self) -> dict[str, Any]:
+        payload = await self._get_json(self.exchange_info_path)
+        if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), list):
+            raise RuntimeError("Binance exchange-info response was malformed")
+        return payload
+
     async def symbol_filters(self, symbol: str) -> SymbolFilters:
-        payload = await self._get_json("/api/v3/exchangeInfo", {"symbol": symbol})
+        payload = await self._get_json(self.exchange_info_path, {"symbol": symbol})
         symbols = payload.get("symbols", []) if isinstance(payload, dict) else []
         match = next((item for item in symbols if item.get("symbol") == symbol), None)
         if (
             match is None
             or match.get("status") != "TRADING"
-            or match.get("isSpotTradingAllowed") is not True
+            or not self._symbol_is_eligible(match)
         ):
             raise RuntimeError(f"{symbol} is not available for spot trading")
         by_type = {item.get("filterType"): item for item in match.get("filters", [])}
@@ -92,8 +102,11 @@ class BinancePublicClient:
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"{symbol} exchange filters were malformed") from exc
 
+    def _symbol_is_eligible(self, symbol: dict[str, Any]) -> bool:
+        return symbol.get("isSpotTradingAllowed") is True
+
     async def quote(self, symbol: str, *, observed_at: datetime | None = None) -> Quote:
-        payload = await self._get_json("/api/v3/ticker/bookTicker", {"symbol": symbol})
+        payload = await self._get_json(self.quote_path, {"symbol": symbol})
         try:
             return Quote(
                 bid=Decimal(str(payload["bidPrice"])),
@@ -119,7 +132,7 @@ class BinancePublicClient:
             params["startTime"] = start_time_ms
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
-        payload = await self._get_json("/api/v3/klines", params)
+        payload = await self._get_json(self.klines_path, params)
         current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
         candles: list[Candle] = []
         if not isinstance(payload, list):
@@ -146,3 +159,12 @@ class BinancePublicClient:
                 )
             )
         return candles
+
+
+class BinanceFuturesPublicClient(BinancePublicClient):
+    exchange_info_path = "/fapi/v1/exchangeInfo"
+    quote_path = "/fapi/v1/ticker/bookTicker"
+    klines_path = "/fapi/v1/klines"
+
+    def _symbol_is_eligible(self, symbol: dict[str, Any]) -> bool:
+        return symbol.get("contractType") in {None, "PERPETUAL"}

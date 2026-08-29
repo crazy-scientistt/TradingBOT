@@ -5,7 +5,11 @@ from pathlib import Path
 
 import httpx
 import pytest
-from goldguard.market.binance import BinancePublicClient, SymbolFilters
+from goldguard.market.binance import (
+    BinanceFuturesPublicClient,
+    BinancePublicClient,
+    SymbolFilters,
+)
 
 
 @pytest.mark.asyncio
@@ -121,3 +125,23 @@ async def test_non_trading_symbol_is_rejected() -> None:
         client = BinancePublicClient(http_client=http_client, base_url="https://binance.test")
         with pytest.raises(RuntimeError, match="not available for spot trading"):
             await client.symbol_filters("PAXGUSDT")
+
+
+@pytest.mark.asyncio
+async def test_spot_and_futures_exchange_info_use_product_specific_paths() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"symbols": []})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        spot = BinancePublicClient(http_client=http_client, base_url="https://binance.test")
+        futures = BinanceFuturesPublicClient(
+            http_client=http_client,
+            base_url="https://futures.test",
+        )
+        await spot.exchange_info()
+        await futures.exchange_info()
+
+    assert seen == ["/api/v3/exchangeInfo", "/fapi/v1/exchangeInfo"]

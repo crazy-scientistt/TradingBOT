@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from goldguard.domain.enums import ProductKind
-from goldguard.market.catalog import SymbolCatalog, SymbolNotEligible
+from goldguard.market.catalog import CatalogRefreshError, SymbolCatalog, SymbolNotEligible
 
 
 @pytest.fixture
@@ -113,3 +113,33 @@ async def test_catalog_without_exchange_evidence_never_seeds_tradable_symbols() 
     assert snapshot.futures_rules == {}
     with pytest.raises(SymbolNotEligible, match="not found"):
         catalog.require(ProductKind.SPOT, "PAXGUSDT")
+
+
+@pytest.mark.asyncio
+async def test_catalog_does_not_hide_configured_exchange_failure() -> None:
+    client = AsyncMock()
+    client.exchange_info = AsyncMock(side_effect=RuntimeError("upstream unavailable"))
+
+    with pytest.raises(CatalogRefreshError, match="spot catalog refresh failed"):
+        await SymbolCatalog(spot_client=client).refresh()
+
+
+@pytest.mark.asyncio
+async def test_catalog_rejects_trading_symbol_with_missing_exchange_filters() -> None:
+    client = AsyncMock()
+    client.exchange_info = AsyncMock(
+        return_value={
+            "symbols": [
+                {
+                    "symbol": "PAXGUSDT",
+                    "status": "TRADING",
+                    "baseAsset": "PAXG",
+                    "quoteAsset": "USDT",
+                    "filters": [],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(CatalogRefreshError, match="filters are malformed"):
+        await SymbolCatalog(spot_client=client).refresh()
