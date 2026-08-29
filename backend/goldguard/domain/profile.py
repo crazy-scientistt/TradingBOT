@@ -61,9 +61,9 @@ def default_autonomous_profile() -> AutonomousProfile:
         strategy_mode=StrategyMode.AUTONOMOUS,
         autonomous_profile=AutonomousProfileKind.STANDARD,
         spot_enabled=True,
-        futures_enabled=True,
-        spot_pairs=("PAXGUSDT",),
-        futures_pairs=("BTCUSDT", "SOLUSDT"),
+        futures_enabled=False,
+        spot_pairs=("PAXGUSDT", "ETHUSDT", "SOLUSDT"),
+        futures_pairs=(),
         risk=RiskCeilings(
             max_capital_per_trade_rate=Decimal("0.005"),
             max_futures_leverage=2,
