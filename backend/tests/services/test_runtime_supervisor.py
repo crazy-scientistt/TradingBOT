@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from goldguard.broker.paper_futures import PaperFuturesBroker
@@ -30,7 +31,10 @@ async def test_scope_off_manages_existing_position_to_safe_exit(tmp_path: Path) 
     db.migrate()
     profile = default_autonomous_profile()
 
-    catalog = SymbolCatalog()
+    catalog = SymbolCatalog(
+        spot_client=_fake_spot_client(),
+        futures_client=_fake_futures_client(),
+    )
     market = MarketSupervisor(catalog=catalog)
     spot = PaperSpotBroker(starting_cash=Decimal("10000.00"))
     futures = PaperFuturesBroker(starting_collateral=Decimal("10000.00"))
@@ -58,3 +62,73 @@ async def test_scope_off_manages_existing_position_to_safe_exit(tmp_path: Path) 
     assert system.protection_active("pos-1") is False
 
     await system.stop()
+
+
+def _fake_spot_client() -> AsyncMock:
+    client = AsyncMock()
+    client.exchange_info = AsyncMock(
+        return_value={
+            "symbols": [
+                {
+                    "symbol": "PAXGUSDT",
+                    "status": "TRADING",
+                    "baseAsset": "PAXG",
+                    "quoteAsset": "USDT",
+                    "filters": [
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                        {
+                            "filterType": "LOT_SIZE",
+                            "stepSize": "0.0001",
+                            "minQty": "0.0001",
+                            "maxQty": "1000",
+                        },
+                        {"filterType": "NOTIONAL", "minNotional": "5"},
+                    ],
+                }
+            ]
+        }
+    )
+    return client
+
+
+def _fake_futures_client() -> AsyncMock:
+    client = AsyncMock()
+    client.exchange_info = AsyncMock(
+        return_value={
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "status": "TRADING",
+                    "baseAsset": "BTC",
+                    "quoteAsset": "USDT",
+                    "filters": [
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.1"},
+                        {
+                            "filterType": "LOT_SIZE",
+                            "stepSize": "0.001",
+                            "minQty": "0.001",
+                            "maxQty": "1000",
+                        },
+                        {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    ],
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "status": "TRADING",
+                    "baseAsset": "ETH",
+                    "quoteAsset": "USDT",
+                    "filters": [
+                        {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                        {
+                            "filterType": "LOT_SIZE",
+                            "stepSize": "0.001",
+                            "minQty": "0.001",
+                            "maxQty": "1000",
+                        },
+                        {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    ],
+                },
+            ]
+        }
+    )
+    return client

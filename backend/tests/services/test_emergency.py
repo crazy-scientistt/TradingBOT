@@ -55,9 +55,12 @@ async def test_emergency_service_closes_positions() -> None:
     paxg_scope = MarketScope(mode=ExecutionMode.PAPER, product=ProductKind.SPOT, symbol="PAXGUSDT")
     btc_scope = MarketScope(mode=ExecutionMode.PAPER, product=ProductKind.FUTURES, symbol="BTCUSDT")
 
+    # Ensure brokers have observed prices for close orders
+    spot.on_price("PAXGUSDT", Decimal("2500.00"))
+    futures.on_price("BTCUSDT", Decimal("60000.00"))
+
     closed = await emergency.close_owned_positions([paxg_scope, btc_scope], ExitReason.EMERGENCY)
     assert closed == 2
 
     snap = await broker.snapshot()
     assert snap.positions_count == 0
-
