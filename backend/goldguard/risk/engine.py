@@ -86,8 +86,12 @@ class RiskEngine:
         actual_risk = quantity * actual_distance
         if actual_risk > risk_budget:
             capped = floor_to_increment(risk_budget / actual_distance, context.filters.step_size)
-            if capped < context.filters.minimum_quantity or capped * context.entry < context.filters.minimum_notional:
-                return RiskDecision(False, ("INSUFFICIENT_CASH_FOR_RISK",), genome_hash=context.genome_hash)
+            below_min_qty = capped < context.filters.minimum_quantity
+            below_min_notional = capped * context.entry < context.filters.minimum_notional
+            if below_min_qty or below_min_notional:
+                return RiskDecision(
+                    False, ("INSUFFICIENT_CASH_FOR_RISK",), genome_hash=context.genome_hash
+                )
             quantity = capped
             actual_risk = quantity * actual_distance
         if actual_risk > risk_budget:
