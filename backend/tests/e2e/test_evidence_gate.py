@@ -29,9 +29,24 @@ def test_conflicting_high_quality_claims_reduce_size() -> None:
         affected_assets=("PAXGUSDT",),
         event_class="fed",
         claims=(
-            EvidenceClaim(claim_id="c-1", claim_text="Inflation up", direction="bullish", confidence=0.9),
-            EvidenceClaim(claim_id="c-2", claim_text="Rates cut", direction="bearish", confidence=0.9),
-            EvidenceClaim(claim_id="c-3", claim_text="Neutral stance", direction="neutral", confidence=0.9),
+            EvidenceClaim(
+                claim_id="c-1",
+                claim_text="Inflation up",
+                direction="bullish",
+                confidence=0.9,
+            ),
+            EvidenceClaim(
+                claim_id="c-2",
+                claim_text="Rates cut",
+                direction="bearish",
+                confidence=0.9,
+            ),
+            EvidenceClaim(
+                claim_id="c-3",
+                claim_text="Neutral stance",
+                direction="neutral",
+                confidence=0.9,
+            ),
         ),
     )
 
@@ -47,4 +62,3 @@ def test_conflicting_high_quality_claims_reduce_size() -> None:
     decision = gate.evaluate(bundle)
     assert decision.disposition == EvidenceDisposition.REDUCED_SIZE
     assert Decimal("0") < decision.size_multiplier < Decimal("1")
-

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -55,6 +56,7 @@ class MarketClient(Protocol):
         end_time_ms: int | None = None,
         limit: int = 1000,
         now_ms: int | None = None,
+        include_open: bool = False,
     ) -> list[Candle]: ...
 
 
@@ -106,6 +108,7 @@ class MarketIngestionService:
         self._failures = 0
         self._task: asyncio.Task[None] | None = None
         self._ws_task: asyncio.Task[None] | None = None
+        self._runtime_tasks: set[asyncio.Task[object]] = set()
         self._ws_stop = asyncio.Event()
         self.hub = MarketTickHub()
         self._last_runtime_quote = 0.0
@@ -137,6 +140,12 @@ class MarketIngestionService:
                 await task
         self._ws_task = None
         self._task = None
+        runtime_tasks = tuple(self._runtime_tasks)
+        for runtime_task in runtime_tasks:
+            runtime_task.cancel()
+        if runtime_tasks:
+            await asyncio.gather(*runtime_tasks, return_exceptions=True)
+        self._runtime_tasks.clear()
         if self._owned_http_client is not None:
             await self._owned_http_client.aclose()
             self._owned_http_client = None
@@ -264,9 +273,9 @@ class MarketIngestionService:
             return
         self._last_runtime_quote = now
         self._publish()
-        asyncio.create_task(
-            asyncio.to_thread(self._runtime.process_quote, quote),
-            name="goldguard-ws-quote",
+        self._spawn_runtime_work(
+            lambda: self._runtime.process_quote(quote),
+            "goldguard-ws-quote",
         )
 
     def _on_live_kline(self, candle: Candle) -> None:
@@ -278,9 +287,9 @@ class MarketIngestionService:
             if appended and candle.timeframe == self._settings.entry_timeframe:
                 quote = self._latest_quote
                 if quote is not None:
-                    asyncio.create_task(
-                        asyncio.to_thread(self._runtime.process_closed_candle, appended[-1], quote),
-                        name="goldguard-ws-close",
+                    self._spawn_runtime_work(
+                        lambda: self._runtime.process_closed_candle(appended[-1], quote),
+                        "goldguard-ws-close",
                     )
             self._refresh_verification()
             self._publish()
@@ -307,6 +316,19 @@ class MarketIngestionService:
         if forming.closed:
             return closed
         return [*closed, forming]
+
+    def _spawn_runtime_work(self, operation: Callable[[], object], name: str) -> None:
+        task = asyncio.create_task(asyncio.to_thread(operation), name=name)
+        self._runtime_tasks.add(task)
+        task.add_done_callback(self._runtime_work_done)
+
+    def _runtime_work_done(self, task: asyncio.Task[object]) -> None:
+        self._runtime_tasks.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if isinstance(error, Exception):
+            self._record_failure(error)
 
 
     def _merge(self, timeframe: str, fetched: list[Candle]) -> list[Candle]:

@@ -60,7 +60,7 @@ describe('RouteMatrix', () => {
         initialRoutes={mockRoutes}
       />
     );
-    expect(screen.getByText('opencodex')).toBeInTheDocument();
+    expect(screen.getByText('opencodex', { selector: 'span' })).toBeInTheDocument();
     expect(screen.getByText(/45 ms/i)).toBeInTheDocument();
     expect(screen.getByText('sk-mock-****9999')).toBeInTheDocument();
   });

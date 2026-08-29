@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 from goldguard.domain.enums import ExecutionMode, ProductKind
 from goldguard.execution.models import MarketScope
 from goldguard.services.evidence_service import EvidenceService

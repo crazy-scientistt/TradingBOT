@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -110,6 +111,17 @@ class _RuntimeThatRecordsBeforeRaising(_StubRuntime):
         raise error
 
 
+class _BlockingQuoteRuntime(_StubRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def process_quote(self, *_: object) -> None:
+        self.started.set()
+        self.release.wait(timeout=1)
+
+
 @pytest.fixture
 def candle_repo(tmp_path) -> MarketCandleRepository:
     database = Database(tmp_path / "ingestion.db")
@@ -206,3 +218,32 @@ async def test_runtime_failure_is_recorded_once_across_runtime_and_ingestion(can
             "SELECT COUNT(*) FROM system_health_events WHERE component = 'trading_runtime'"
         ).fetchone()[0]
     assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_websocket_runtime_work_is_owned_until_completion(candle_repo) -> None:
+    runtime = _BlockingQuoteRuntime()
+    settings = Settings(environment="test", data_dir=candle_repo.database.path.parent)
+    service = MarketIngestionService(
+        settings=settings,
+        runtime=runtime,  # type: ignore[arg-type]
+        candle_repo=candle_repo,
+        client=_StubClient(),
+    )
+    quote = Quote(
+        bid=Decimal("2500.00"),
+        ask=Decimal("2500.40"),
+        observed_at=datetime.now(UTC),
+    )
+
+    service._on_live_quote(quote)
+
+    assert await asyncio.to_thread(runtime.started.wait, 1)
+    assert len(service._runtime_tasks) == 1
+    runtime.release.set()
+    for _ in range(100):
+        if not service._runtime_tasks:
+            break
+        await asyncio.sleep(0.001)
+    await service.aclose()
+    assert service._runtime_tasks == set()

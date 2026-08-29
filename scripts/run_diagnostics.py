@@ -3,31 +3,26 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import shutil
-import sys
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from pydantic import SecretStr
 
-# Path setup
-root = Path(__file__).resolve().parents[1]
-if str(root / "backend") not in sys.path:
-    sys.path.insert(0, str(root / "backend"))
-
-from goldguard.storage.database import Database
-from goldguard.domain.enums import ExecutionMode, ProductKind, OrderSide, PositionSide, MarginMode
-from goldguard.execution.models import OrderIntent
-from goldguard.broker.paper_spot import PaperSpotBroker
+from fastapi.testclient import TestClient
 from goldguard.broker.paper_futures import PaperFuturesBroker
-from goldguard.market.catalog import SymbolCatalog
+from goldguard.broker.paper_spot import PaperSpotBroker
+from goldguard.domain.enums import ExecutionMode, MarginMode, OrderSide, PositionSide, ProductKind
+from goldguard.execution.models import OrderIntent
 from goldguard.hermes.tools import HermesToolRegistry, SealedHoldoutAccessError
-from goldguard.research.qualification import QualificationService
+from goldguard.market.catalog import SymbolCatalog
 from goldguard.notifications.telegram import TelegramNotificationService
 from goldguard.operations.backups import BackupService
+from goldguard.research.qualification import QualificationService
+from goldguard.storage.database import Database
 from goldguard.web import app as app_module
-from fastapi.testclient import TestClient
+from pydantic import SecretStr
+
+root = Path(__file__).resolve().parents[1]
 
 async def run_diagnostics_e2e(output_json: bool = False) -> int:
     diag_dir = root / "data-diagnostic-live"
@@ -49,7 +44,10 @@ async def run_diagnostics_e2e(output_json: bool = False) -> int:
             "status": "PASS",
             "spot_symbols": len(snap.spot_rules),
             "futures_symbols": len(snap.futures_rules),
-            "detail": "Binance public market catalog verified with PAXGUSDT spot and BTCUSDT/ETHUSDT futures."
+            "detail": (
+                "Binance public market catalog verified with PAXGUSDT spot and "
+                "BTCUSDT/ETHUSDT futures."
+            )
         }
 
         # Check 2: Paper Spot Execution
@@ -171,7 +169,12 @@ async def run_diagnostics_e2e(output_json: bool = False) -> int:
 
         report["checks"]["frontend_truthfulness"] = {
             "status": "PASS" if truth_ok else "FAIL",
-            "routes_verified": ["/api/health", "/api/orders", "/api/positions", "/api/qualification/report"],
+            "routes_verified": [
+                "/api/health",
+                "/api/orders",
+                "/api/positions",
+                "/api/qualification/report",
+            ],
             "detail": "All live API endpoints serving frontend contracts verified."
         }
 
@@ -202,4 +205,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

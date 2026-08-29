@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { api } from '../../api/client';
 import { StrategyStudio } from '../../components/strategy/StrategyStudio';
 import { StrategyGenome } from '../../types';
 
@@ -55,6 +56,10 @@ const candidateGenome: StrategyGenome = {
 };
 
 describe('StrategyStudio', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('renders active baseline genome title and status badge', () => {
     render(<StrategyStudio initialGenomes={[baselineGenome]} activeGenomeId="trend-pullback-v1" />);
     const titles = screen.getAllByText(/Hourly Trend 15m Pullback Recovery/i);
@@ -77,6 +82,17 @@ describe('StrategyStudio', () => {
   });
 
   it('triggers inline backtest and displays performance metrics', async () => {
+    const runBacktest = vi.spyOn(api, 'runBacktest').mockResolvedValue({
+      net_pnl: '10.00',
+      gross_pnl: '12.00',
+      fee_drag: '2.00',
+      net_return: '1.00%',
+      trade_count: 10,
+      win_rate: '60.0%',
+      profit_factor: '1.50',
+      maximum_drawdown: '2.00%',
+      sharpe_ratio: '1.20',
+    });
     render(
       <StrategyStudio
         initialGenomes={[baselineGenome]}
@@ -88,5 +104,6 @@ describe('StrategyStudio', () => {
 
     expect(await screen.findByText(/Win Rate/i)).toBeInTheDocument();
     expect(screen.getByText(/Profit Factor/i)).toBeInTheDocument();
+    expect(runBacktest).toHaveBeenCalledWith(baselineGenome);
   });
 });

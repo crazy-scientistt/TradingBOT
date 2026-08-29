@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -37,7 +38,11 @@ def combined_stream_url(rest_base_url: str, symbol: str) -> str:
     return f"{stream_base_url(rest_base_url)}/stream?streams={'/'.join(parts)}"
 
 
-def parse_book_ticker(payload: dict[str, Any], *, observed_at: datetime | None = None) -> Quote | None:
+def parse_book_ticker(
+    payload: dict[str, Any],
+    *,
+    observed_at: datetime | None = None,
+) -> Quote | None:
     data = payload.get("data") if "data" in payload else payload
     if not isinstance(data, dict):
         return None
@@ -181,7 +186,12 @@ async def run_binance_socket(
     while not stop.is_set():
         try:
             logger.info("Connecting Binance live stream %s", url)
-            async with websockets.connect(url, ping_interval=20, ping_timeout=20, max_size=2**20) as ws:
+            async with websockets.connect(
+                url,
+                ping_interval=20,
+                ping_timeout=20,
+                max_size=2**20,
+            ) as ws:
                 backoff = 1.0
                 while not stop.is_set():
                     raw = await asyncio.wait_for(ws.recv(), timeout=30)
@@ -198,7 +208,8 @@ async def run_binance_socket(
                         quote = parse_book_ticker(payload)
                         if quote is not None:
                             on_quote(quote)
-                    if "@kline_" in stream or (isinstance(payload.get("data"), dict) and "k" in payload["data"]):
+                    has_kline = isinstance(payload.get("data"), dict) and "k" in payload["data"]
+                    if "@kline_" in stream or has_kline:
                         candle = parse_kline(payload, symbol=symbol)
                         if candle is not None:
                             on_kline(candle)
@@ -206,8 +217,6 @@ async def run_binance_socket(
             raise
         except Exception as exc:
             logger.warning("Binance live stream dropped (%s); retry in %.1ss", exc, backoff)
-            try:
+            with suppress(TimeoutError):
                 await asyncio.wait_for(stop.wait(), timeout=backoff)
-            except TimeoutError:
-                pass
             backoff = min(backoff * 2, 30.0)

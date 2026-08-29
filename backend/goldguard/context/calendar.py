@@ -1,4 +1,7 @@
-"""High-impact USD event calendar. Fail-open if the feed is down; fail-closed when an event is near."""
+"""High-impact USD event calendar.
+
+The feed fails open when unavailable and fails closed when an event is near.
+"""
 
 from __future__ import annotations
 
@@ -70,7 +73,8 @@ def _parse_when(raw: object) -> datetime | None:
         "%b %d %Y %H:%M",
     ):
         try:
-            parsed = datetime.strptime(text.replace("Z", "+0000") if fmt.endswith("%z") else text, fmt)
+            normalized = text.replace("Z", "+0000") if fmt.endswith("%z") else text
+            parsed = datetime.strptime(normalized, fmt)
             return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
         except ValueError:
             continue
@@ -137,9 +141,17 @@ class EconomicCalendar:
             rows.append(
                 {
                     "id": f"{event.when.isoformat()}-{event.title}",
-                    "category": "fed" if "fed" in event.title.lower() or "fomc" in event.title.lower() else "yields",
+                    "category": (
+                        "fed"
+                        if "fed" in event.title.lower() or "fomc" in event.title.lower()
+                        else "yields"
+                    ),
                     "title": (
-                        f"{'[BLACKOUT] ' if blackout and active and event.title == active.title else ''}"
+                        "[BLACKOUT] "
+                        if blackout and active and event.title == active.title
+                        else ""
+                    )
+                    + (
                         f"{event.title} ({event.country} {event.impact})"
                     ),
                     "direction": "neutral",

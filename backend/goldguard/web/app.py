@@ -98,9 +98,9 @@ from goldguard.strategy.runtime import GenomeRuntime
 from goldguard.web.auth_dependencies import configure_auth_service
 from goldguard.web.routes.auth import router as auth_router
 from goldguard.web.routes.control import router as control_router
-from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.execution import router as execution_router
 from goldguard.web.routes.qualification import router as qualification_router
+from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.settings import router as settings_router
 
 logger = logging.getLogger("goldguard.web")

@@ -6,6 +6,10 @@ import { BotProvider, useBot } from '../../context/BotContext';
 import { TopHeader } from '../../components/layout/TopHeader';
 import { App } from '../../App';
 
+vi.mock('../../components/chart/CandlestickChart', () => ({
+  CandlestickChart: () => <div data-testid="candlestick-chart" />,
+}));
+
 const envelope = <T,>(data: T, availability = 'available') => ({
   availability,
   source: 'test',
