@@ -1,3 +1,5 @@
+import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -170,6 +172,8 @@ def test_totp_throttle_survives_a_fresh_password_session(auth_service: AuthServi
 def test_security_events_are_redacted_and_cover_auth_lifecycle(auth_service: AuthService) -> None:
     password = "correct horse battery staple"
     tokens = auth_service.login(SecretStr(password), "127.0.0.1", "test")
+    with auth_service.database.connect() as connection:
+        totp_secret = str(connection.execute("SELECT totp_secret FROM admin_users").fetchone()[0])
     with pytest.raises(InvalidCredentials):
         auth_service.login(SecretStr("wrong password"), "127.0.0.1", "test")
     auth_service.authenticate_mutation(tokens.cookie_token, tokens.csrf_token, ip="127.0.0.1")
@@ -188,10 +192,11 @@ def test_security_events_are_redacted_and_cover_auth_lifecycle(auth_service: Aut
         "mutation_authenticated",
         "session_revoked",
     }.issubset(event_types)
-    serialized = " ".join(str(row) for row in rows)
+    serialized = json.dumps([dict(row) for row in rows], sort_keys=True)
     assert password not in serialized
     assert tokens.cookie_token not in serialized
     assert tokens.csrf_token not in serialized
+    assert totp_secret not in serialized
     assert all(row["correlation_id"] for row in rows)
 
 
@@ -223,3 +228,122 @@ def test_duplicate_bootstrap_is_audited_without_secret_values(auth_service: Auth
         ).fetchone()
     assert event is not None
     assert "correct horse battery staple" not in str(event)
+
+
+def test_denied_session_paths_are_audited_without_raw_tokens(tmp_path: Path) -> None:
+    database = Database(tmp_path / "denied-audit.db")
+    database.migrate()
+    current = datetime(2026, 8, 29, tzinfo=UTC)
+    service = AuthService(database, now=lambda: current)
+    secret = pyotp.random_base32()
+    service.bootstrap_admin(SecretStr("correct horse battery staple"), SecretStr(secret))
+    tokens = service.login(SecretStr("correct horse battery staple"), "127.0.0.1", "test")
+    service.revoke(tokens.session_id)
+
+    with pytest.raises(SessionExpired):
+        service.authenticate_mutation(
+            tokens.cookie_token,
+            tokens.csrf_token,
+            ip="127.0.0.1",
+            correlation_id="corr-mut",
+        )
+    with pytest.raises(SessionExpired):
+        service.verify_totp(
+            tokens.session_id,
+            pyotp.TOTP(secret).now(),
+            correlation_id="corr-totp",
+        )
+    with pytest.raises(SessionExpired):
+        service.require_recent_totp(
+            tokens.session_id,
+            timedelta(minutes=5),
+            correlation_id="corr-recent-invalid",
+        )
+
+    fresh = service.login(SecretStr("correct horse battery staple"), "127.0.0.1", "test")
+    with pytest.raises(RecentTotpRequired):
+        service.require_recent_totp(
+            fresh.session_id,
+            timedelta(minutes=5),
+            correlation_id="corr-missing",
+        )
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE admin_sessions SET last_totp_at = ? WHERE session_hash = ?",
+            ((current - timedelta(minutes=10)).isoformat(), service._hash_token(fresh.session_id)),
+        )
+    with pytest.raises(RecentTotpRequired):
+        service.require_recent_totp(
+            fresh.session_id,
+            timedelta(minutes=5),
+            correlation_id="corr-stale",
+        )
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE admin_sessions SET last_totp_at = ? WHERE session_hash = ?",
+            ((current + timedelta(minutes=1)).isoformat(), service._hash_token(fresh.session_id)),
+        )
+    with pytest.raises(RecentTotpRequired):
+        service.require_recent_totp(
+            fresh.session_id,
+            timedelta(minutes=5),
+            correlation_id="corr-future",
+        )
+
+    with database.connect() as connection:
+        rows = connection.execute(
+            "SELECT event_type, metadata, correlation_id FROM security_events "
+            "WHERE event_type IN ('mutation_auth_failed', 'totp_auth_failed', 'recent_totp_failed')"
+        ).fetchall()
+    assert {str(row["event_type"]) for row in rows} >= {
+        "mutation_auth_failed",
+        "totp_auth_failed",
+        "recent_totp_failed",
+    }
+    serialized = json.dumps([dict(row) for row in rows], sort_keys=True)
+    assert tokens.cookie_token not in serialized
+    assert tokens.csrf_token not in serialized
+    assert secret not in serialized
+    assert all(row["correlation_id"] for row in rows)
+    correlations = {str(row["correlation_id"]) for row in rows}
+    assert {
+        "corr-mut",
+        "corr-totp",
+        "corr-recent-invalid",
+        "corr-missing",
+        "corr-stale",
+        "corr-future",
+    }.issubset(correlations)
+    reasons = {json.loads(str(row["metadata"]))["reason"] for row in rows}
+    assert {
+        "invalid_or_expired_session",
+        "missing_totp",
+        "stale_totp",
+        "future_totp",
+    }.issubset(reasons)
+
+
+def test_concurrent_wrong_password_attempts_do_not_lose_failure_increments(
+    auth_service: AuthService,
+) -> None:
+    def attempt() -> bool:
+        try:
+            auth_service.login(SecretStr("wrong password"), "127.0.0.1", "test")
+        except (InvalidCredentials, AuthenticationThrottled):
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outcomes = list(
+            pool.map(lambda _: attempt(), range(auth_service.password_failure_limit + 2))
+        )
+
+    assert not any(outcomes)
+    with auth_service.database.connect() as connection:
+        row = connection.execute(
+            "SELECT failures FROM admin_auth_failures WHERE kind = 'password' AND subject = ?",
+            ("127.0.0.1",),
+        ).fetchone()
+    assert row is not None and int(row["failures"]) >= auth_service.password_failure_limit
+    with pytest.raises(AuthenticationThrottled):
+        auth_service.login(SecretStr("correct horse battery staple"), "127.0.0.1", "test")

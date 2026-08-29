@@ -394,32 +394,70 @@ class AuthService:
                 (self._hash_token(token),),
             ).fetchone()
 
-    def authenticate(self, session_id: str) -> AuthSession:
-        if not session_id:
-            raise SessionExpired("session is missing")
+    def authenticate(
+        self,
+        session_id: str,
+        *,
+        audit_event_type: str = "session_auth_failed",
+        audit_reason: str = "invalid_or_expired_session",
+        correlation_id: str | None = None,
+        audit_ip: str | None = None,
+        audit_user_agent: str | None = None,
+    ) -> AuthSession:
         now = self._current_time()
+        missing = not session_id
+        session_hash = self._hash_token(session_id) if session_id else ""
+        failed = False
+        result: AuthSession | None = None
         with self.database.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM admin_sessions WHERE session_hash = ?",
-                (self._hash_token(session_id),),
+                (session_hash,),
             ).fetchone()
-            if row is None:
-                raise SessionExpired("session is invalid or expired")
-            expires = self._parse_timestamp(str(row["expires_at"]))
-            absolute = self._parse_timestamp(str(row["absolute_expires_at"]))
-            if expires is None or absolute is None or now >= expires or now >= absolute:
-                connection.execute(
-                    "DELETE FROM admin_sessions WHERE session_hash = ?",
-                    (self._hash_token(session_id),),
-                )
-                raise SessionExpired("session is invalid or expired")
-            next_expiry = min(now + self.idle_timeout, absolute)
-            connection.execute(
-                "UPDATE admin_sessions SET expires_at = ?, last_seen_at = ? "
-                "WHERE session_hash = ?",
-                (self._timestamp(next_expiry), self._timestamp(now), self._hash_token(session_id)),
+            expires = None if row is None else self._parse_timestamp(str(row["expires_at"]))
+            absolute = (
+                None if row is None else self._parse_timestamp(str(row["absolute_expires_at"]))
             )
-            return self._auth_session_from_row(row, session_id, expires=next_expiry)
+            if (
+                missing
+                or row is None
+                or expires is None
+                or absolute is None
+                or now >= expires
+                or now >= absolute
+            ):
+                failed = True
+                actor = None if row is None else str(row["username"])
+                event_ip = audit_ip or (None if row is None else str(row["ip_address"]))
+                event_user_agent = audit_user_agent or (
+                    None if row is None else str(row["user_agent"])
+                )
+                self._audit(
+                    connection,
+                    audit_event_type,
+                    actor=actor,
+                    ip=event_ip,
+                    user_agent=event_user_agent,
+                    correlation_id=correlation_id or uuid.uuid4().hex,
+                    outcome="failure",
+                    metadata={"reason": audit_reason},
+                )
+                if row is not None:
+                    connection.execute(
+                        "DELETE FROM admin_sessions WHERE session_hash = ?",
+                        (session_hash,),
+                    )
+            else:
+                next_expiry = min(now + self.idle_timeout, absolute)
+                connection.execute(
+                    "UPDATE admin_sessions SET expires_at = ?, last_seen_at = ? "
+                    "WHERE session_hash = ?",
+                    (self._timestamp(next_expiry), self._timestamp(now), session_hash),
+                )
+                result = self._auth_session_from_row(row, session_id, expires=next_expiry)
+        if failed or result is None:
+            raise SessionExpired("session is invalid or expired")
+        return result
 
     def _auth_session_from_row(
         self,
@@ -445,10 +483,21 @@ class AuthService:
             user_agent=str(row["user_agent"]),
         )
 
-    def verify_totp(self, session_id: str, code: str) -> AuthSession:
-        current = self.authenticate(session_id)
+    def verify_totp(
+        self,
+        session_id: str,
+        code: str,
+        *,
+        correlation_id: str | None = None,
+    ) -> AuthSession:
+        correlation = correlation_id or uuid.uuid4().hex
+        current = self.authenticate(
+            session_id,
+            audit_event_type="totp_auth_failed",
+            audit_reason="invalid_or_expired_session",
+            correlation_id=correlation,
+        )
         now = self._current_time()
-        correlation = uuid.uuid4().hex
         subject = self.username
         self._check_throttle(
             "totp",
@@ -577,14 +626,43 @@ class AuthService:
             new_row, new_cookie, expires=new_expires, csrf_token=new_csrf
         )
 
-    def require_recent_totp(self, session_id: str, max_age: timedelta) -> None:
+    def require_recent_totp(
+        self,
+        session_id: str,
+        max_age: timedelta,
+        *,
+        correlation_id: str | None = None,
+    ) -> None:
         if max_age < timedelta(0):
             raise ValueError("max_age must not be negative")
-        session = self.authenticate(session_id)
+        correlation = correlation_id or uuid.uuid4().hex
+        session = self.authenticate(
+            session_id,
+            audit_event_type="recent_totp_failed",
+            audit_reason="invalid_or_expired_session",
+            correlation_id=correlation,
+        )
+        reason: str | None = None
         if session.last_totp_at is None:
-            raise RecentTotpRequired("recent TOTP verification is required")
-        age = self._current_time() - session.last_totp_at
-        if age < timedelta(0) or age > max_age:
+            reason = "missing_totp"
+        else:
+            age = self._current_time() - session.last_totp_at
+            if age < timedelta(0):
+                reason = "future_totp"
+            elif age > max_age:
+                reason = "stale_totp"
+        if reason is not None:
+            with self.database.transaction() as connection:
+                self._audit(
+                    connection,
+                    "recent_totp_failed",
+                    actor=session.username,
+                    ip=session.ip,
+                    user_agent=session.user_agent,
+                    correlation_id=correlation,
+                    outcome="failure",
+                    metadata={"reason": reason},
+                )
             raise RecentTotpRequired("recent TOTP verification is required")
 
     def authenticate_mutation(
@@ -630,7 +708,14 @@ class AuthService:
                     metadata={"reason": "missing_csrf"},
                 )
             raise CsrfValidationError("CSRF token is required")
-        session = self.authenticate(session_cookie)
+        session = self.authenticate(
+            session_cookie,
+            audit_event_type="mutation_auth_failed",
+            audit_reason="invalid_or_expired_session",
+            correlation_id=correlation,
+            audit_ip=ip,
+            audit_user_agent=user_agent,
+        )
         row = self._session_row(session_cookie)
         if row is None or not hmac.compare_digest(
             str(row["csrf_hash"]), self._hash_token(csrf_header)

@@ -4,7 +4,6 @@ from typing import Annotated
 
 import pyotp
 from fastapi import Depends, FastAPI
-from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from goldguard.security.models import AuthPrincipal
 from goldguard.security.service import AuthService
@@ -29,16 +28,6 @@ def test_mutation_dependency_requires_cookie_and_csrf(tmp_path: Path) -> None:
 
     app = FastAPI()
 
-    @app.exception_handler(Exception)
-    async def security_error_handler(request, exc):
-        from goldguard.security.models import CsrfValidationError, SessionExpired
-
-        if isinstance(exc, SessionExpired):
-            return JSONResponse({"detail": "unauthorized"}, status_code=401)
-        if isinstance(exc, CsrfValidationError):
-            return JSONResponse({"detail": "forbidden"}, status_code=403)
-        raise exc
-
     @app.post("/mutate")
     def mutate(
         principal: Annotated[AuthPrincipal, Depends(require_mutation_auth)],
@@ -47,18 +36,14 @@ def test_mutation_dependency_requires_cookie_and_csrf(tmp_path: Path) -> None:
 
     client = TestClient(app)
     assert client.post("/mutate").status_code == 401
-    assert client.post(
-        "/mutate", cookies={"gg_session": tokens.cookie_token}
-    ).status_code == 403
+    client.cookies.set("gg_session", tokens.cookie_token)
+    client.headers.update({"X-CSRF-Token": "wrong"})
     assert client.post(
         "/mutate",
-        cookies={"gg_session": tokens.cookie_token},
-        headers={"X-CSRF-Token": "wrong"},
     ).status_code == 403
+    client.headers.update({"X-CSRF-Token": tokens.csrf_token})
     valid = client.post(
         "/mutate",
-        cookies={"gg_session": tokens.cookie_token},
-        headers={"X-CSRF-Token": tokens.csrf_token},
     )
     assert valid.status_code == 200
     assert valid.json() == {"ok": True}
@@ -76,6 +61,7 @@ def test_session_cookie_metadata_changes_for_production(tmp_path: Path) -> None:
     from fastapi import Response
 
     response = Response()
+    configure_auth_service(service)
     set_session_cookie(response, tokens, production=True)
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie
