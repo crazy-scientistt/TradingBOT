@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import secrets
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +43,14 @@ class Settings(BaseSettings):
     taker_fee_rate: Decimal = Field(default=Decimal("0.001"), ge=0, le=Decimal("0.01"))
     slippage_rate: Decimal = Field(default=Decimal("0.0002"), ge=0, le=Decimal("0.01"))
     maximum_spread_rate: Decimal = Field(default=Decimal("0.0015"), gt=0, le=Decimal("0.01"))
+
+    # CORS configuration
+    cors_origins: str | tuple[str, ...] = (
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    )
 
     # Autonomy & research bounds
     autopromotion_enabled: bool = False
@@ -82,14 +92,9 @@ class Settings(BaseSettings):
     live_capability_enabled: bool = False
     live_max_capital: Decimal = Field(default=Decimal("0"), ge=0)
 
-    # Legacy & session secrets
+    # Session secret
     session_secret: SecretStr = Field(
         default_factory=lambda: SecretStr(secrets.token_urlsafe(32)),
-        repr=False,
-    )
-    gemini_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias="GEMINI_API_KEY",
         repr=False,
     )
     binance_api_key: SecretStr | None = Field(
@@ -102,11 +107,16 @@ class Settings(BaseSettings):
         validation_alias="BINANCE_API_SECRET",
         repr=False,
     )
-    hermes_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias="HERMES_API_KEY",
-        repr=False,
-    )
+
+    @field_validator("cors_origins", mode="after")
+    @classmethod
+    def normalize_cors_origins(cls, value: str | tuple[str, ...]) -> tuple[str, ...]:
+        if isinstance(value, str):
+            parts = [origin.strip() for origin in value.split(",") if origin.strip()]
+            return tuple(parts)
+        if isinstance(value, (list, tuple, set)):
+            return tuple(str(origin).strip() for origin in value if str(origin).strip())
+        return ()
 
     @model_validator(mode="after")
     def validate_safety_gates(self) -> Self:
@@ -117,4 +127,18 @@ class Settings(BaseSettings):
                 raise ValueError("live mode requires the server live-capability gate")
             if not self.gateway_data_token:
                 raise ValueError("live mode requires gateway data token to route decisions")
+
+        if self.environment == "production":
+            origins = (
+                self.cors_origins
+                if isinstance(self.cors_origins, tuple)
+                else (self.cors_origins,)
+            )
+            if "*" in origins or any("*" in origin for origin in origins):
+                raise ValueError("wildcard CORS origins are not permitted in production")
+            for origin in origins:
+                if not origin.startswith("https://"):
+                    raise ValueError(
+                        f"production CORS origins must use HTTPS: {origin!r}"
+                    )
         return self

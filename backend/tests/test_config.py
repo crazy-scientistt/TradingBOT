@@ -78,7 +78,7 @@ def test_live_mode_requires_gateway_token(
 
 def test_secret_values_are_not_in_repr(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv("GOLDGUARD_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-gemini-secret")
+    monkeypatch.setenv("BINANCE_API_KEY", "synthetic-binance-key")
     monkeypatch.setenv("GOLDGUARD_GATEWAY_DATA_TOKEN", "synthetic-gateway-token")
     monkeypatch.setenv("GOLDGUARD_GATEWAY_MANAGEMENT_TOKEN", "synthetic-mgmt-token")
     monkeypatch.setenv("GOLDGUARD_HERMES_BRIDGE_TOKEN", "synthetic-hermes-token")
@@ -90,7 +90,7 @@ def test_secret_values_are_not_in_repr(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     repr_str = repr(settings)
     for secret in (
-        "synthetic-gemini-secret",
+        "synthetic-binance-key",
         "synthetic-gateway-token",
         "synthetic-mgmt-token",
         "synthetic-hermes-token",

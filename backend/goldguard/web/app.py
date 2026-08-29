@@ -563,13 +563,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             key_fingerprint=_fingerprint(_settings.gateway_data_token),
             status="active" if _settings.gateway_base_url else "unconfigured",
         )
-        _provider_repo.upsert_provider(
-            name="google-antigravity",
-            kind="native",
-            base_url="https://generativelanguage.googleapis.com",
-            key_fingerprint=_fingerprint(_settings.gemini_api_key),
-            status="active" if _settings.gemini_api_key else "unconfigured",
-        )
+
         if not _provider_repo.get_active_routes():
             for role in ("decision", "context", "hermes"):
                 _provider_repo.set_route(
@@ -771,10 +765,10 @@ app.include_router(control_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(_settings.cors_origins) if _settings is not None else ["*"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-CSRF-Token"],
 )
 
 
