@@ -17,10 +17,10 @@ export type Tab =
 export const INTERVALS: Interval[] = ["1m", "5m", "15m", "1h", "4h"];
 
 export const UNIVERSE = [
-  { id: "PAXGUSDT", label: "PAXG", product: "SPOT" as const, tv: "BINANCE:PAXGUSDT" },
-  { id: "BTCUSDT", label: "BTC", product: "FUTURES" as const, tv: "BINANCE:BTCUSDT" },
-  { id: "ETHUSDT", label: "ETH", product: "FUTURES" as const, tv: "BINANCE:ETHUSDT" },
-  { id: "SOLUSDT", label: "SOL", product: "FUTURES" as const, tv: "BINANCE:SOLUSDT" },
+  { id: "PAXGUSDT", label: "PAXG", product: "SPOT" as const, tv: "BINANCE:PAXGUSDT", entries: true },
+  { id: "BTCUSDT", label: "BTC", product: "FUTURES" as const, tv: "BINANCE:BTCUSDT", entries: true },
+  { id: "ETHUSDT", label: "ETH", product: "FUTURES" as const, tv: "BINANCE:ETHUSDT", entries: false },
+  { id: "SOLUSDT", label: "SOL", product: "FUTURES" as const, tv: "BINANCE:SOLUSDT", entries: true },
 ] as const;
 
 export type UniverseId = (typeof UNIVERSE)[number]["id"];
@@ -182,4 +182,7 @@ export const ATR_TP_MULT = 2.4;
 export const MAX_EXPOSURE = 0.2;
 export const MIN_STOP_PCT = 0.0015;
 export const MAX_FUTURES_LEVERAGE = 5;
+export const TRADE_LEVERAGE_CAP = 2;
 export const MAINT_MARGIN_RATE = 0.004;
+export const COST_EDGE_RATIO = 0.35;
+export const ENGINE_INTERVAL: Interval = "15m";

@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { CandleChart } from "./CandleChart";
 import { TradingViewWidget } from "./TradingViewWidget";
 import { useDesk } from "@/lib/trading/store";
-import { INTERVALS, UNIVERSE } from "@/lib/trading/types";
+import { ENGINE_INTERVAL, INTERVALS, UNIVERSE } from "@/lib/trading/types";
 
 export function ChartDock() {
   const {
@@ -36,8 +36,8 @@ export function ChartDock() {
       setSymbol: s.setSymbol,
     })),
   );
-  const series = chartInterval === "1m" ? candles : chartCandles;
-  const source = chartInterval === "1m" ? feedSource : chartSource;
+  const series = chartInterval === ENGINE_INTERVAL ? candles : chartCandles;
+  const source = chartInterval === ENGINE_INTERVAL ? feedSource : chartSource;
   const spec = UNIVERSE.find((u) => u.id === symbol) ?? UNIVERSE[0];
 
   return (
@@ -55,6 +55,7 @@ export function ChartDock() {
                 }`}
               >
                 {u.label}
+                {!u.entries ? "·off" : ""}
               </button>
             );
           })}

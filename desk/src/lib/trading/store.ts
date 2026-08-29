@@ -11,7 +11,7 @@ import {
 import { fetchPublicKlines, fetchPublicTicker } from "./klines";
 import { runHermesResearch } from "./hermes";
 import type { CanarySize, ChartMode, EngineState, Genome, Interval, Tab, UniverseId } from "./types";
-import { UNIVERSE } from "./types";
+import { ENGINE_INTERVAL, UNIVERSE } from "./types";
 
 type Store = EngineState & {
   tab: Tab;
@@ -70,7 +70,7 @@ export const useDesk = create<Store>((set, get) => ({
   settingsOpen: false,
   loadingFeed: false,
   loadingChart: false,
-  chartInterval: "1m",
+  chartInterval: ENGINE_INTERVAL,
   chartMode: "lite",
   chartCandles: [],
   chartSource: "synthetic",
@@ -80,7 +80,7 @@ export const useDesk = create<Store>((set, get) => ({
   setChartInterval: (interval) => {
     set({ chartInterval: interval, loadingChart: true });
     const { symbol, candles, feedSource } = get();
-    if (interval === "1m" && candles.length > 0) {
+    if (interval === ENGINE_INTERVAL && candles.length > 0) {
       set({ chartCandles: candles, chartSource: feedSource, loadingChart: false });
       return;
     }
@@ -100,15 +100,16 @@ export const useDesk = create<Store>((set, get) => ({
     set({ loadingFeed: true, loadingChart: true, error: null });
     try {
       const { candles, source } = await fetchPublicKlines({
-        data: { symbol: get().symbol, interval: "1m", limit: 240 },
+        data: { symbol: get().symbol, interval: ENGINE_INTERVAL, limit: 300 },
       });
       if (seq !== bootSeq) return;
       set((s) => ({
         ...hydrate(s, candles, source),
-        chartCandles: s.chartInterval === "1m" ? candles : s.chartCandles,
-        chartSource: s.chartInterval === "1m" ? source : s.chartSource,
+        interval: ENGINE_INTERVAL,
+        chartCandles: s.chartInterval === ENGINE_INTERVAL ? candles : s.chartCandles,
+        chartSource: s.chartInterval === ENGINE_INTERVAL ? source : s.chartSource,
       }));
-      if (get().chartInterval !== "1m") {
+      if (get().chartInterval !== ENGINE_INTERVAL) {
         const extra = await loadChartSeries(get().symbol, get().chartInterval);
         if (seq !== bootSeq) return;
         set({ chartCandles: extra.candles, chartSource: extra.source });
@@ -135,11 +136,12 @@ export const useDesk = create<Store>((set, get) => ({
         replayed,
         "system",
         "Paper loop started",
-        "Public feed on the selected pair. HOLD is a valid autonomous decision. Live stays disarmed.",
+        "Public 15m feed. Entries only on a closed 15m bar after the cost gate. HOLD is valid. Live stays disarmed.",
       ),
     );
     persist(replayed);
     if (loop) window.clearInterval(loop);
+    let klinePulse = 0;
     loop = window.setInterval(() => {
       void (async () => {
         const prev = get();
@@ -152,26 +154,43 @@ export const useDesk = create<Store>((set, get) => ({
             const lastC = prev.candles[prev.candles.length - 1];
             const px = t.last;
             incoming = {
-              t: Date.now(),
-              o: lastC?.c ?? px,
-              h: Math.max(lastC?.c ?? px, px),
-              l: Math.min(lastC?.c ?? px, px),
+              t: lastC?.t ?? Date.now(),
+              o: lastC?.o ?? px,
+              h: Math.max(lastC?.h ?? px, px),
+              l: Math.min(lastC?.l ?? px, px),
               c: px,
               v: lastC?.v ?? 1,
             };
             source = t.source;
           }
         } catch {
-          /* local tick */
+          /* keep last */
         }
-        const next = tick({ ...prev, feedSource: source }, Date.now(), incoming);
+        let next = tick({ ...prev, feedSource: source }, Date.now(), incoming, "intra");
         next.feedSource = source;
         if (incoming) next.lastTickAt = Date.now();
-        const chartLive = get().chartInterval === "1m";
+
+        klinePulse += 1;
+        if (klinePulse % 10 === 0) {
+          try {
+            const packed = await fetchPublicKlines({
+              data: { symbol: prev.symbol, interval: ENGINE_INTERVAL, limit: 4 },
+            });
+            const closed = packed.candles.length >= 2 ? packed.candles[packed.candles.length - 2] : packed.candles.at(-1);
+            const lastClosed = next.candles[next.candles.length - 1];
+            if (closed && lastClosed && closed.t > lastClosed.t) {
+              next = tick({ ...next, feedSource: packed.source }, closed.t, closed, "close");
+            }
+          } catch {
+            /* wait next pulse */
+          }
+        }
+
+        const chartLive = get().chartInterval === ENGINE_INTERVAL;
         set(chartLive ? { ...next, chartCandles: next.candles, chartSource: next.feedSource } : next);
         persist(next);
       })();
-    }, 1600);
+    }, 2000);
   },
   pause: () => {
     set((s) => mark({ ...s, paused: true }, "system", "Paused", "Open protection stays active. New entries are blocked."));

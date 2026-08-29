@@ -727,8 +727,8 @@ function QualifyView() {
     { name: "Public PAXGUSDT feed", pass: feedSource === "binance-public" || remote.some((c) => c.id === "binance" && c.ok), note: feedSource === "binance-public" ? "Binance public / vision mirror" : "Synthetic path until public klines attach" },
     { name: "OpenCodex + Antigravity", pass: remote.some((c) => c.id === "antigravity" && c.ok), note: remote.find((c) => c.id === "antigravity")?.detail ?? "Checking…" },
     { name: "Hermes researcher", pass: remote.some((c) => c.id === "hermes" && c.ok), note: remote.find((c) => c.id === "hermes")?.detail ?? "Checking…" },
-    { name: "Paper evidence", pass: trades.length >= 200, note: `${trades.length} / 200 closed cycles` },
-    { name: "Strategy statistics", pass: false, note: "Sealed holdout not opened in preview" },
+    { name: "Paper evidence", pass: trades.length >= 200, note: `${trades.length} / 200 closed 15m cycles (1m micro is retired)` },
+    { name: "Strategy statistics", pass: false, note: "15m walk-forward was green on one 10-day window (21 trades). Sealed holdout still closed. Not live." },
     { name: "Binance trade keys", pass: false, note: "Not present — live cannot arm. Do not paste keys in chat." },
     { name: "Telegram", pass: false, note: "Requires a bot token you control" },
     { name: "TOTP / live arm", pass: false, note: "Arming phrase is operator-owned. Code will not auto-arm." },
@@ -802,9 +802,11 @@ function SettingsSheet() {
           <Setting label="Max capital per trade" value="1.00%" hint={`${risk.toFixed(2)} USDT risk per trade`} />
           <Setting label="Max total exposure" value="20.00%" hint={`${exposure.toFixed(2)} USDT maximum total exposure`} />
           <Setting label="Rolling 24h loss limit" value="5.00%" hint={`${breaker.toFixed(2)} USDT breaker trip`} />
-          <Setting label="Max futures leverage" value="5x ceiling" hint="Core picks 1–4x from ATR. Ceiling is not the default." />
+          <Setting label="Engine timeframe" value="15m closed bars" hint="1m is chart-only. Entries fire on a closed 15m bar." />
+          <Setting label="Cost gate" value="35% of stop" hint="Skip if round-trip fees+slip eat the stop." />
+          <Setting label="Max futures leverage" value="2x used / 5x ceiling" hint="Core never treats 5x as the default." />
           <Setting label="Spot pairs" value="PAXGUSDT" hint="Cash-only. No borrowing." />
-          <Setting label="Futures" value="BTC ETH SOL" hint="Isolated one-way. Agent sets margin and leverage per trade." />
+          <Setting label="Futures entries" value="BTC SOL on · ETH off" hint="ETH new entries HOLD after the paper sample." />
         </div>
       </aside>
     </div>

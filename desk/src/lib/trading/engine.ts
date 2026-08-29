@@ -3,7 +3,9 @@ import {
   ATR_STOP_MULT,
   ATR_TP_MULT,
   BREAKER_LOSS,
+  COST_EDGE_RATIO,
   DAILY_LOSS_LIMIT,
+  ENGINE_INTERVAL,
   FEE_RATE,
   MAINT_MARGIN_RATE,
   MAX_DRAWDOWN,
@@ -15,6 +17,8 @@ import {
   RISK_PER_TRADE,
   SLIPPAGE_RATE,
   STARTING_CASH,
+  TRADE_LEVERAGE_CAP,
+  UNIVERSE,
   type AgentEvent,
   type Candle,
   type ClosedTrade,
@@ -41,7 +45,7 @@ export function emptyState(startingCash = STARTING_CASH): EngineState {
     mode: "PAPER",
     symbol: "PAXGUSDT",
     product: "SPOT",
-    interval: "1m" as const,
+    interval: ENGINE_INTERVAL,
     candles: [],
     quote: null,
     position: null,
@@ -114,7 +118,7 @@ function seedGenomes(): Genome[] {
       sharpe: "unqualified",
       trades: 0,
       maxDd: "n/a",
-      note: "Deterministic EMA pullback. Promotion requires paper qualification, not this preview.",
+      note: "15m EMA pullback, cost gate, 2x futures cap. ETH entries parked. Promotion needs walk-forward, not this preview.",
     },
     {
       id: "hermes-candidate-04",
@@ -152,16 +156,39 @@ export function hydrate(state: EngineState, candles: Candle[], source: Quote["so
     "market",
     source === "binance-public" ? "Public Binance feed attached" : "Synthetic gold path attached",
     source === "binance-public"
-      ? `${candles.length} PAXGUSDT candles from the public kline API. No API key used.`
+      ? `${candles.length} ${state.symbol} ${state.interval} candles from the public kline API. No API key used.`
       : "Public klines were unreachable, so the desk is replaying a labelled synthetic path. Not exchange truth.",
   );
 }
 
-export function tick(state: EngineState, now = Date.now(), incoming?: Candle): EngineState {
+export function tick(state: EngineState, now = Date.now(), incoming?: Candle, mode: "intra" | "close" = "intra"): EngineState {
   if (!state.running || state.paused || state.halted || state.candles.length < 40) return state;
   const prev = last(state.candles);
   if (!prev) return state;
   const next = incoming ?? nextCandle(prev, now, state.feedSource);
+
+  if (mode === "intra" || next.t <= prev.t) {
+    const merged: Candle = {
+      ...prev,
+      h: Math.max(prev.h, next.h, next.c),
+      l: Math.min(prev.l, next.l, next.c),
+      c: next.c,
+    };
+    const candles = [...state.candles.slice(0, -1), merged];
+    const quote = quoteFrom(merged, state.feedSource);
+    let nextState: EngineState = {
+      ...state,
+      candles,
+      quote,
+      lastTickAt: now,
+      equity: markToMarket({ ...state, candles, quote }, merged.c),
+    };
+    nextState = applyBreaker(nextState);
+    if (nextState.position) nextState = managePosition(nextState, next);
+    nextState.peakEquity = Math.max(nextState.peakEquity, nextState.equity);
+    return nextState;
+  }
+
   const candles = [...state.candles.slice(-399), next];
   const quote = quoteFrom(next, state.feedSource);
   let nextState: EngineState = {
@@ -215,16 +242,15 @@ function applyBreaker(state: EngineState): EngineState {
   return state;
 }
 
-function chooseLeverage(product: Product, atr: number, price: number, ceiling: number, interval = "1m"): number {
+function chooseLeverage(product: Product, atr: number, price: number, ceiling: number, interval = ENGINE_INTERVAL): number {
   if (product !== "FUTURES") return 1;
-  const cap = Math.max(1, Math.min(MAX_FUTURES_LEVERAGE, Math.floor(ceiling || 1)));
+  const cap = Math.max(1, Math.min(TRADE_LEVERAGE_CAP, Math.floor(ceiling || 1), MAX_FUTURES_LEVERAGE));
   const atrPct = atr / price;
   let picked = 1;
-  if (atrPct < 0.003) picked = 4;
-  else if (atrPct < 0.006) picked = 3;
-  else if (atrPct < 0.012) picked = 2;
+  if (atrPct < 0.003) picked = 2;
+  else if (atrPct < 0.008) picked = 2;
   else picked = 1;
-  if (interval === "1m" || interval === "5m") picked = Math.min(picked, 2);
+  if (interval === "1m" || interval === "5m") picked = 1;
   return Math.min(picked, cap);
 }
 
@@ -234,6 +260,13 @@ function liquidationPrice(side: Side, entry: number, leverage: number): number {
 }
 
 function maybeEnter(state: EngineState, candle: Candle): EngineState {
+  const spec = UNIVERSE.find((u) => u.id === state.symbol);
+  if (spec && spec.entries === false) {
+    if (state.candles.length % 8 === 0) {
+      return mark(state, "market", "HOLD", `${state.symbol} new entries are parked after the paper sample. Chart stays live.`);
+    }
+    return state;
+  }
   const closes = state.candles.map((c) => c.c);
   const fast = last(ema(closes, 12));
   const slow = last(ema(closes, 26));
@@ -276,6 +309,14 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
   const fee = notional * FEE_RATE;
   if (margin + fee > state.cash) return state;
   if (notional < MIN_NOTIONAL && state.startingCash >= 10) return state;
+  const stopRisk = Math.abs(px - stop) * qty;
+  const roundTrip = 2 * FEE_RATE * notional + 2 * SLIPPAGE_RATE * notional;
+  if (stopRisk <= 0 || roundTrip > COST_EDGE_RATIO * stopRisk) {
+    if (state.candles.length % 8 === 0) {
+      return mark(state, "risk", "HOLD", `Costs ${fmt(roundTrip)} vs stop risk ${fmt(stopRisk)} — edge does not clear the fee buffer.`);
+    }
+    return state;
+  }
   const pos: Position = {
     id: nid("pos"),
     symbol: state.symbol,
