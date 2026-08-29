@@ -31,7 +31,7 @@ function structure(sw: Swing[]): { bias: "UP" | "DOWN" | "RANGE"; detail: string
 
 function hourBias(cs: Candle[]): "UP" | "DOWN" | "RANGE" {
   const sampled = cs.filter((_, i) => i % 4 === 0).map((c) => c.c);
-  if (sampled.length < 30) return "RANGE";
+  if (sampled.length < 16) return "RANGE";
   const f = last(ema(sampled, 12));
   const s = last(ema(sampled, 26));
   if (!f || !s) return "RANGE";
@@ -153,16 +153,15 @@ export function patternAllows(hits: PatternHit[], side: Side): { ok: boolean; re
   if (htf && htf.side !== "FLAT" && htf.side !== side) {
     return { ok: false, reason: `1h bias is ${htf.side} — 15m ${side} is a fade. HOLD.` };
   }
-  if (st && st.side === "FLAT" && !hits.some((h) => h.kind !== "structure")) {
+  const confirmed = hits.filter((h) => h.side === side && (h.kind === "continuation" || h.kind === "reversal") && h.score >= 0.7);
+  if (st && st.side === "FLAT" && confirmed.length === 0) {
     return { ok: false, reason: "Range / no confirmed pattern. HOLD." };
   }
-  if (st && st.side !== "FLAT" && st.side !== side && !hits.some((h) => h.kind === "reversal" && h.side === side && h.score >= 0.7)) {
+  if (st && st.side !== "FLAT" && st.side !== side && confirmed.length === 0) {
     return { ok: false, reason: `15m structure is ${st.side}; ${side} needs a confirmed reversal close.` };
   }
-  const confirmed = hits.filter((h) => h.side === side && (h.kind === "continuation" || h.kind === "reversal") && h.score >= 0.7);
-  const trendPullback = st?.side === side && htf?.side === side;
-  if (!trendPullback && confirmed.length === 0) {
-    return { ok: false, reason: "EMA pullback without structure or a confirmed flag/neckline. HOLD." };
+  if (st?.side === side || confirmed.length > 0) {
+    return { ok: true, reason: confirmed[0]?.name ?? "Trend-aligned pullback" };
   }
-  return { ok: true, reason: confirmed[0]?.name ?? "Trend-aligned pullback" };
+  return { ok: false, reason: "EMA pullback without structure or a confirmed flag/neckline. HOLD." };
 }

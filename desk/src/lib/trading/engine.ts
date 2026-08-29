@@ -3,7 +3,6 @@ import { patternAllows, scanPatterns } from "./patterns";
 import {
   ATR_STOP_MULT,
   ATR_TP_MULT,
-  BREAKER_LOSS,
   COST_EDGE_RATIO,
   DAILY_LOSS_LIMIT,
   ENGINE_INTERVAL,
@@ -153,7 +152,7 @@ export function hydrate(state: EngineState, candles: Candle[], source: Quote["so
       feedSource: source,
       equity,
       peakEquity: Math.max(state.peakEquity, equity),
-      lastTickAt: lastC.t,
+      lastTickAt: Date.now(),
       error: null,
     },
     "market",
