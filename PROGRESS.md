@@ -8,46 +8,57 @@
 
 ---
 
-## Completed in this session (must-fix gaps)
+## Completed in this session
 
-1. **RuntimeSupervisor background loops** — `_entry_loop`, `_protection_loop`, `_breaker_loop`, `_freshness_loop` start in `start()`, cancel in `stop()`, handle `CancelledError`. Entry loop never invents orders. Breaker uses `rolling_24h_loss_limit` or `Decimal("500")`. Stale market disables new entries. Daily trade HOLD remains at 1000.
-2. **Health live/ready** — `GET /api/health/live` always 200 `{"status":"alive"}`. `GET /api/health/ready` is 200 when `_db` is initialised, else 503 `DATABASE_UNINITIALIZED`. Existing `/api/health` kept.
-3. **Dashboard read-models** — `DashboardReadModel.snapshot()` returns PAPER mode, equity, and availability envelopes. Empty lists are available+empty, never seeded. `GET /api/holdings`, `/api/pnl`, `/api/diagnostics` added. `/api/trades` and `/api/dashboard` remain on `app.py` to avoid duplicate paths.
-4. **Hermes bridge router** included in `app.py`.
-5. **Qualification fail-closed** — `evaluate_with()` still defaults unspecified gates to pass. `evaluate()` defaults unspecified gates to fail (`PAPER_EVIDENCE_NOT_READY`, …) so `ready_for_live_canary` is False. Hash remains stable for the same `now`.
-6. **Telegram categories** — emergency, breaker, protection, live_arm, fill, daily_summary, research. Critical categories cannot be muted while Telegram is enabled. Token never appears in `repr`.
-7. **Railway manifests** — `railway.app.toml` healthchecks `/api/health/live`; `hermes/railway.toml` private; topology doc names volumes `/data`, `/app/.opencodex`, `/opt/data` and one writer replica. Root `railway.toml` healthcheck updated.
-8. **Fault injection tests** — timeout-after-accept does not duplicate submit; gateway outage HOLD still allows pause/stop. No network, no sleep.
-9. **Frontend** — `LoginPanel` (password + TOTP, no session secret stored) and `AutonomousSettings` (USDT equivalents, hide leverage when futures disabled) with focused tests.
-10. **This progress file** updated honestly.
+### Live execution no longer invents fills
+- `BinanceTransport` raises `TRANSPORT_CLIENT_REQUIRED` when no HTTP client is injected. It no longer returns a fake `{"status":"ok"}` payload.
+- Timeouts become `BinanceTimeoutError`. Brokers query by `origClientOrderId` and **do not POST a second order**.
+- `BinanceSpotBroker` / `BinanceFuturesBroker` parse exchange `status` / `orderId` / `executedQty`. Missing status is `MALFORMED_EXCHANGE_RESPONSE`, never `FILLED`.
+- Quantities are stepped (`0.001234` → `0.0012` on spot). Snapshot reads account balances instead of hardcoding 10,000 USDT. `close()` fails closed until a reconciled owned position exists.
+- `BinancePreflight` actually calls server time, account, and API restrictions. Credentials alone are not enough. Withdrawals/transfers enabled block readiness.
+
+### Research / Hermes honesty
+- Evidence adapters return **empty** without a client. Tests inject fixture clients. Production refresh no longer fabricates Fed/FF/Binance rows.
+- Hermes tools no longer return a fake Sharpe 1.5 / 60% win rate. Unbound tools report `available: false` with a reason code. Holdout stays sealed.
+
+### Reconciliation / images
+- Missing exchange client is `EXCHANGE_UNAVAILABLE`, not ready.
+- Backend image healthcheck is `/api/health/live`. Contract tests assert non-root USER, `$PORT`, `/data`, and OpenCodex `2.33.0`.
+
+### Frontend
+- `LoginPanel` test: password + TOTP, no session secret in web storage.
+
+### Preview desk
+- Forum HOLD no longer blocks the whole paper book. Authoritative ALLOW/HOLD owns the gate. Calendar REDUCE halves size.
 
 ---
 
-## Phase status (unchanged honesty)
+## Phase status
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 1 | Control Plane & Security | Code exists, fail-closed live control tested |
-| 2 | Paper Execution & Risk | Brokers, coordinator, risk, supervisor loops now wired |
-| 3–5 | Research / Hermes / Live Binance | Scaffolded; Live remains disarmed |
-| 6 | Dashboard & Telegram | Read-models and Telegram preferences expanded; bot not configured |
-| 7 | Qualification & Reliability | Fail-closed qualification; fault tests added; not certified for live |
-| 8 | Railway Release | Manifests and topology written; **not deployed** |
+| 1 | Control Plane & Security | Fail-closed live control tested |
+| 2 | Paper Execution & Risk | Brokers, coordinator, supervisor loops wired |
+| 3 | Research & Evidence | Adapters fail-closed without clients; no fabricated production evidence |
+| 4 | Hermes Learning | Isolation + honest empty tools; live Hermes not running here |
+| 5 | Live Binance Execution | Fake-transport brokers parse fills; **Live remains disarmed** |
+| 6 | Dashboard & Telegram | Read-models + settings/login; bot not configured |
+| 7 | Qualification & Reliability | Fail-closed qualification; not certified for live |
+| 8 | Railway Release | Manifests written; **not deployed** |
 
 ---
 
-## Remaining non-blocking items (operator-owned)
+## Remaining operator-owned
 
-- User must supply **Binance API keys** before any live arming path can be used.
-- User must create a **Telegram bot** and provide bot token + chat ID.
-- User must **deploy to Railway** (private OpenCodex :10100, private Hermes :8642, public GoldGuard, volumes, secrets). This session does not push or deploy.
-- Qualification `evaluate()` is fail-closed until real paper evidence, backups, UI suite, and operator-run diagnostics exist.
-- Frontend chart tests may still fail under jsdom/lightweight-charts — that is a test-environment issue, not a trading bug.
-- Paper mode can run without Binance keys; it will not invent fills.
+- Supply **Binance API keys** before any live arming path.
+- Create a **Telegram bot** (token + chat ID).
+- **Deploy to Railway** (private OpenCodex :10100, private Hermes :8642, public GoldGuard, volumes, secrets).
+- Bind real evidence HTTP clients and a backtest runner; until then those surfaces stay empty/unavailable.
+- Qualification stays fail-closed until paper evidence, backups, UI suite, and operator diagnostics exist.
 
 ## What this is not
 
 - Live is **not** armed.
-- The system is **not** profitable-by-default and does not promise edge.
-- Railway is **not** live in production from this work.
-- Empty orders/positions/holdings/pnl remain empty until the paper runtime actually trades.
+- The system is **not** profitable-by-default.
+- Railway is **not** in production from this work.
+- Empty orders/positions remain empty until the paper runtime actually trades.

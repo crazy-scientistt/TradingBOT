@@ -19,6 +19,17 @@ class BinanceAuthenticationError(Exception):
         self.response_body = response_body.replace("secret-value", "[REDACTED]")
 
 
+class BinanceTransportError(Exception):
+    def __init__(self, message: str, response_body: str = "") -> None:
+        clean_msg = message.replace("secret-value", "[REDACTED]")
+        super().__init__(clean_msg)
+        self.response_body = response_body.replace("secret-value", "[REDACTED]")
+
+
+class BinanceTimeoutError(BinanceTransportError):
+    pass
+
+
 def sign_query(params: Mapping[str, Any], secret: SecretStr) -> str:
     query_str = urlencode(sorted(params.items()))
     signature = hmac.new(
@@ -66,8 +77,10 @@ class BinanceTransport:
             sig = sign_query(req_params, self.api_secret)
             req_params["signature"] = sig
 
-        if self.client is not None:
+        if self.client is None:
+            raise BinanceTransportError("TRANSPORT_CLIENT_REQUIRED")
+
+        try:
             return await self.client.request(method, path, req_params, headers)
-
-        return {"status": "ok", "path": path, "params": req_params}
-
+        except TimeoutError as exc:
+            raise BinanceTimeoutError("BINANCE_TIMEOUT") from exc

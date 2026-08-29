@@ -23,3 +23,10 @@ async def test_unknown_external_position_blocks_without_closing() -> None:
     assert "UNKNOWN_EXTERNAL_POSITION" in report.blockers
     assert exchange.close_calls == []
 
+
+@pytest.mark.asyncio
+async def test_missing_exchange_fails_closed() -> None:
+    service = ReconciliationService()
+    report = await service.reconcile(default_autonomous_profile(), "startup")
+    assert report.ready is False
+    assert "EXCHANGE_UNAVAILABLE" in report.blockers

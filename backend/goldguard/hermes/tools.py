@@ -25,6 +25,9 @@ class HermesToolRegistry:
         }
     )
 
+    def __init__(self, bindings: dict[str, Any] | None = None) -> None:
+        self._bindings = bindings or {}
+
     def names(self) -> frozenset[str]:
         return self.ALLOWED_TOOLS
 
@@ -37,26 +40,43 @@ class HermesToolRegistry:
         if tool_name == "get_evaluation" and payload.get("partition") == "holdout":
             raise SealedHoldoutAccessError("sealed holdout partition access is strictly forbidden")
 
+        bound = self._bindings.get(tool_name)
+        if bound is not None:
+            return await bound(payload, principal)
+
         if tool_name == "get_candles":
-            return {"candles": [], "symbol": payload.get("symbol", "PAXGUSDT")}
-        elif tool_name == "get_features":
-            return {"features": {}, "regime": "trend"}
-        elif tool_name == "get_evidence":
-            return {"evidence": []}
-        elif tool_name == "get_trade_outcomes":
-            return {"trades": []}
-        elif tool_name == "get_lessons":
-            return {"lessons": []}
-        elif tool_name == "run_backtest":
-            return {"sharpe": 1.5, "win_rate": 0.60, "max_drawdown": 0.02}
-        elif tool_name == "get_evaluation":
-            return {"passed": True, "partition": payload.get("partition", "development")}
-        elif tool_name == "submit_genome":
+            return {
+                "available": False,
+                "reason": "MARKET_STORE_NOT_BOUND",
+                "candles": [],
+                "symbol": payload.get("symbol", "PAXGUSDT"),
+            }
+        if tool_name == "get_features":
+            return {"available": False, "reason": "FEATURE_STORE_NOT_BOUND", "features": {}}
+        if tool_name == "get_evidence":
+            return {"available": False, "reason": "EVIDENCE_STORE_NOT_BOUND", "evidence": []}
+        if tool_name == "get_trade_outcomes":
+            return {"available": False, "reason": "OUTCOME_STORE_NOT_BOUND", "trades": []}
+        if tool_name == "get_lessons":
+            return {"available": False, "reason": "LESSON_STORE_NOT_BOUND", "lessons": []}
+        if tool_name == "run_backtest":
+            return {
+                "available": False,
+                "reason": "BACKTEST_RUNNER_NOT_BOUND",
+                "trades": [],
+            }
+        if tool_name == "get_evaluation":
+            return {
+                "available": False,
+                "reason": "EVALUATION_NOT_BOUND",
+                "partition": payload.get("partition", "development"),
+                "passed": False,
+            }
+        if tool_name == "submit_genome":
             genome_data = payload.get("genome", {})
             return {
+                "available": True,
                 "genome_id": genome_data.get("genome_id", "gen-submitted"),
                 "status": "candidate",
             }
-
-        return {}
-
+        return {"available": False, "reason": "UNKNOWN_TOOL"}

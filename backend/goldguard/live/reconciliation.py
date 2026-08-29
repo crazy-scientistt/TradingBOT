@@ -21,19 +21,26 @@ class ReconciliationService:
     async def reconcile(
         self, profile: AutonomousProfile, reason: str = "startup"
     ) -> ReconciliationReport:
+        if self.exchange is None:
+            return ReconciliationReport(
+                ready=False,
+                blockers=("EXCHANGE_UNAVAILABLE",),
+            )
+
         blockers: list[str] = []
         repaired: list[str] = []
 
-        if self.exchange is not None and getattr(self.exchange, "has_unknown_position", False):
+        if getattr(self.exchange, "has_unknown_position", False):
             blockers.append("UNKNOWN_EXTERNAL_POSITION")
 
-        if self.exchange is not None and getattr(self.exchange, "missing_stop", False):
+        if getattr(self.exchange, "missing_stop", False):
             repaired.append("MISSING_STOP:position-1")
 
-        ready = len(blockers) == 0
+        if getattr(self.exchange, "has_unknown_order", False):
+            blockers.append("UNKNOWN_EXTERNAL_ORDER")
+
         return ReconciliationReport(
-            ready=ready,
+            ready=len(blockers) == 0,
             blockers=tuple(blockers),
             repaired=tuple(repaired),
         )
-

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from goldguard.context.adapters import EvidenceAuthority, RawEvidence
@@ -14,18 +14,33 @@ class OfficialReleasesAdapter:
         self.client = client
 
     async def fetch(self, since: datetime) -> tuple[RawEvidence, ...]:
-        now = datetime.now(UTC)
-        return (
-            RawEvidence(
-                source_kind=SourceKind.OFFICIAL,
-                source_url="https://www.federalreserve.gov/newsevents/pressreleases/monetary20260828a.htm",
-                source_section="release",
-                title="Federal Reserve Press Release",
-                content="Federal Reserve issues FOMC statement on economic outlook.",
-                published_at=now,
-                event_at=None,
-                authority=EvidenceAuthority.AUTHORITATIVE,
-                timestamp_missing=False,
-            ),
-        )
-
+        if self.client is None:
+            return ()
+        try:
+            items = await self.client.get_releases()
+        except Exception:
+            return ()
+        rows: list[RawEvidence] = []
+        for item in items:
+            published = (
+                datetime.fromisoformat(item["published_at"])
+                if item.get("published_at")
+                else None
+            )
+            event_at = (
+                datetime.fromisoformat(item["event_at"]) if item.get("event_at") else None
+            )
+            rows.append(
+                RawEvidence(
+                    source_kind=SourceKind.OFFICIAL,
+                    source_url=item.get("url", "https://www.federalreserve.gov"),
+                    source_section=item.get("section", "release"),
+                    title=item.get("title", ""),
+                    content=item.get("body", item.get("detail", "")),
+                    published_at=published,
+                    event_at=event_at,
+                    authority=EvidenceAuthority.AUTHORITATIVE,
+                    timestamp_missing=published is None and event_at is None,
+                )
+            )
+        return tuple(rows)

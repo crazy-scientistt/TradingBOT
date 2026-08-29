@@ -21,12 +21,13 @@ class EvidenceService:
         normalizer: EvidenceNormalizer | None = None,
         scorer: EvidenceScorer | None = None,
         gate: EvidenceGate | None = None,
+        adapters: list[EvidenceAdapter] | None = None,
     ) -> None:
         self.repository = repository
         self.normalizer = normalizer or EvidenceNormalizer()
         self.scorer = scorer or EvidenceScorer()
         self.gate = gate or EvidenceGate()
-        self.adapters: list[EvidenceAdapter] = [
+        self.adapters: list[EvidenceAdapter] = adapters or [
             BinanceAnnouncementsAdapter(),
             ForexFactoryAdapter(),
             OfficialReleasesAdapter(),
@@ -51,7 +52,7 @@ class EvidenceService:
                     total_ingested += 1
                 self._last_refresh[adapter.name] = now.isoformat()
             except Exception:
-                pass
+                self._failed_adapters.add(adapter.name)
         return total_ingested
 
     def bundle(self, scope: MarketScope, decision_time: datetime) -> EvidenceBundle:
@@ -69,4 +70,3 @@ class EvidenceService:
                 for a in self.adapters
             ],
         }
-
