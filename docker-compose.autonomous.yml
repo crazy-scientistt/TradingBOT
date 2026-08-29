@@ -16,6 +16,21 @@ services:
     networks:
       - autonomous-net
 
+  hermes:
+    image: nousresearch/hermes-agent:latest
+    command: ["gateway", "run"]
+    restart: unless-stopped
+    environment:
+      API_SERVER_ENABLED: "true"
+      API_SERVER_HOST: "0.0.0.0"
+      API_SERVER_KEY: ${HERMES_BRIDGE_TOKEN}
+      OPENCODEX_BASE_URL: http://opencodex:10100/v1
+      OPENCODEX_API_AUTH_TOKEN: ${OPENCODEX_API_AUTH_TOKEN}
+    volumes:
+      - hermes-data:/opt/data
+    networks:
+      - autonomous-net
+
   backend:
     build:
       context: .
@@ -40,6 +55,8 @@ services:
 volumes:
   autonomous-opencodex: {}
   autonomous-ledger: {}
+  hermes-data: {}
 
 networks:
   autonomous-net: {}
+
