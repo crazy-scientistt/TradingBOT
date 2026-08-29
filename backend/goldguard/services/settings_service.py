@@ -106,3 +106,18 @@ class SettingsService:
         if preview.blockers:
             raise ProfileChangeBlocked("; ".join(preview.blockers))
         return self._repository.activate(candidate, actor, correlation_id)
+
+
+_settings_service: SettingsService | None = None
+
+
+def configure_settings_service(service: SettingsService) -> None:
+    global _settings_service
+    _settings_service = service
+
+
+def get_settings_service() -> SettingsService:
+    if _settings_service is None:
+        raise RuntimeError("settings service is not configured")
+    return _settings_service
+

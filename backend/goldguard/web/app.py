@@ -51,10 +51,11 @@ from goldguard.market.dataset_service import DatasetService
 from goldguard.market.live_stream import CHART_INTERVALS, candle_payload
 from goldguard.memory.engine import MemoryBank
 from goldguard.observability.events import AgentEvent
-from goldguard.providers.client import GatewayClient, GatewayUnavailableError, AuthenticationError
+from goldguard.providers.client import AuthenticationError, GatewayClient, GatewayUnavailableError
 from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
+from goldguard.security.service import AuthService
 from goldguard.services.ingestion import MarketIngestionService, MarketSnapshot
 from goldguard.services.promotion_controller import (
     CanaryEvent,
@@ -63,7 +64,12 @@ from goldguard.services.promotion_controller import (
     ShadowEvidence,
 )
 from goldguard.services.runtime import TradingRuntime
+from goldguard.services.settings_service import (
+    SettingsService,
+    configure_settings_service,
+)
 from goldguard.storage.database import Database
+from goldguard.storage.profile_repository import ProfileRepository
 from goldguard.storage.repositories import (
     AutonomyRepository,
     EvaluationRepository,
@@ -88,6 +94,9 @@ from goldguard.strategy.indicators import (
 )
 from goldguard.strategy.promotion import PromotionPipeline
 from goldguard.strategy.runtime import GenomeRuntime
+from goldguard.web.auth_dependencies import configure_auth_service
+from goldguard.web.routes.auth import router as auth_router
+from goldguard.web.routes.settings import router as settings_router
 
 logger = logging.getLogger("goldguard.web")
 
@@ -106,6 +115,9 @@ _quota_repo: QuotaRepository | None = None
 _provider_repo: ProviderRepository | None = None
 _reflection_repo: ReflectionRepository | None = None
 _candle_repo: MarketCandleRepository | None = None
+_profile_repo: ProfileRepository | None = None
+_settings_service: SettingsService | None = None
+_auth_service: AuthService | None = None
 
 _broker: PaperBroker | None = None
 _risk_engine: RiskEngine | None = None
@@ -527,6 +539,11 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         _candle_repo = MarketCandleRepository(_db)
         _autonomy_repo = AutonomyRepository(_db)
         _promotion_repo = PromotionRepository(_db)
+        _profile_repo = ProfileRepository(_db)
+        _settings_service = SettingsService(_profile_repo)
+        configure_settings_service(_settings_service)
+        _auth_service = AuthService(_db, production=_settings.environment == "production")
+        configure_auth_service(_auth_service)
 
         if _genome_repo.get_active_genome() is None:
             baseline = trend_pullback_v1()
@@ -743,6 +760,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(auth_router)
+app.include_router(settings_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -914,7 +934,12 @@ async def market_candles(
     market = _market()
     candles: list[Any]
     source = market.source
-    stored = market.candles_15m if interval == "15m" else market.candles_1h if interval == "1h" else ()
+    if interval == "15m":
+        stored = market.candles_15m
+    elif interval == "1h":
+        stored = market.candles_1h
+    else:
+        stored = ()
     if stored:
         candles = list(stored)
         forming = _ingestion.hub.forming.get(interval) if _ingestion is not None else None
@@ -1213,10 +1238,10 @@ async def live_context() -> dict[str, Any]:
     items = snapshot["summary"].get("items", []) if snapshot else []
     if not snapshot or not items:
         if _calendar is not None:
-            rows = _calendar.as_context_rows()
-            if rows:
+            calendar_rows = _calendar.as_context_rows()
+            if calendar_rows:
                 return _env(
-                    rows,
+                    calendar_rows,
                     availability="available" if _calendar.detail is None else "degraded",
                     source=_calendar.source,
                     observed_at=_calendar.updated_at,
@@ -1349,7 +1374,7 @@ async def run_backtest(req: BacktestRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Invalid genome format: {exc}") from exc
 
     market = _market()
-    candles, dataset_id = _research_candles(market)
+    candles, _ = _research_candles(market)
     if len(candles) < 100 and (not market.verified or len(market.candles_15m) < 100):
         raise HTTPException(
             status_code=409,
@@ -1440,7 +1465,7 @@ async def hermes_step() -> dict[str, Any]:
             detail="autonomy is revoked; re-enable autonomy before running research steps",
         )
     market = _market()
-    candles, dataset_id = _research_candles(market)
+    candles, _ = _research_candles(market)
     if len(candles) < 100 and not market.verified:
         raise HTTPException(
             status_code=409,
@@ -1564,7 +1589,10 @@ async def provider_catalog() -> dict[str, Any]:
             availability="unavailable",
             source="opencodex",
             stale=True,
-            detail="OpenCodex is not configured. Add the second Railway service, then pick models here.",
+            detail=(
+                "OpenCodex is not configured. "
+                "Add the second Railway service, then pick models here."
+            ),
         )
     try:
         models = await client.list_models()
@@ -1597,7 +1625,11 @@ async def provider_catalog() -> dict[str, Any]:
         rows,
         source="opencodex",
         availability="available" if rows else "unavailable",
-        detail=None if rows else "OpenCodex is up but has no models yet. Add a provider in its dashboard.",
+        detail=(
+            None if rows else (
+            "OpenCodex is up but has no models yet. Add a provider in its dashboard."
+        )
+        ),
     )
 
 

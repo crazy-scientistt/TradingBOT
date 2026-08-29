@@ -45,3 +45,23 @@ class ActiveProfile(BaseModel):
     created_at: str
     created_by: str
     correlation_id: str
+
+
+def default_autonomous_profile() -> AutonomousProfile:
+    return AutonomousProfile(
+        execution_mode=ExecutionMode.PAPER,
+        strategy_mode=StrategyMode.AUTONOMOUS,
+        autonomous_profile=AutonomousProfileKind.MICRO_TRADE,
+        spot_enabled=True,
+        futures_enabled=True,
+        spot_pairs=("PAXGUSDT",),
+        futures_pairs=("BTCUSDT", "ETHUSDT"),
+        risk=RiskCeilings(
+            max_capital_per_trade_rate=Decimal("0.005"),
+            max_futures_leverage=5,
+            max_total_exposure_rate=Decimal("0.20"),
+            rolling_24h_loss_limit_rate=Decimal("0.03"),
+        ),
+        notifications=NotificationPreferences(),
+    )
+
