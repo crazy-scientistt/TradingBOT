@@ -11,13 +11,14 @@ const TV_INTERVAL: Record<Interval, string> = {
 
 type Props = {
   interval: Interval;
+  symbol: string;
 };
 
-export function TradingViewWidget({ interval }: Props) {
+export function TradingViewWidget({ interval, symbol }: Props) {
   const src = useMemo(() => {
     const params = new URLSearchParams({
-      frameElementId: "tv-paxg",
-      symbol: "BINANCE:PAXGUSDT",
+      frameElementId: "tv-desk",
+      symbol,
       interval: TV_INTERVAL[interval],
       hidesidetoolbar: "0",
       symboledit: "0",
@@ -36,11 +37,11 @@ export function TradingViewWidget({ interval }: Props) {
       gridColor: "rgba(28,36,54,1)",
     });
     return `https://s.tradingview.com/widgetembed/?${params.toString()}`;
-  }, [interval]);
+  }, [interval, symbol]);
 
   return (
     <iframe
-      title="TradingView PAXGUSDT"
+      title={`TradingView ${symbol}`}
       src={src}
       className="h-full w-full border-0 bg-bg"
       referrerPolicy="no-referrer-when-downgrade"

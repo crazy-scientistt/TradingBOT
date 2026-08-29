@@ -5,7 +5,13 @@ import {
   BREAKER_LOSS,
   DAILY_LOSS_LIMIT,
   FEE_RATE,
+  MAINT_MARGIN_RATE,
   MAX_DRAWDOWN,
+  MAX_EXPOSURE,
+  MAX_FUTURES_LEVERAGE,
+  MIN_NOTIONAL,
+  MIN_STOP_PCT,
+  QTY_STEP,
   RISK_PER_TRADE,
   SLIPPAGE_RATE,
   STARTING_CASH,
@@ -17,14 +23,16 @@ import {
   type Genome,
   type Order,
   type Position,
+  type Product,
   type Quote,
   type RiskGate,
+  type Side,
 } from "./types";
 
 let seq = 1;
 const nid = (p: string) => `${p}-${seq++}`;
 
-export function emptyState(): EngineState {
+export function emptyState(startingCash = STARTING_CASH): EngineState {
   return {
     running: false,
     paused: false,
@@ -39,9 +47,11 @@ export function emptyState(): EngineState {
     position: null,
     orders: [],
     trades: [],
-    equity: STARTING_CASH,
-    cash: STARTING_CASH,
-    peakEquity: STARTING_CASH,
+    equity: startingCash,
+    cash: startingCash,
+    startingCash,
+    maxLeverage: MAX_FUTURES_LEVERAGE,
+    peakEquity: startingCash,
     dailyPnl: 0,
     realizedPnl: 0,
     fees: 0,
@@ -52,7 +62,7 @@ export function emptyState(): EngineState {
         ts: Date.now(),
         kind: "system",
         title: "Desk armed in paper",
-        detail: "Live execution is disarmed. New entries require a fresh feed and open risk gates.",
+        detail: `Paper canary ${startingCash.toFixed(0)} USDT. Live execution is disarmed.`,
       },
     ],
     evidence: seedEvidence(),
@@ -176,19 +186,21 @@ export function newEntriesAllowed(state: EngineState): boolean {
 }
 
 export function riskGates(state: EngineState): RiskGate[] {
+  const bank = state.startingCash > 0 ? state.startingCash : STARTING_CASH;
   const dd = state.peakEquity > 0 ? (state.peakEquity - state.equity) / state.peakEquity : 0;
   const authoritative = state.evidence.filter((e) => e.source !== "Forum commentary");
   const authoritativeHold = authoritative.some((e) => e.disposition === "HOLD");
   const hasAllow = authoritative.some((e) => e.disposition === "ALLOW" && e.score >= 0.7);
   const stale = !state.lastTickAt || Date.now() - state.lastTickAt > 15_000;
+  const lossCeiling = bank * DAILY_LOSS_LIMIT;
   return [
     { id: "running", label: "Runtime running", ok: state.running && !state.paused && !state.halted, detail: state.halted ? "Emergency halt" : state.paused ? "Paused" : state.running ? "Paper loop on" : "Idle" },
     { id: "mode", label: "Paper-only entries", ok: state.mode === "PAPER", detail: "Live arming is not exposed in this desk" },
     { id: "feed", label: "Fresh market feed", ok: !stale && state.candles.length >= 40, detail: stale ? "Feed stale — new entries HOLD" : `${state.candles.length} candles · ${state.feedSource}` },
-    { id: "breaker", label: "Rolling-loss breaker", ok: !state.breakerTripped && Math.abs(Math.min(0, state.dailyPnl)) < BREAKER_LOSS, detail: state.breakerTripped ? "Tripped" : `Limit ${fmt(BREAKER_LOSS)} USDT` },
-    { id: "daily", label: "Daily loss ceiling", ok: state.dailyPnl > -STARTING_CASH * DAILY_LOSS_LIMIT, detail: `${fmt(state.dailyPnl)} / ${fmt(-STARTING_CASH * DAILY_LOSS_LIMIT)} USDT` },
+    { id: "breaker", label: "Rolling-loss breaker", ok: !state.breakerTripped && Math.abs(Math.min(0, state.dailyPnl)) < lossCeiling, detail: state.breakerTripped ? "Tripped" : `Limit ${fmt(lossCeiling)} USDT` },
+    { id: "daily", label: "Daily loss ceiling", ok: state.dailyPnl > -lossCeiling, detail: `${fmt(state.dailyPnl)} / ${fmt(-lossCeiling)} USDT` },
     { id: "drawdown", label: "Max drawdown", ok: dd < MAX_DRAWDOWN, detail: `${(dd * 100).toFixed(2)}% of peak` },
-    { id: "spot", label: "Spot cash-only", ok: state.product === "SPOT" && !state.position, detail: state.position ? "Already in a position" : "No leverage, no shorts" },
+    { id: "slot", label: "Open slot", ok: !state.position, detail: state.position ? `${state.position.side} ${state.position.symbol} already on` : "Ready for a new paper entry" },
     { id: "evidence", label: "Evidence not HOLD", ok: hasAllow && !authoritativeHold, detail: authoritativeHold ? "Authoritative evidence HOLDs new entries" : hasAllow ? "Forum commentary ignored; authoritative sources allow reduced size" : "No independent ALLOW" },
     { id: "cycles", label: "Micro-trade ceiling", ok: state.trades.length < 1000, detail: `${state.trades.length} / 1000 completed cycles` },
   ];
@@ -196,10 +208,29 @@ export function riskGates(state: EngineState): RiskGate[] {
 
 function applyBreaker(state: EngineState): EngineState {
   const loss = Math.max(0, -state.dailyPnl);
-  if (loss >= BREAKER_LOSS && !state.breakerTripped) {
-    return mark({ ...state, breakerTripped: true }, "risk", "Circuit breaker tripped", `Rolling loss ${fmt(loss)} USDT reached the ${fmt(BREAKER_LOSS)} USDT paper ceiling. New entries blocked; protection stays on.`);
+  const ceiling = state.startingCash * DAILY_LOSS_LIMIT;
+  if (loss >= ceiling && !state.breakerTripped) {
+    return mark({ ...state, breakerTripped: true }, "risk", "Circuit breaker tripped", `Rolling loss ${fmt(loss)} USDT reached the ${fmt(ceiling)} USDT paper ceiling. New entries blocked; protection stays on.`);
   }
   return state;
+}
+
+function chooseLeverage(product: Product, atr: number, price: number, ceiling: number, interval = "1m"): number {
+  if (product !== "FUTURES") return 1;
+  const cap = Math.max(1, Math.min(MAX_FUTURES_LEVERAGE, Math.floor(ceiling || 1)));
+  const atrPct = atr / price;
+  let picked = 1;
+  if (atrPct < 0.003) picked = 4;
+  else if (atrPct < 0.006) picked = 3;
+  else if (atrPct < 0.012) picked = 2;
+  else picked = 1;
+  if (interval === "1m" || interval === "5m") picked = Math.min(picked, 2);
+  return Math.min(picked, cap);
+}
+
+function liquidationPrice(side: Side, entry: number, leverage: number): number {
+  const room = Math.max(0.05, 1 / leverage - MAINT_MARGIN_RATE * 1.2);
+  return side === "LONG" ? entry * (1 - room) : entry * (1 + room);
 }
 
 function maybeEnter(state: EngineState, candle: Candle): EngineState {
@@ -209,33 +240,54 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
   const r = last(rsi(closes, 14));
   const a = last(atr(state.candles, 14));
   if (!fast || !slow || r === undefined || !a || a <= 0) return state;
-  const pulled = candle.c <= fast * 1.006 && candle.c >= slow * 0.997;
-  const trend = fast > slow && r > 36 && r < 74;
-  if (!(trend && pulled)) {
+  const longSetup = fast > slow && r > 36 && r < 74 && candle.c <= fast * 1.006 && candle.c >= slow * 0.997;
+  const shortSetup =
+    state.product === "FUTURES" &&
+    fast < slow &&
+    r > 26 &&
+    r < 64 &&
+    candle.c >= fast * 0.994 &&
+    candle.c <= slow * 1.003;
+  const side: Side | null = longSetup ? "LONG" : shortSetup ? "SHORT" : null;
+  if (!side) {
     if (state.candles.length % 8 === 0) {
-      return mark(state, "market", "No entry", "Waiting for an EMA pullback inside the risk envelope. Forum commentary cannot HOLD the book.");
+      return mark(state, "market", "HOLD", `No qualified ${state.symbol} setup. Autonomous default is HOLD.`);
     }
     return state;
   }
   const reduce = state.evidence.some((e) => e.disposition === "REDUCE" && e.source !== "Forum commentary");
-  const stopDist = a * ATR_STOP_MULT;
+  const stopDist = Math.max(a * ATR_STOP_MULT, candle.c * MIN_STOP_PCT);
+  const px = side === "LONG" ? candle.c * (1 + SLIPPAGE_RATE) : candle.c * (1 - SLIPPAGE_RATE);
+  const lev = chooseLeverage(state.product, a, px, state.maxLeverage, state.interval);
+  const liq = liquidationPrice(side, px, lev);
+  let stop = side === "LONG" ? px - stopDist : px + stopDist;
+  const takeDist = Math.max(a * ATR_TP_MULT, stopDist * (ATR_TP_MULT / ATR_STOP_MULT));
+  let take = side === "LONG" ? px + takeDist : px - takeDist;
+  if (side === "LONG" && stop <= liq) stop = (px + liq) / 2;
+  if (side === "SHORT" && stop >= liq) stop = (px + liq) / 2;
   const riskBudget = state.cash * RISK_PER_TRADE * (reduce ? 0.5 : 1);
-  const qty = floorQty(riskBudget / stopDist);
+  const maxMargin = state.cash * MAX_EXPOSURE * (reduce ? 0.5 : 1);
+  const qtyRisk = riskBudget / Math.abs(px - stop);
+  const qtyMargin = (maxMargin * lev) / px;
+  const qty = floorQty(Math.min(qtyRisk, qtyMargin), QTY_STEP[state.symbol] ?? 0.0001);
   if (qty <= 0) return state;
-  const px = candle.c * (1 + SLIPPAGE_RATE);
   const notional = qty * px;
+  const margin = state.product === "FUTURES" ? notional / lev : notional;
   const fee = notional * FEE_RATE;
-  if (notional + fee > state.cash) return state;
+  if (margin + fee > state.cash) return state;
+  if (notional < MIN_NOTIONAL && state.startingCash >= 10) return state;
   const pos: Position = {
     id: nid("pos"),
     symbol: state.symbol,
-    product: "SPOT",
-    side: "LONG",
+    product: state.product,
+    side,
     qty,
     entry: px,
-    stop: px - stopDist,
-    take: px + a * ATR_TP_MULT,
-    leverage: 1,
+    stop,
+    take,
+    leverage: lev,
+    margin,
+    liquidation: liq,
     openedAt: candle.t,
     feesPaid: fee,
   };
@@ -243,8 +295,8 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
     id: nid("ord"),
     clientId: `gg-paper-${pos.id}`,
     symbol: state.symbol,
-    product: "SPOT",
-    side: "LONG",
+    product: state.product,
+    side,
     type: "MARKET",
     qty,
     price: px,
@@ -255,19 +307,24 @@ function maybeEnter(state: EngineState, candle: Candle): EngineState {
     {
       ...state,
       position: pos,
-      cash: state.cash - notional - fee,
+      cash: state.cash - margin - fee,
       fees: state.fees + fee,
       orders: [order, ...state.orders].slice(0, 80),
     },
     "entry",
-    `Paper long ${state.symbol}`,
-    `Qty ${qty.toFixed(4)} @ ${fmt(px)} · stop ${fmt(pos.stop)} · take ${fmt(pos.take)} · fee ${fmt(fee)}`,
+    `Paper ${side.toLowerCase()} ${state.symbol} ${lev}x`,
+    `Qty ${qty} @ ${fmt(px)} · margin ${fmt(margin)} · lev ${lev}x · stop ${fmt(stop)} · liq ${fmt(liq)} · fee ${fmt(fee)}`,
   );
 }
 
 function managePosition(state: EngineState, candle: Candle): EngineState {
   const pos = state.position;
   if (!pos) return state;
+  if (pos.side === "SHORT") {
+    if (candle.h >= pos.stop) return close(state, pos.stop, "STOP_LOSS", candle.t);
+    if (candle.l <= pos.take) return close(state, pos.take, "TAKE_PROFIT", candle.t);
+    return state;
+  }
   if (candle.l <= pos.stop) return close(state, pos.stop, "STOP_LOSS", candle.t);
   if (candle.h >= pos.take) return close(state, pos.take, "TAKE_PROFIT", candle.t);
   return state;
@@ -281,10 +338,10 @@ export function close(
 ): EngineState {
   const pos = state.position;
   if (!pos) return state;
-  const px = rawPx * (1 - SLIPPAGE_RATE);
+  const px = pos.side === "LONG" ? rawPx * (1 - SLIPPAGE_RATE) : rawPx * (1 + SLIPPAGE_RATE);
   const proceeds = pos.qty * px;
   const fee = proceeds * FEE_RATE;
-  const gross = (px - pos.entry) * pos.qty;
+  const gross = pos.side === "LONG" ? (px - pos.entry) * pos.qty : (pos.entry - px) * pos.qty;
   const slippage = Math.abs(rawPx - px) * pos.qty;
   const net = gross - fee - pos.feesPaid - slippage;
   const trade: ClosedTrade = {
@@ -295,6 +352,8 @@ export function close(
     qty: pos.qty,
     entry: pos.entry,
     exit: px,
+    leverage: pos.leverage,
+    margin: pos.margin,
     gross,
     fees: fee + pos.feesPaid,
     slippage,
@@ -308,14 +367,14 @@ export function close(
     clientId: `gg-paper-x-${pos.id}`,
     symbol: pos.symbol,
     product: pos.product,
-    side: "LONG",
+    side: pos.side,
     type: reason === "STOP_LOSS" ? "STOP" : reason === "TAKE_PROFIT" ? "TAKE" : "MARKET",
     qty: pos.qty,
     price: px,
     status: "FILLED",
     createdAt: ts,
   };
-  const cash = state.cash + proceeds - fee;
+  const cash = state.cash + pos.margin + gross - fee;
   const next: EngineState = {
     ...state,
     position: null,
@@ -347,7 +406,10 @@ export function markToMarket(state: EngineState, lastPx: number): number {
 
 export function unrealized(state: EngineState): number {
   if (!state.position || !state.quote) return 0;
-  return (state.quote.last - state.position.entry) * state.position.qty;
+  const pos = state.position;
+  return pos.side === "LONG"
+    ? (state.quote.last - pos.entry) * pos.qty
+    : (pos.entry - state.quote.last) * pos.qty;
 }
 
 function quoteFrom(c: Candle, source: Quote["source"]): Quote {
@@ -370,8 +432,9 @@ function nextCandle(prev: Candle, now: number, source: Quote["source"]): Candle 
   };
 }
 
-function floorQty(q: number): number {
-  return Math.floor(q * 10_000) / 10_000;
+function floorQty(q: number, step = 0.0001): number {
+  if (step <= 0 || q <= 0) return 0;
+  return Math.floor((q + 1e-12) / step) * step;
 }
 
 export function fmt(n: number): string {
@@ -383,4 +446,30 @@ export function fmt(n: number): string {
 export function signed(n: number): string {
   const s = fmt(n);
   return n > 0 ? `+${s}` : s;
+}
+
+export function replayPaper(state: EngineState, series: Candle[]): EngineState {
+  let next: EngineState = {
+    ...state,
+    running: true,
+    paused: false,
+    lastTickAt: Date.now(),
+  };
+  const body = series.slice(-120);
+  for (const candle of body) {
+    const candles = [...next.candles.filter((c) => c.t < candle.t), candle].slice(-400);
+    const quote = quoteFrom(candle, next.feedSource);
+    next = { ...next, candles, quote, lastTickAt: Date.now() };
+    next.equity = markToMarket(next, candle.c);
+    next = applyBreaker(next);
+    if (next.position) next = managePosition(next, candle);
+    else if (newEntriesAllowed(next)) next = maybeEnter(next, candle);
+    next.peakEquity = Math.max(next.peakEquity, next.equity);
+  }
+  return mark(
+    next,
+    "system",
+    "Paper replay attached",
+    `${next.trades.length} closed cycle(s), ${next.position ? "open long" : "flat"} on the public PAXG series. Live stays disarmed.`,
+  );
 }

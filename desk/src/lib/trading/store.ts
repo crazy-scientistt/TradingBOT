@@ -5,10 +5,13 @@ import {
   emergencyFlatten,
   hydrate,
   mark,
+  replayPaper,
   tick,
 } from "./engine";
 import { fetchPublicKlines, fetchPublicTicker } from "./klines";
-import type { ChartMode, EngineState, Interval, Tab } from "./types";
+import { runHermesResearch } from "./hermes";
+import type { CanarySize, ChartMode, EngineState, Genome, Interval, Tab, UniverseId } from "./types";
+import { UNIVERSE } from "./types";
 
 type Store = EngineState & {
   tab: Tab;
@@ -30,9 +33,14 @@ type Store = EngineState & {
   halt: () => void;
   flatten: () => void;
   resetPaper: () => void;
+  setCanary: (size: CanarySize) => void;
+  setSymbol: (id: UniverseId) => void;
+  applyProposal: (raw: string, model: string) => void;
+  research: () => Promise<void>;
 };
 
 let loop: number | null = null;
+let bootSeq = 0;
 
 function persist(state: EngineState) {
   try {
@@ -44,7 +52,7 @@ function persist(state: EngineState) {
       trades: state.trades.slice(0, 20),
       peakEquity: state.peakEquity,
     };
-    localStorage.setItem("goldguard.paper.v1", JSON.stringify(slim));
+    localStorage.setItem("goldguard.paper.v2", JSON.stringify(slim));
   } catch {
     /* ignore quota */
   }
@@ -58,7 +66,7 @@ async function loadChartSeries(symbol: string, interval: Interval) {
 
 export const useDesk = create<Store>((set, get) => ({
   ...emptyState(),
-  tab: "providers",
+  tab: "home",
   settingsOpen: false,
   loadingFeed: false,
   loadingChart: false,
@@ -88,11 +96,13 @@ export const useDesk = create<Store>((set, get) => ({
       });
   },
   boot: async () => {
+    const seq = ++bootSeq;
     set({ loadingFeed: true, loadingChart: true, error: null });
     try {
       const { candles, source } = await fetchPublicKlines({
         data: { symbol: get().symbol, interval: "1m", limit: 240 },
       });
+      if (seq !== bootSeq) return;
       set((s) => ({
         ...hydrate(s, candles, source),
         chartCandles: s.chartInterval === "1m" ? candles : s.chartCandles,
@@ -100,25 +110,35 @@ export const useDesk = create<Store>((set, get) => ({
       }));
       if (get().chartInterval !== "1m") {
         const extra = await loadChartSeries(get().symbol, get().chartInterval);
+        if (seq !== bootSeq) return;
         set({ chartCandles: extra.candles, chartSource: extra.source });
       }
     } catch (err) {
+      if (seq !== bootSeq) return;
       set({ error: err instanceof Error ? err.message : "Feed failed" });
     } finally {
+      if (seq !== bootSeq) return;
       set({ loadingFeed: false, loadingChart: false });
+      if (!get().halted && !get().running) {
+        get().start();
+        void get().research();
+      }
     }
   },
   start: () => {
     const s = get();
     if (s.halted) return;
+    if (loop && s.running) return;
+    const replayed = replayPaper({ ...s, running: true, paused: false }, s.candles);
     set(
       mark(
-        { ...s, running: true, paused: false },
+        replayed,
         "system",
         "Paper loop started",
-        "Entries still fail closed on stale feed, tripped breaker, or HOLD evidence.",
+        "Public feed on the selected pair. HOLD is a valid autonomous decision. Live stays disarmed.",
       ),
     );
+    persist(replayed);
     if (loop) window.clearInterval(loop);
     loop = window.setInterval(() => {
       void (async () => {
@@ -176,11 +196,12 @@ export const useDesk = create<Store>((set, get) => ({
     if (loop) window.clearInterval(loop);
     loop = null;
     try {
+      localStorage.removeItem("goldguard.paper.v2");
       localStorage.removeItem("goldguard.paper.v1");
     } catch {
       /* ignore */
     }
-    const fresh = emptyState();
+    const fresh = emptyState(get().startingCash);
     set({
       ...fresh,
       tab: get().tab,
@@ -193,5 +214,78 @@ export const useDesk = create<Store>((set, get) => ({
       chartSource: "synthetic",
     });
     void get().boot();
+  },
+  setCanary: (size) => {
+    if (loop) window.clearInterval(loop);
+    loop = null;
+    const tab = get().tab;
+    const chartInterval = get().chartInterval;
+    const chartMode = get().chartMode;
+    set({
+      ...emptyState(size),
+      tab,
+      settingsOpen: true,
+      loadingFeed: false,
+      loadingChart: false,
+      chartInterval,
+      chartMode,
+      chartCandles: [],
+      chartSource: "synthetic",
+    });
+    void get().boot();
+  },
+  setSymbol: (id) => {
+    const spec = UNIVERSE.find((u) => u.id === id);
+    if (!spec) return;
+    if (loop) window.clearInterval(loop);
+    loop = null;
+    const startingCash = get().startingCash;
+    set({
+      ...emptyState(startingCash),
+      symbol: spec.id,
+      product: spec.product,
+      tab: get().tab,
+      settingsOpen: false,
+      loadingFeed: true,
+      loadingChart: true,
+      chartInterval: get().chartInterval,
+      chartMode: get().chartMode,
+      chartCandles: [],
+      chartSource: "synthetic",
+    });
+    void get().boot();
+  },
+  applyProposal: (raw, model) => {
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const match = raw.match(/\{[\s\S]*\}/);
+      parsed = match ? (JSON.parse(match[0]) as Record<string, unknown>) : null;
+    } catch {
+      parsed = null;
+    }
+    const id = String(parsed?.proposal_id ?? `hermes-${Date.now()}`);
+    const change = String(parsed?.change ?? parsed?.rationale ?? "bounded paper tweak");
+    const genome: Genome = {
+      id,
+      name: `Hermes ${String(id).slice(0, 28)}`,
+      status: "candidate",
+      sharpe: "unqualified",
+      trades: 0,
+      maxDd: "n/a",
+      note: `${change} · ${model}. Untrusted until schema and holdout pass.`,
+    };
+    set((s) =>
+      mark(
+        { ...s, genomes: [genome, ...s.genomes.filter((g) => g.id !== id)].slice(0, 8) },
+        "hermes",
+        "Hermes proposal landed",
+        genome.note,
+      ),
+    );
+  },
+  research: async () => {
+    const res = await runHermesResearch();
+    if (res.ok) get().applyProposal(res.raw, res.model);
+    else set((s) => mark(s, "hermes", "Hermes HOLD", res.detail));
   },
 }));

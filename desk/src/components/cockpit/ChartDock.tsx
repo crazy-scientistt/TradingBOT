@@ -2,7 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { CandleChart } from "./CandleChart";
 import { TradingViewWidget } from "./TradingViewWidget";
 import { useDesk } from "@/lib/trading/store";
-import { INTERVALS } from "@/lib/trading/types";
+import { INTERVALS, UNIVERSE } from "@/lib/trading/types";
 
 export function ChartDock() {
   const {
@@ -15,8 +15,10 @@ export function ChartDock() {
     quote,
     position,
     feedSource,
+    symbol,
     setChartInterval,
     setChartMode,
+    setSymbol,
   } = useDesk(
     useShallow((s) => ({
       candles: s.candles,
@@ -28,17 +30,36 @@ export function ChartDock() {
       quote: s.quote,
       position: s.position,
       feedSource: s.feedSource,
+      symbol: s.symbol,
       setChartInterval: s.setChartInterval,
       setChartMode: s.setChartMode,
+      setSymbol: s.setSymbol,
     })),
   );
   const series = chartInterval === "1m" ? candles : chartCandles;
   const source = chartInterval === "1m" ? feedSource : chartSource;
+  const spec = UNIVERSE.find((u) => u.id === symbol) ?? UNIVERSE[0];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg">
       <div className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2">
-        <span className="shrink-0 px-1.5 text-xs font-semibold tracking-tight">PAXG/USDT</span>
+        <div className="flex shrink-0 items-center rounded-sm bg-bg-subtle p-0.5">
+          {UNIVERSE.map((u) => {
+            const on = u.id === symbol;
+            return (
+              <button
+                key={u.id}
+                onClick={() => setSymbol(u.id)}
+                className={`h-6 rounded-xs px-2 text-2xs font-semibold tracking-wide ${
+                  on ? "bg-accent text-accent-fg" : "text-muted hover:text-fg"
+                }`}
+              >
+                {u.label}
+              </button>
+            );
+          })}
+        </div>
+        <span className="hidden shrink-0 px-1 text-2xs text-subtle sm:inline">{spec.product}</span>
         <div className="flex items-center rounded-sm bg-bg-subtle p-0.5">
           {INTERVALS.map((iv) => {
             const on = chartInterval === iv;
@@ -83,7 +104,7 @@ export function ChartDock() {
       </div>
       <div className="relative min-h-0 flex-1">
         {chartMode === "advanced" ? (
-          <TradingViewWidget interval={chartInterval} />
+          <TradingViewWidget interval={chartInterval} symbol={spec.tv} />
         ) : (
           <CandleChart candles={series} quote={quote} position={position} />
         )}

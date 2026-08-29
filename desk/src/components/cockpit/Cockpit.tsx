@@ -20,11 +20,12 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { ChartDock } from "./ChartDock";
 import { ProvidersView } from "./ProvidersView";
-import { fmt, riskGates, signed } from "@/lib/trading/engine";
+import { fmt, riskGates, signed, unrealized } from "@/lib/trading/engine";
 import { runHermesResearch } from "@/lib/trading/hermes";
 import { collectLiveDiagnostics } from "@/lib/trading/opencodex";
 import { useDesk } from "@/lib/trading/store";
 import type { Candle, EngineState, Tab } from "@/lib/trading/types";
+import { UNIVERSE } from "@/lib/trading/types";
 
 const NAV: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: "home", label: "Overview", icon: LayoutDashboard },
@@ -161,7 +162,7 @@ function TickerInline() {
   return (
     <div className="hidden min-w-0 items-center gap-5 overflow-hidden md:flex">
       <div className="flex items-baseline gap-2.5">
-        <span className="text-xs font-semibold">{symbol.replace("USDT", "/USDT")}</span>
+        <span className="text-xs font-semibold">{symbol.replace("USDT", "")}</span>
         {price != null && (
           <span className={`desk-num text-base font-semibold ${up ? "text-up" : "text-down"}`}>
             {price.toFixed(2)}
@@ -209,30 +210,24 @@ function MobileTicker() {
   const changePct = stats?.changePct ?? 0;
   const up = (stats?.change ?? 0) >= 0;
 
+  const spec = UNIVERSE.find((u) => u.id === symbol);
   return (
-    <div className="flex h-10 shrink-0 items-center gap-3 overflow-hidden border-b border-border px-3 md:hidden">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-2">
-          <span className="text-2xs font-semibold tracking-wide text-muted">{symbol.replace("USDT", "/USDT")}</span>
-          {price != null && (
-            <span className={`desk-num text-sm font-semibold ${up ? "text-up" : "text-down"}`}>
-              {price.toFixed(2)}
-            </span>
-          )}
-          <span className={`desk-num text-2xs ${up ? "text-up" : "text-down"}`}>
-            {changePct >= 0 ? "+" : ""}
-            {changePct.toFixed(2)}%
-          </span>
-        </div>
-      </div>
-      <div className="shrink-0 text-right">
-        <div className="text-2xs uppercase tracking-wider text-subtle">Equity</div>
-        <div className="desk-num text-xs">{fmt(equity)}</div>
-      </div>
-      <div className="flex shrink-0 items-center gap-1 text-2xs uppercase tracking-wider text-muted">
+    <div className="flex h-10 shrink-0 items-center gap-2 overflow-hidden border-b border-border px-3 md:hidden">
+      <span className="shrink-0 text-2xs font-semibold text-muted">{spec?.label ?? symbol}</span>
+      {price != null && (
+        <span className={`desk-num shrink-0 text-sm font-semibold ${up ? "text-up" : "text-down"}`}>
+          {price >= 1000 ? price.toFixed(2) : price.toFixed(4)}
+        </span>
+      )}
+      <span className={`desk-num min-w-0 truncate text-2xs ${up ? "text-up" : "text-down"}`}>
+        {changePct >= 0 ? "+" : ""}
+        {changePct.toFixed(2)}%
+      </span>
+      <span className="ml-auto shrink-0 desk-num text-xs">${fmt(equity)}</span>
+      <span className="flex shrink-0 items-center gap-1 text-2xs uppercase tracking-wider text-muted">
         <span className={loadingFeed ? "inline-block h-1.5 w-1.5 rounded-full bg-muted" : "live-dot"} />
-        <span>{loadingFeed ? "…" : feedSource === "binance-public" ? "Live" : "Sim"}</span>
-      </div>
+        {loadingFeed ? "…" : feedSource === "binance-public" ? "Live" : "Sim"}
+      </span>
     </div>
   );
 }
@@ -297,7 +292,7 @@ function Overview() {
   const peakEquity = useDesk((s) => s.peakEquity);
   const quote = useDesk((s) => s.quote);
   const position = useDesk((s) => s.position);
-  const u = position && quote ? (quote.last - position.entry) * position.qty : 0;
+  const u = unrealized({ position, quote } as EngineState);
   const dd = peakEquity > 0 ? ((peakEquity - equity) / peakEquity) * 100 : 0;
   const cards = [
     { label: "Equity", value: `${fmt(equity)}`, tone: "fg" as const },
@@ -363,7 +358,7 @@ function PositionPanel() {
       </div>
     );
   }
-  const u = (quote.last - position.entry) * position.qty;
+  const u = unrealized({ position, quote } as EngineState);
   return (
     <div className="flex flex-col border-b border-border px-4 py-4">
       <div className="flex items-center justify-between">
@@ -374,9 +369,12 @@ function PositionPanel() {
       </div>
       <div className="mt-2 desk-num text-lg">{position.symbol}</div>
       <dl className="mt-3 space-y-1.5 text-xs">
-        <Row k="Qty" v={position.qty.toFixed(4)} />
+        <Row k="Qty" v={String(position.qty)} />
         <Row k="Entry" v={fmt(position.entry)} />
         <Row k="Mark" v={fmt(quote.last)} />
+        <Row k="Leverage" v={`${position.leverage}x`} />
+        <Row k="Isolated margin" v={fmt(position.margin ?? 0)} />
+        <Row k="Liquidation" v={fmt(position.liquidation ?? 0)} />
         <Row k="Stop" v={fmt(position.stop)} />
         <Row k="Take" v={fmt(position.take)} />
         <Row k="Unrealized" v={signed(u)} up={u >= 0} />
@@ -514,6 +512,7 @@ function HermesView() {
       const res = await runHermesResearch();
       setOk(res.ok);
       setResult(`${res.detail}\n\n${res.raw}`.trim());
+      if (res.ok) useDesk.getState().applyProposal(res.raw, res.model);
     } catch (err) {
       setOk(false);
       setResult(err instanceof Error ? err.message : "Research failed");
@@ -760,7 +759,12 @@ function QualifyView() {
 function SettingsSheet() {
   const open = useDesk((s) => s.settingsOpen);
   const setOpen = useDesk((s) => s.setSettingsOpen);
+  const startingCash = useDesk((s) => s.startingCash);
+  const setCanary = useDesk((s) => s.setCanary);
   if (!open) return null;
+  const risk = startingCash * 0.01;
+  const exposure = startingCash * 0.2;
+  const breaker = startingCash * 0.05;
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-overlay" onClick={() => setOpen(false)}>
       <aside
@@ -778,15 +782,29 @@ function SettingsSheet() {
           </button>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-muted">
-          Percent ceilings show live USDT equivalents against the 10,000 USDT paper account. Leverage is hidden
-          because futures is disabled on this desk.
+          Paper canary only. Live stays disarmed. Size the book at 10 or 100 USDT — both are realistic
+          micro sizes against PAXG/USDT.
         </p>
+        <div className="mt-4 flex gap-2">
+          {([10, 100] as const).map((n) => (
+            <button
+              key={n}
+              onClick={() => setCanary(n)}
+              className={`h-11 flex-1 rounded-sm text-sm font-semibold ${
+                startingCash === n ? "bg-accent text-accent-fg" : "border border-border text-muted"
+              }`}
+            >
+              ${n} canary
+            </button>
+          ))}
+        </div>
         <div className="mt-5 space-y-2">
-          <Setting label="Max capital per trade" value="1.00%" hint="100.00 USDT maximum for one trade" />
-          <Setting label="Max total exposure" value="20.00%" hint="2,000.00 USDT maximum total exposure" />
-          <Setting label="Rolling 24h loss limit" value="5.00%" hint="500.00 USDT breaker trip" />
+          <Setting label="Max capital per trade" value="1.00%" hint={`${risk.toFixed(2)} USDT risk per trade`} />
+          <Setting label="Max total exposure" value="20.00%" hint={`${exposure.toFixed(2)} USDT maximum total exposure`} />
+          <Setting label="Rolling 24h loss limit" value="5.00%" hint={`${breaker.toFixed(2)} USDT breaker trip`} />
+          <Setting label="Max futures leverage" value="5x ceiling" hint="Core picks 1–4x from ATR. Ceiling is not the default." />
           <Setting label="Spot pairs" value="PAXGUSDT" hint="Cash-only. No borrowing." />
-          <Setting label="Futures" value="Disabled" hint="Leverage controls stay hidden" />
+          <Setting label="Futures" value="BTC ETH SOL" hint="Isolated one-way. Agent sets margin and leverage per trade." />
         </div>
       </aside>
     </div>

@@ -24,7 +24,7 @@ export const runHermesResearch = createServerFn({ method: "POST" }).handler(asyn
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_tokens: 400,
+        max_tokens: 800,
         reasoning_effort: "high",
         messages: [
           {
