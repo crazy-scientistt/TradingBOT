@@ -48,6 +48,8 @@ class EvidenceService:
                 raw_items = await adapter.fetch(now)
                 for raw in raw_items:
                     res = self.normalizer.normalize(raw, now)
+                    if res.item is None:
+                        continue
                     self.repository.upsert(res.item)
                     total_ingested += 1
                 self._last_refresh[adapter.name] = now.isoformat()
@@ -56,7 +58,9 @@ class EvidenceService:
         return total_ingested
 
     def bundle(self, scope: MarketScope, decision_time: datetime) -> EvidenceBundle:
-        return self.repository.bundle_for(scope, decision_time)
+        raw = self.repository.bundle_for(scope, decision_time)
+        decision = self.gate.evaluate(raw)
+        return raw.model_copy(update={"disposition": decision.disposition})
 
     def health(self) -> dict[str, Any]:
         return {

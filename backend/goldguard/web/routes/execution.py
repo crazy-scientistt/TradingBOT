@@ -94,7 +94,7 @@ def get_positions() -> dict[str, Any]:
                 gross = (curr - pos.entry_price) * pos.quantity
             else:
                 gross = (pos.entry_price - curr) * pos.quantity
-            fee = pos.entry_price * pos.quantity * Decimal("0.0005")
+            fee = Decimal("0")
             funding = Decimal("0")
             slippage = Decimal("0")
             net = gross - fee - funding - slippage

@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from goldguard.config import Settings
 from goldguard.hermes.tools import (
     ForbiddenHermesToolError,
     HermesToolRegistry,
@@ -15,6 +16,27 @@ router = APIRouter(prefix="/internal/hermes/tools", tags=["hermes_bridge"])
 _tool_registry = HermesToolRegistry()
 
 
+def _require_bridge_auth(authorization: str | None) -> None:
+    settings = Settings()
+    token = settings.hermes_bridge_token
+    if token is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "BRIDGE_TOKEN_UNCONFIGURED", "message": "hermes bridge token missing"},
+        )
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "BRIDGE_AUTH_REQUIRED", "message": "bearer token required"},
+        )
+    given = authorization.removeprefix("Bearer ").strip()
+    if given != token.get_secret_value():
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "BRIDGE_AUTH_REJECTED", "message": "bearer token rejected"},
+        )
+
+
 @router.post("/{tool_name}")
 async def execute_hermes_tool(
     tool_name: str,
@@ -22,9 +44,10 @@ async def execute_hermes_tool(
     request: Request,
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    _ = request
+    _require_bridge_auth(authorization)
     try:
-        res = await _tool_registry.call(tool_name, payload)
-        return res
+        return await _tool_registry.call(tool_name, payload)
     except SealedHoldoutAccessError as exc:
         raise HTTPException(
             status_code=403,
@@ -37,4 +60,3 @@ async def execute_hermes_tool(
         ) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-

@@ -28,7 +28,7 @@ const DEFAULT_PROFILE: AutonomousProfileView = {
 
 export interface AutonomousSettingsProps {
   initialProfile?: AutonomousProfileView;
-  equityUsdt?: string;
+  equityUsdt?: string | null;
 }
 
 function formatUsdt(value: number): string {
@@ -48,13 +48,14 @@ function usdtEquivalent(rateText: string, equity: number): number {
 
 export const AutonomousSettings: React.FC<AutonomousSettingsProps> = ({
   initialProfile,
-  equityUsdt = '10000',
+  equityUsdt = null,
 }) => {
   const profile = initialProfile ?? DEFAULT_PROFILE;
-  const equity = Number(equityUsdt);
-  const capitalUsdt = usdtEquivalent(profile.risk.max_capital_per_trade_rate, equity);
-  const exposureUsdt = usdtEquivalent(profile.risk.max_total_exposure_rate, equity);
-  const lossUsdt = usdtEquivalent(profile.risk.rolling_24h_loss_limit_rate, equity);
+  const equity = equityUsdt == null || equityUsdt === '' ? Number.NaN : Number(equityUsdt);
+  const equityKnown = Number.isFinite(equity);
+  const capitalUsdt = equityKnown ? usdtEquivalent(profile.risk.max_capital_per_trade_rate, equity) : 0;
+  const exposureUsdt = equityKnown ? usdtEquivalent(profile.risk.max_total_exposure_rate, equity) : 0;
+  const lossUsdt = equityKnown ? usdtEquivalent(profile.risk.rolling_24h_loss_limit_rate, equity) : 0;
   const capitalPercent = (Number(profile.risk.max_capital_per_trade_rate) * 100).toFixed(2);
   const exposurePercent = (Number(profile.risk.max_total_exposure_rate) * 100).toFixed(2);
   const lossPercent = (Number(profile.risk.rolling_24h_loss_limit_rate) * 100).toFixed(2);
@@ -100,7 +101,8 @@ export const AutonomousSettings: React.FC<AutonomousSettingsProps> = ({
         </h3>
         <p style={{ margin: '6px 0 0', color: 'var(--text-muted)', fontSize: '12px' }}>
           Percentages are hard ceilings. AI may only select values below them. Shown USDT
-          equivalents use current paper equity ({formatUsdt(equity)} USDT).
+          equivalents use current paper equity
+          {equityKnown ? ` (${formatUsdt(equity)} USDT)` : ' (equity unavailable)'}.
         </p>
       </header>
 
@@ -115,7 +117,11 @@ export const AutonomousSettings: React.FC<AutonomousSettingsProps> = ({
             value={`${capitalPercent}%`}
             style={fieldStyle}
           />
-          <span style={hintStyle}>{formatUsdt(capitalUsdt)} USDT maximum for one trade</span>
+          <span style={hintStyle}>
+            {equityKnown
+              ? `${formatUsdt(capitalUsdt)} USDT maximum for one trade`
+              : 'USDT equivalent unavailable until equity is observed'}
+          </span>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -129,7 +135,9 @@ export const AutonomousSettings: React.FC<AutonomousSettingsProps> = ({
             style={fieldStyle}
           />
           <span style={hintStyle}>
-            {formatUsdt(exposureUsdt)} USDT maximum total exposure
+            {equityKnown
+              ? `${formatUsdt(exposureUsdt)} USDT maximum total exposure`
+              : 'USDT equivalent unavailable until equity is observed'}
           </span>
         </div>
 
@@ -143,7 +151,11 @@ export const AutonomousSettings: React.FC<AutonomousSettingsProps> = ({
             value={`${lossPercent}%`}
             style={fieldStyle}
           />
-          <span style={hintStyle}>{formatUsdt(lossUsdt)} USDT rolling 24-hour loss limit</span>
+          <span style={hintStyle}>
+            {equityKnown
+              ? `${formatUsdt(lossUsdt)} USDT rolling 24-hour loss limit`
+              : 'USDT equivalent unavailable until equity is observed'}
+          </span>
         </div>
 
         {profile.futures_enabled && (

@@ -11,12 +11,22 @@ from goldguard.context.evidence import (
     EvidenceScore,
     SourceKind,
 )
+from goldguard.context.injection import InjectionScanner
 from goldguard.execution.models import MarketScope
+
+COMMENTARY_EVENT_CLASSES = frozenset({"forum", "thread", "commentary"})
+AUTHORITATIVE_KINDS = frozenset(
+    {
+        SourceKind.OFFICIAL,
+        SourceKind.EXCHANGE,
+        SourceKind.CALENDAR,
+        SourceKind.REPUTABLE_NEWS,
+    }
+)
 
 
 class EvidenceScorer:
     def score(self, item: EvidenceItem, scope: MarketScope, now: datetime) -> EvidenceScore:
-        # Reliability by source kind
         if item.source_kind == SourceKind.OFFICIAL:
             reliability = 1.0
         elif item.source_kind == SourceKind.EXCHANGE:
@@ -28,7 +38,9 @@ class EvidenceScorer:
         else:
             reliability = 0.50
 
-        # Freshness
+        if item.event_class.lower() in COMMENTARY_EVENT_CLASSES:
+            reliability = min(reliability, 0.35)
+
         observed = item.published_at or item.event_at or item.retrieved_at
         if observed.tzinfo is None:
             observed = observed.replace(tzinfo=UTC)
@@ -55,8 +67,26 @@ class EvidenceScorer:
         )
 
 
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _is_authoritative(item: EvidenceItem) -> bool:
+    if item.event_class.lower() in COMMENTARY_EVENT_CLASSES:
+        return False
+    if item.source_kind == SourceKind.WEB_SEARCH:
+        return False
+    return item.source_kind in AUTHORITATIVE_KINDS
+
+
 class EvidenceGate:
-    def evaluate(self, bundle: EvidenceBundle, opportunity: Any = None) -> Any:
+    def __init__(self, scanner: InjectionScanner | None = None) -> None:
+        self.scanner = scanner or InjectionScanner()
+
+    def evaluate(self, bundle: EvidenceBundle, opportunity: Any = None) -> EvidenceDecision:
+        _ = opportunity
         if not bundle.items:
             return EvidenceDecision(
                 disposition=EvidenceDisposition.HOLD,
@@ -64,7 +94,37 @@ class EvidenceGate:
                 reason_codes=("NO_EVIDENCE_AVAILABLE",),
             )
 
-        has_conflicts = len(set(c.direction for item in bundle.items for c in item.claims)) > 2
+        for item in bundle.items:
+            blob = item.title + " " + " ".join(claim.claim_text for claim in item.claims)
+            if self.scanner.scan(blob).flagged:
+                return EvidenceDecision(
+                    disposition=EvidenceDisposition.HOLD,
+                    size_multiplier=Decimal("0"),
+                    reason_codes=("INJECTED_EVIDENCE",),
+                )
+
+        now = _aware(bundle.decision_time)
+        fresh = False
+        for item in bundle.items:
+            stamp = item.published_at or item.event_at or item.retrieved_at
+            if now - _aware(stamp) <= timedelta(hours=24):
+                fresh = True
+                break
+        if not fresh:
+            return EvidenceDecision(
+                disposition=EvidenceDisposition.HOLD,
+                size_multiplier=Decimal("0"),
+                reason_codes=("STALE_EVIDENCE",),
+            )
+
+        if not any(_is_authoritative(item) for item in bundle.items):
+            return EvidenceDecision(
+                disposition=EvidenceDisposition.HOLD,
+                size_multiplier=Decimal("0"),
+                reason_codes=("INDEPENDENT_SOURCE_MISSING",),
+            )
+
+        has_conflicts = len({c.direction for item in bundle.items for c in item.claims}) > 2
         if has_conflicts:
             return EvidenceDecision(
                 disposition=EvidenceDisposition.REDUCED_SIZE,
@@ -89,4 +149,3 @@ class EvidenceDecision:
         self.disposition = disposition
         self.size_multiplier = size_multiplier
         self.reason_codes = reason_codes
-

@@ -28,4 +28,13 @@ def test_qualification_report_route(client: TestClient) -> None:
     assert "ready_for_live_canary" in body
     assert "gates" in body
     assert len(body["gates"]) >= 10
+    assert body["ready_for_live_canary"] is False
+
+
+def test_qualification_latest_is_fail_closed(client: TestClient) -> None:
+    res = client.get("/api/qualification/latest")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["ready_for_live_canary"] is False
+    assert any("NOT_READY" in item for item in body["blockers"])
 

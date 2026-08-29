@@ -10,6 +10,8 @@ class ExchangeMock:
         self.has_unknown_position = False
         self.missing_stop = False
         self.close_calls: list[str] = []
+        self.ledger_position_ids: tuple[str, ...] = ()
+        self.exchange_position_ids: tuple[str, ...] = ()
 
 
 @pytest.mark.asyncio
@@ -25,8 +27,20 @@ async def test_unknown_external_position_blocks_without_closing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_exchange_fails_closed() -> None:
-    service = ReconciliationService()
+async def test_snapshot_unknown_position_is_not_adopted() -> None:
+    exchange = ExchangeMock()
+    exchange.ledger_position_ids = ("owned-1",)
+    exchange.exchange_position_ids = ("owned-1", "external-9")
+    service = ReconciliationService(exchange_client=exchange)
     report = await service.reconcile(default_autonomous_profile(), "startup")
+    assert "UNKNOWN_EXTERNAL_POSITION" in report.blockers
+    assert report.ready is False
+    assert exchange.close_calls == []
+
+
+@pytest.mark.asyncio
+async def test_missing_exchange_is_not_ready() -> None:
+    service = ReconciliationService()
+    report = await service.reconcile(default_autonomous_profile())
     assert report.ready is False
     assert "EXCHANGE_UNAVAILABLE" in report.blockers

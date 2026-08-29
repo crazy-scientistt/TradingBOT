@@ -7,27 +7,36 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlencode
 
+import httpx
 from pydantic import SecretStr
 
 from goldguard.domain.enums import ProductKind
 
+SPOT_BASE = "https://api.binance.com"
+FUTURES_BASE = "https://fapi.binance.com"
+
 
 class BinanceAuthenticationError(Exception):
     def __init__(self, message: str, response_body: str = "") -> None:
-        clean_msg = message.replace("secret-value", "[REDACTED]")
-        super().__init__(clean_msg)
-        self.response_body = response_body.replace("secret-value", "[REDACTED]")
+        super().__init__(_redact_text(message))
+        self.response_body = _redact_text(response_body)
 
 
 class BinanceTransportError(Exception):
     def __init__(self, message: str, response_body: str = "") -> None:
-        clean_msg = message.replace("secret-value", "[REDACTED]")
-        super().__init__(clean_msg)
-        self.response_body = response_body.replace("secret-value", "[REDACTED]")
+        super().__init__(_redact_text(message))
+        self.response_body = _redact_text(response_body)
 
 
 class BinanceTimeoutError(BinanceTransportError):
     pass
+
+
+def _redact_text(text: str, secret: str | None = None) -> str:
+    clean = text.replace("secret-value", "[REDACTED]")
+    if secret:
+        clean = clean.replace(secret, "[REDACTED]")
+    return clean
 
 
 def sign_query(params: Mapping[str, Any], secret: SecretStr) -> str:
@@ -52,6 +61,11 @@ class BinanceTransport:
         self.api_secret = api_secret
         self.client = client
         self.time_offset_ms = time_offset_ms
+
+    def _secret_value(self) -> str | None:
+        if self.api_secret is None:
+            return None
+        return self.api_secret.get_secret_value()
 
     def _get_timestamp_ms(self) -> int:
         return int(time.time() * 1000) + self.time_offset_ms
@@ -81,6 +95,22 @@ class BinanceTransport:
             raise BinanceTransportError("TRANSPORT_CLIENT_REQUIRED")
 
         try:
+            if isinstance(self.client, httpx.AsyncClient):
+                base = SPOT_BASE if product == ProductKind.SPOT else FUTURES_BASE
+                response = await self.client.request(
+                    method.upper(),
+                    f"{base}{path}",
+                    params=req_params,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return response.json()
             return await self.client.request(method, path, req_params, headers)
         except TimeoutError as exc:
             raise BinanceTimeoutError("BINANCE_TIMEOUT") from exc
+        except httpx.TimeoutException as exc:
+            raise BinanceTimeoutError("BINANCE_TIMEOUT") from exc
+        except BinanceTransportError:
+            raise
+        except Exception as exc:
+            raise BinanceTransportError(_redact_text(str(exc), self._secret_value())) from exc

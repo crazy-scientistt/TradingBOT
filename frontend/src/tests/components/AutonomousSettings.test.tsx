@@ -19,9 +19,16 @@ const spotOnlyProfile: AutonomousProfileView = {
 
 describe('AutonomousSettings', () => {
   it('shows USDT equivalents beneath percentage ceilings', async () => {
-    render(<AutonomousSettings />);
+    render(<AutonomousSettings equityUsdt="10000" />);
     expect(await screen.findByText('50.00 USDT maximum for one trade')).toBeInTheDocument();
     expect(screen.getByText('2,000.00 USDT maximum total exposure')).toBeInTheDocument();
+  });
+
+  it('does not invent equity when none is observed', async () => {
+    render(<AutonomousSettings />);
+    expect(
+      await screen.findAllByText('USDT equivalent unavailable until equity is observed'),
+    ).not.toHaveLength(0);
   });
 
   it('hides leverage when futures is disabled', async () => {

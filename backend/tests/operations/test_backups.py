@@ -17,7 +17,9 @@ def test_backup_and_restore_drill(tmp_path: Path) -> None:
     archive_file = tmp_path / "backup.bin"
     service = BackupService()
     manifest = service.create(db_file, archive_file, key="secret")
-    assert manifest.manifest_id == "bkp-1"
+    assert manifest.manifest_id.startswith("bkp-")
+    assert (tmp_path / "backup.bin.sha256").exists()
+    assert "secret" not in archive_file.read_bytes().decode("latin1")
 
     restore_target = tmp_path / "restored.db"
     success = service.restore(archive_file, restore_target, key="secret")
@@ -45,3 +47,12 @@ def test_restore_refuses_active_database(tmp_path: Path) -> None:
     with pytest.raises(RestoreTargetNotEmpty):
         service.restore(archive, active_target)
 
+
+def test_hash_mismatch_never_restores(tmp_path: Path) -> None:
+    archive = tmp_path / "archive.bin"
+    archive.write_bytes(b"VALID_DATABASE_CONTENT")
+    (tmp_path / "archive.bin.sha256").write_text("deadbeef", encoding="utf-8")
+
+    service = BackupService()
+    with pytest.raises(BackupIntegrityError, match="hash mismatch"):
+        service.restore(archive, tmp_path / "out.db")

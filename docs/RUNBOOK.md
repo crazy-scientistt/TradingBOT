@@ -50,16 +50,14 @@ python -c "from goldguard.storage.database import Database; from goldguard.stora
 
 ## 4. Disaster Recovery & Database Restoration
 
-The single source of truth is SQLite WAL-mode database at `data/goldguard.db`.
-- **Integrity Check**:
-  ```bash
-  python scripts/health_check.py --db data/goldguard.db --gateway-url http://localhost:10100
-  ```
-- **Live Backup**:
-  ```bash
-  sqlite3 data/goldguard.db ".backup 'data/backup_goldguard_$(date +%Y%m%d_%H%M%S).db'"
-  ```
+The writer replica stores SQLite/WAL on `/data`. Do not use ad-hoc sqlite
+`.backup` against a live writer without a maintenance window.
 
+- Hashed backup: `python scripts/backup_state.py --db /data/goldguard.db --out /data/backups/goldguard.backup`
+- Restore only into an empty target: `python scripts/restore_state.py --archive /data/backups/goldguard.backup --target /tmp/restore-check.db`
+- Full procedure: `docs/operations/backup-restore.md`
+- Topology: `docs/operations/railway-topology.md`
+- Operator leftovers: `docs/operations/operator-handoff.md`
 ## 5. Verified Market-Dataset Bootstrap
 
 Historical candles are downloaded from Binance's public market-data API. The

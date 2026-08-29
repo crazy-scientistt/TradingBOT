@@ -111,7 +111,6 @@ def parse_events(payload: object) -> list[CalendarEvent]:
 class EconomicCalendar:
     def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
         self._client = http_client
-        self._owned = http_client is None
         self.events: list[CalendarEvent] = []
         self.source = "unconfigured"
         self.updated_at: datetime | None = None
@@ -165,7 +164,11 @@ class EconomicCalendar:
         return rows
 
     async def refresh(self) -> None:
-        client = self._client or httpx.AsyncClient(timeout=15.0)
+        if self._client is None:
+            self.source = "unconfigured"
+            self.detail = "calendar client not bound"
+            return
+        client = self._client
         try:
             response = await client.get(FF_CALENDAR_URL)
             response.raise_for_status()
@@ -178,6 +181,4 @@ class EconomicCalendar:
             self.detail = f"calendar unavailable: {exc}"
             if not self.events:
                 self.source = "unavailable"
-        finally:
-            if self._owned and self._client is None:
-                await client.aclose()
+

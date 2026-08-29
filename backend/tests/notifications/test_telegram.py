@@ -56,3 +56,18 @@ def test_token_never_appears_in_repr() -> None:
     rendered = repr(service) + str(service)
     assert SECRET not in rendered
     assert "redacted" in repr(service)
+
+
+@pytest.mark.asyncio
+async def test_notification_never_contains_secret() -> None:
+    sent: list[str] = []
+
+    async def transport(text: str) -> bool:
+        sent.append(text)
+        return True
+
+    service = TelegramNotificationService(enabled=True, transport=transport)
+    leaked = f"token={SECRET} bearer abcdefghijklmnop"
+    await service.notify("fill", leaked)
+    assert sent
+    assert SECRET not in sent[0]

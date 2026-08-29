@@ -12,8 +12,7 @@ router = APIRouter(prefix="/api/qualification", tags=["qualification"])
 _qualification_service = SystemQualificationService()
 
 
-@router.get("/report")
-def get_qualification_report() -> dict[str, Any]:
+def _report_body() -> dict[str, Any]:
     now = datetime.now(UTC)
     report = _qualification_service.evaluate(now)
     return {
@@ -24,3 +23,12 @@ def get_qualification_report() -> dict[str, Any]:
         "report_hash": report.report_hash,
     }
 
+
+@router.get("/report")
+def get_qualification_report() -> dict[str, Any]:
+    return _report_body()
+
+
+@router.get("/latest")
+def get_qualification_latest() -> dict[str, Any]:
+    return _report_body()

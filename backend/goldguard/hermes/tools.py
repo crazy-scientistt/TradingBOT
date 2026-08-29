@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+
+MAX_PAYLOAD_BYTES = 16_384
 
 
 class SealedHoldoutAccessError(PermissionError):
@@ -36,6 +39,10 @@ class HermesToolRegistry:
     ) -> dict[str, Any]:
         if tool_name not in self.ALLOWED_TOOLS:
             raise ForbiddenHermesToolError(f"tool {tool_name} is forbidden or does not exist")
+
+        encoded = json.dumps(payload, default=str).encode("utf-8")
+        if len(encoded) > MAX_PAYLOAD_BYTES:
+            return {"available": False, "reason": "PAYLOAD_TOO_LARGE"}
 
         if tool_name == "get_evaluation" and payload.get("partition") == "holdout":
             raise SealedHoldoutAccessError("sealed holdout partition access is strictly forbidden")
@@ -73,10 +80,9 @@ class HermesToolRegistry:
                 "passed": False,
             }
         if tool_name == "submit_genome":
-            genome_data = payload.get("genome", {})
             return {
-                "available": True,
-                "genome_id": genome_data.get("genome_id", "gen-submitted"),
-                "status": "candidate",
+                "available": False,
+                "reason": "GENOME_SERVICE_NOT_BOUND",
+                "status": "rejected",
             }
         return {"available": False, "reason": "UNKNOWN_TOOL"}

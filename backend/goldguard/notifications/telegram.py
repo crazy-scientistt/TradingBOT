@@ -6,6 +6,8 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
+from goldguard.providers.redaction import redact_string
+
 CATEGORIES = (
     "emergency",
     "breaker",
@@ -79,15 +81,19 @@ class TelegramNotificationService:
         return await self.send_message(text)
 
     async def send_message(self, text: str) -> bool:
+        clean = redact_string(text)[:4096]
         if self._transport is not None:
-            return await self._transport(text)
+            try:
+                return await self._transport(clean)
+            except Exception:
+                return False
         if not self._bot_token or not self.chat_id:
             return False
         token = self._bot_token.get_secret_value()
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload: dict[str, Any] = {
             "chat_id": self.chat_id,
-            "text": text,
+            "text": clean,
             "parse_mode": "HTML",
         }
         try:
@@ -95,5 +101,4 @@ class TelegramNotificationService:
                 res = await client.post(url, json=payload)
                 return res.status_code == 200
         except Exception:
-            # Swallow delivery errors without chaining; token is never re-raised.
             return False

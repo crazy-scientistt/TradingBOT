@@ -104,6 +104,7 @@ from goldguard.web.routes.hermes_bridge import router as hermes_bridge_router
 from goldguard.web.routes.qualification import router as qualification_router
 from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.settings import router as settings_router
+from goldguard.web.routes.telegram import router as telegram_router
 
 logger = logging.getLogger("goldguard.web")
 
@@ -789,6 +790,7 @@ app.include_router(execution_router)
 app.include_router(qualification_router)
 app.include_router(health_router)
 app.include_router(hermes_bridge_router)
+app.include_router(telegram_router)
 
 app.add_middleware(
     CORSMiddleware,

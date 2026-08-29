@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from goldguard.release.models import SystemQualificationReport
+
+Probe = Callable[[], bool]
 
 
 class SystemQualificationService:
@@ -23,6 +26,9 @@ class SystemQualificationService:
         "ui_suite",
     )
 
+    def __init__(self, probes: dict[str, Probe] | None = None) -> None:
+        self._probes = dict(probes or {})
+
     def evaluate_with(
         self, now: datetime | None = None, overrides: dict[str, str] | None = None
     ) -> SystemQualificationReport:
@@ -31,7 +37,13 @@ class SystemQualificationService:
 
     def evaluate(self, now: datetime | None = None) -> SystemQualificationReport:
         # Fail closed: missing evidence is a failed gate, never an auto-pass.
-        return self._build(now=now, default_status="fail", overrides={})
+        overrides: dict[str, str] = {}
+        for name, probe in self._probes.items():
+            try:
+                overrides[name] = "pass" if probe() else "fail"
+            except Exception:
+                overrides[name] = "fail"
+        return self._build(now=now, default_status="fail", overrides=overrides)
 
     def _build(
         self,

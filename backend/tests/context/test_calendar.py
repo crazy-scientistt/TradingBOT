@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from goldguard.context.calendar import parse_events
 
 
@@ -50,3 +51,13 @@ def test_quiet_window_is_not_blackout() -> None:
     flagged, active = calendar.is_blackout(now)
     assert flagged is False
     assert active is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_without_client_does_not_fetch() -> None:
+    from goldguard.context.calendar import EconomicCalendar
+
+    calendar = EconomicCalendar()
+    await calendar.refresh()
+    assert calendar.source == "unconfigured"
+    assert calendar.events == []
