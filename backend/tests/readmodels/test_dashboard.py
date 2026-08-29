@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from goldguard.readmodels.dashboard import DashboardOrderView, DashboardPositionView
+from goldguard.readmodels.dashboard import (
+    DashboardOrderView,
+    DashboardPositionView,
+    DashboardReadModel,
+)
 
 
 def test_dashboard_read_models() -> None:
@@ -36,3 +40,13 @@ def test_dashboard_read_models() -> None:
     )
     assert pos.net_pnl_usdt == "24.50"
 
+
+def test_snapshot_is_paper_and_does_not_fabricate_trades() -> None:
+    snap = DashboardReadModel().snapshot()
+    assert snap["mode"] == "PAPER"
+    assert snap["equity"] == "0"
+    for section in ("orders", "positions", "holdings", "pnl"):
+        envelope = snap[section]
+        assert envelope["availability"] == "available"
+        assert envelope["data"] == []
+        assert envelope["stale"] is False

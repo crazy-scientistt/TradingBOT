@@ -20,3 +20,10 @@ def test_report_hash_is_stable() -> None:
     rep2 = service.evaluate(FIXED_NOW)
     assert rep1.report_hash == rep2.report_hash
 
+
+def test_evaluate_without_overrides_is_not_live_ready() -> None:
+    service = SystemQualificationService()
+    report = service.evaluate(FIXED_NOW)
+    assert report.ready_for_live_canary is False
+    assert "PAPER_EVIDENCE_NOT_READY" in report.blockers
+    assert report.gates["paper_evidence"] is False

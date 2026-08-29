@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from goldguard.domain.enums import ExecutionMode
+from goldguard.readmodels.dashboard import DashboardReadModel
 from goldguard.storage.execution_repository import ExecutionRepository
 from goldguard.web.schemas.dashboard import (
     AvailabilityEnvelope,
@@ -17,9 +18,31 @@ from goldguard.web.schemas.dashboard import (
 router = APIRouter(prefix="/api", tags=["execution_views"])
 
 
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _envelope(
+    data: Any,
+    *,
+    source: str,
+    detail: str | None,
+    stale: bool = False,
+    availability: str = "available",
+) -> dict[str, Any]:
+    return {
+        "availability": availability,
+        "source": source,
+        "observed_at": _now(),
+        "stale": stale,
+        "detail": detail,
+        "data": data,
+    }
+
+
 @router.get("/orders", response_model=AvailabilityEnvelope[list[OrderItemSchema]])
 def get_orders() -> dict[str, Any]:
-    now = datetime.now(UTC).isoformat()
+    now = _now()
     from goldguard.web import app as app_module
 
     orders: list[dict[str, Any]] = []
@@ -58,7 +81,7 @@ def get_orders() -> dict[str, Any]:
 
 @router.get("/positions", response_model=AvailabilityEnvelope[list[PositionItemSchema]])
 def get_positions() -> dict[str, Any]:
-    now = datetime.now(UTC).isoformat()
+    now = _now()
     from goldguard.web import app as app_module
 
     positions: list[dict[str, Any]] = []
@@ -102,3 +125,36 @@ def get_positions() -> dict[str, Any]:
         "data": positions,
     }
 
+
+@router.get("/holdings")
+def get_holdings() -> dict[str, Any]:
+    from goldguard.web import app as app_module
+
+    snap = DashboardReadModel(database=app_module._db).snapshot()
+    return snap["holdings"]
+
+
+@router.get("/pnl")
+def get_pnl() -> dict[str, Any]:
+    from goldguard.web import app as app_module
+
+    snap = DashboardReadModel(database=app_module._db).snapshot()
+    return snap["pnl"]
+
+
+@router.get("/diagnostics")
+def get_diagnostics() -> dict[str, Any]:
+    from goldguard.web import app as app_module
+
+    blockers: list[str] = []
+    if app_module._db is None:
+        blockers.append("DATABASE_UNINITIALIZED")
+    data = {"blockers": blockers, "checks": []}
+    return _envelope(
+        data,
+        source="runtime",
+        detail=None if not blockers else "startup dependencies not ready",
+    )
+
+
+# /api/trades and /api/dashboard are owned by app.py — do not duplicate those paths.

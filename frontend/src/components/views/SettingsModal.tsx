@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings, ShieldCheck, X } from 'lucide-react';
 import { api, EffectiveSettings } from '../../api/client';
 import { useBot } from '../../context/BotContext';
+import { AutonomousSettings } from '../settings/AutonomousSettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -136,6 +137,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           {loading && <div role="status" style={{ color: '#9498a4', fontSize: '12px' }}>Loading…</div>}
           {error && <div role="alert" style={{ color: '#fca5a5', fontSize: '12px' }}>{error}</div>}
           {saved && <div role="status" style={{ color: '#10b981', fontSize: '12px' }}>{saved}</div>}
+
+          <AutonomousSettings
+            equityUsdt={balance || '10000'}
+            initialProfile={{
+              execution_mode: isPaperMode ? 'paper' : 'live',
+              spot_enabled: true,
+              futures_enabled: false,
+              risk: {
+                max_capital_per_trade_rate: String(Number(riskPercent) / 100 || 0.005),
+                max_futures_leverage: 5,
+                max_total_exposure_rate: '0.20',
+                rolling_24h_loss_limit_rate: '0.05',
+              },
+            }}
+          />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

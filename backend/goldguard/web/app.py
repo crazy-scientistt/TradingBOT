@@ -99,6 +99,8 @@ from goldguard.web.auth_dependencies import configure_auth_service
 from goldguard.web.routes.auth import router as auth_router
 from goldguard.web.routes.control import router as control_router
 from goldguard.web.routes.execution import router as execution_router
+from goldguard.web.routes.health import router as health_router
+from goldguard.web.routes.hermes_bridge import router as hermes_bridge_router
 from goldguard.web.routes.qualification import router as qualification_router
 from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.settings import router as settings_router
@@ -785,6 +787,8 @@ app.include_router(control_router)
 app.include_router(research_router)
 app.include_router(execution_router)
 app.include_router(qualification_router)
+app.include_router(health_router)
+app.include_router(hermes_bridge_router)
 
 app.add_middleware(
     CORSMiddleware,

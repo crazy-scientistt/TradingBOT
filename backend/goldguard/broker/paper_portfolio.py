@@ -11,6 +11,7 @@ from goldguard.execution.models import (
     ExecutionResult,
     OrderIntent,
     OrderRecord,
+    PositionRecord,
     ProtectionPlan,
 )
 
@@ -94,6 +95,9 @@ class PaperPortfolioBroker:
 
     def protection_active(self, position_id: str) -> bool:
         return position_id in self._protections
+
+    def open_positions(self) -> tuple[PositionRecord, ...]:
+        return (*self._spot.open_positions(), *self._futures.open_positions())
 
     async def process_price(
         self,

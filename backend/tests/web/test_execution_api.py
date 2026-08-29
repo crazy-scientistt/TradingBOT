@@ -36,6 +36,18 @@ def test_empty_orders_are_truthful_empty_not_seeded(client: TestClient) -> None:
     assert body["data"] == []
 
 
+def test_empty_holdings_and_pnl_are_available_empty_not_seeded(client: TestClient) -> None:
+    holdings = client.get("/api/holdings").json()
+    assert holdings["availability"] == "available"
+    assert holdings["data"] == []
+    pnl = client.get("/api/pnl").json()
+    assert pnl["availability"] == "available"
+    assert pnl["data"] == []
+    diagnostics = client.get("/api/diagnostics").json()
+    assert diagnostics["availability"] == "available"
+    assert "blockers" in diagnostics["data"]
+
+
 def test_position_net_pnl_reconciles_costs(client: TestClient, tmp_path: Path) -> None:
     from goldguard.web import app as app_module
 

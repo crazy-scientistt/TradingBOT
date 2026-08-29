@@ -1,92 +1,53 @@
-++ new file
- # TradingBOT Autonomous — Progress Report
- 
- > Generated: 2026-08-29
- > Repo: https://github.com/crazy-scientistt/TradingBOT
- > Branch: main (35 local commits ahead of origin)
- > Test suite: 451 tests, 449 pass, 2 were failing (now fixed), 1 skipped (test_release_audit — missing module)
- 
- ---
- 
- ## Key Files
- 
- | File | Purpose |
- |------|---------|
- | [Design spec](docs/superpowers/specs/2026-08-28-autonomous-hermes-trading-platform-design.md) | Full system design — autonomous trading, Hermes, settings, risk, Binance |
- | [Master plan](docs/superpowers/plans/2026-08-28-autonomous-hermes-platform-master.md) | 8-phase delivery plan with 47 tasks |
- | [Phase 1 plan](docs/superpowers/plans/2026-08-28-01-control-plane-security.md) | Control plane, profile, auth/TOTP, settings |
- | [Phase 2 plan](docs/superpowers/plans/2026-08-28-02-paper-execution-risk.md) | Paper execution, brokers, risk, coordinator, runtime |
- | [Phase 3 plan](docs/superpowers/plans/2026-08-28-03-research-evidence.md) | Research & evidence layer |
- | [Phase 4 plan](docs/superpowers/plans/2026-08-28-04-hermes-learning.md) | Hermes self-learning agent |
- | [Phase 5 plan](docs/superpowers/plans/2026-08-28-05-live-binance-execution.md) | Live Binance execution |
- | [Phase 6 plan](docs/superpowers/plans/2026-08-28-06-dashboard-telegram.md) | Dashboard & Telegram notifications |
- | [Phase 7 plan](docs/superpowers/plans/2026-08-28-07-qualification-reliability.md) | Qualification & reliability testing |
- | [Phase 8 plan](docs/superpowers/plans/2026-08-28-08-railway-release.md) | Railway deployment release |
- 
- ---
- 
- ## Phase Status
- 
- | Phase | Name | Tasks | Status | Verified |
- |-------|------|-------|--------|----------|
- | 1 | Control Plane & Security | 7 (Tasks 0–6) | Code exists, Task 0 verified green | Partially — fail-closed live control committed and tested |
- | 2 | Paper Execution & Risk | 6 (Tasks 1–6) | Core brokers, coordinator, risk engine exist | Tasks 1-5 verified (tests pass), Task 6 runtime supervisor partially wired |
- | 3 | Research & Evidence | 5 (Tasks 1–5) | Code scaffolded from earlier commits | NOT independently re-verified |
- | 4 | Hermes Learning | 6 (Tasks 1–6) | Code scaffolded from earlier commits | NOT independently re-verified |
- | 5 | Live Binance Execution | 6 (Tasks 1–6) | Code scaffolded from earlier commits | NOT independently re-verified |
- | 6 | Dashboard & Telegram | 6 (Tasks 1–6) | Code scaffolded from earlier commits | NOT independently re-verified |
- | 7 | Qualification & Reliability | 6 (Tasks 1–6) | Code scaffolded from earlier commits | NOT independently re-verified |
- | 8 | Railway Release | 5 (Tasks 1–5) | Code scaffolded from earlier commits | NOT independently re-verified |
- 
- ---
- 
- ## What Has Been Verified End-to-End (green tests, type-checked, lint-clean)
- 
- 1. **Paper Spot Broker** — cash-only buy/sell lifecycle, insufficient balance rejection, missing-price rejection
- 2. **Paper Futures Broker** — isolated margin, leverage, funding, one-way mode rejection, close lifecycle
- 3. **Paper Portfolio Broker** — delegates by product, combined snapshot, TP/SL protection lifecycle
- 4. **Execution Models** — product validation rules (spot no leverage, futures isolated-only, no shorts on spot)
- 5. **Execution Repository** — idempotent intent creation, order/position persistence, FK integrity
- 6. **Execution Coordinator** — deterministic client IDs, protection-required gate, concurrent dedup, pause/resume
- 7. **Symbol Catalog** — fail-closed (no silent defaults), exchange info parsing, inactive symbol rejection
- 8. **Market Supervisor** — stale-feed detection, scope validation, product-specific polling, supervised shutdown
- 9. **Binance Client** — spot + futures separate endpoints, kline parsing, filter extraction, quote typing
- 10. **Risk Engine** — 19 gate checks (drawdown, loss streak, position limit, etc.), ATR sizing, quantity rounding
- 11. **Cost Estimator** — round-trip fee/spread/slippage/funding calculation, net-edge check
- 12. **Portfolio Risk** — capital ceiling enforcement, daily loss limit, exposure limit, leverage clamping
- 13. **Circuit Breaker** — rolling loss measurement, trip threshold
- 14. **Emergency Service** — closes all owned positions across spot + futures
- 15. **Runtime Supervisor** — scope enable/disable, protection tracking, entry gating
- 
- ## What Exists But Needs Independent Re-Verification
- 
- Phases 3–8 code was committed by earlier agents. Tests exist and most pass, but the implementation quality and completeness has NOT been audited by the current work session. These phases cover:
- 
- - Evidence ingestion, scoring, prompt injection defense
- - Hermes agent integration, learning memory, proposals, tools
- - Live Binance transport, arming, reconciliation, protection
- - Dashboard read-models, Telegram bridge
- - Qualification report, backup/restore service
- - Railway Docker/Compose configuration
- 
- ## Remaining Work
- 
- - **Phase 2 Task 6**: Full runtime supervisor integration (entry loop, protection loop, breaker loop, freshness loop as background tasks)
- - **Phases 3–8**: Each phase needs honest re-audit, test verification, and gap-fill before deployment
- - **Frontend**: React dashboard exists but has 3 failing jsdom tests (chart library, route matrix, strategy studio)
- - **Deployment**: Railway removed; re-deploy only after all phases pass qualification
- - **Telegram bot**: User needs to create bot and provide bot ID/chat ID
- - **Binance API keys**: User needs to provide for live trading (paper mode works without keys)
- 
- ## Git Log (recent commits)
- 
- ```
- 231886c feat: supervise validated spot and futures markets
- 276f4cd fix: make paper execution fail closed
- 9583b9e security: make live control plane fail closed
- a051f4f fix: restore autonomous baseline verification
- c05285a feat: add automated end-to-end live diagnostic runner
- ...
- (35 total local commits ahead of origin/main)
- ```
- 
+# TradingBOT Autonomous — Progress Report
+
+> Generated: 2026-08-29
+> Repo: https://github.com/crazy-scientistt/TradingBOT
+> Honest status: Paper-first platform is wired and fail-closed. Live is **not** armed.
+> Profitability is **not** claimed.
+> Preview cockpit: GoldGuard paper desk is running in the Grok live preview.
+
+---
+
+## Completed in this session (must-fix gaps)
+
+1. **RuntimeSupervisor background loops** — `_entry_loop`, `_protection_loop`, `_breaker_loop`, `_freshness_loop` start in `start()`, cancel in `stop()`, handle `CancelledError`. Entry loop never invents orders. Breaker uses `rolling_24h_loss_limit` or `Decimal("500")`. Stale market disables new entries. Daily trade HOLD remains at 1000.
+2. **Health live/ready** — `GET /api/health/live` always 200 `{"status":"alive"}`. `GET /api/health/ready` is 200 when `_db` is initialised, else 503 `DATABASE_UNINITIALIZED`. Existing `/api/health` kept.
+3. **Dashboard read-models** — `DashboardReadModel.snapshot()` returns PAPER mode, equity, and availability envelopes. Empty lists are available+empty, never seeded. `GET /api/holdings`, `/api/pnl`, `/api/diagnostics` added. `/api/trades` and `/api/dashboard` remain on `app.py` to avoid duplicate paths.
+4. **Hermes bridge router** included in `app.py`.
+5. **Qualification fail-closed** — `evaluate_with()` still defaults unspecified gates to pass. `evaluate()` defaults unspecified gates to fail (`PAPER_EVIDENCE_NOT_READY`, …) so `ready_for_live_canary` is False. Hash remains stable for the same `now`.
+6. **Telegram categories** — emergency, breaker, protection, live_arm, fill, daily_summary, research. Critical categories cannot be muted while Telegram is enabled. Token never appears in `repr`.
+7. **Railway manifests** — `railway.app.toml` healthchecks `/api/health/live`; `hermes/railway.toml` private; topology doc names volumes `/data`, `/app/.opencodex`, `/opt/data` and one writer replica. Root `railway.toml` healthcheck updated.
+8. **Fault injection tests** — timeout-after-accept does not duplicate submit; gateway outage HOLD still allows pause/stop. No network, no sleep.
+9. **Frontend** — `LoginPanel` (password + TOTP, no session secret stored) and `AutonomousSettings` (USDT equivalents, hide leverage when futures disabled) with focused tests.
+10. **This progress file** updated honestly.
+
+---
+
+## Phase status (unchanged honesty)
+
+| Phase | Name | Status |
+|-------|------|--------|
+| 1 | Control Plane & Security | Code exists, fail-closed live control tested |
+| 2 | Paper Execution & Risk | Brokers, coordinator, risk, supervisor loops now wired |
+| 3–5 | Research / Hermes / Live Binance | Scaffolded; Live remains disarmed |
+| 6 | Dashboard & Telegram | Read-models and Telegram preferences expanded; bot not configured |
+| 7 | Qualification & Reliability | Fail-closed qualification; fault tests added; not certified for live |
+| 8 | Railway Release | Manifests and topology written; **not deployed** |
+
+---
+
+## Remaining non-blocking items (operator-owned)
+
+- User must supply **Binance API keys** before any live arming path can be used.
+- User must create a **Telegram bot** and provide bot token + chat ID.
+- User must **deploy to Railway** (private OpenCodex :10100, private Hermes :8642, public GoldGuard, volumes, secrets). This session does not push or deploy.
+- Qualification `evaluate()` is fail-closed until real paper evidence, backups, UI suite, and operator-run diagnostics exist.
+- Frontend chart tests may still fail under jsdom/lightweight-charts — that is a test-environment issue, not a trading bug.
+- Paper mode can run without Binance keys; it will not invent fills.
+
+## What this is not
+
+- Live is **not** armed.
+- The system is **not** profitable-by-default and does not promise edge.
+- Railway is **not** live in production from this work.
+- Empty orders/positions/holdings/pnl remain empty until the paper runtime actually trades.

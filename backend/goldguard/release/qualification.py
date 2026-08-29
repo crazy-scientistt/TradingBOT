@@ -26,13 +26,25 @@ class SystemQualificationService:
     def evaluate_with(
         self, now: datetime | None = None, overrides: dict[str, str] | None = None
     ) -> SystemQualificationReport:
+        # Unspecified gates default to pass — existing override tests rely on this.
+        return self._build(now=now, default_status="pass", overrides=overrides or {})
+
+    def evaluate(self, now: datetime | None = None) -> SystemQualificationReport:
+        # Fail closed: missing evidence is a failed gate, never an auto-pass.
+        return self._build(now=now, default_status="fail", overrides={})
+
+    def _build(
+        self,
+        now: datetime | None,
+        default_status: str,
+        overrides: dict[str, str],
+    ) -> SystemQualificationReport:
         eval_time = (now or datetime.now(UTC)).isoformat()
-        ovr = overrides or {}
         gates: dict[str, bool] = {}
         blockers: list[str] = []
 
         for gate in self.ALL_GATES:
-            status = ovr.get(gate, "pass")
+            status = overrides.get(gate, default_status)
             if status == "fail":
                 gates[gate] = False
                 blockers.append(f"{gate.upper()}_NOT_READY")
@@ -53,7 +65,3 @@ class SystemQualificationService:
             blockers=tuple(blockers),
             report_hash=report_hash,
         )
-
-    def evaluate(self, now: datetime | None = None) -> SystemQualificationReport:
-        return self.evaluate_with(now=now, overrides=None)
-
