@@ -98,6 +98,7 @@ from goldguard.strategy.runtime import GenomeRuntime
 from goldguard.web.auth_dependencies import configure_auth_service
 from goldguard.web.routes.auth import router as auth_router
 from goldguard.web.routes.control import router as control_router
+from goldguard.web.routes.research import router as research_router
 from goldguard.web.routes.settings import router as settings_router
 
 logger = logging.getLogger("goldguard.web")
@@ -762,6 +763,7 @@ app = FastAPI(
 app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(control_router)
+app.include_router(research_router)
 
 app.add_middleware(
     CORSMiddleware,
