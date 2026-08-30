@@ -8,6 +8,71 @@ interface ConditionBuilderProps {
   disabled?: boolean;
 }
 
+const isSpec = (value: unknown): value is IndicatorSpec =>
+  typeof value === 'object' && value !== null && 'indicator' in value;
+
+const INDICATORS: Array<IndicatorSpec['indicator']> = [
+  'rsi',
+  'ema',
+  'ema_slope',
+  'volume_ratio',
+  'atr_ratio',
+];
+
+const OperandField: React.FC<{
+  value: Condition['left'] | Condition['right'];
+  disabled?: boolean;
+  onChange: (next: IndicatorSpec | string) => void;
+}> = ({ value, disabled, onChange }) => {
+  if (isSpec(value)) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+        <select
+          disabled={disabled}
+          value={value.indicator}
+          onChange={(e) =>
+            onChange({ ...value, indicator: e.target.value as IndicatorSpec['indicator'] })
+          }
+          style={selectStyle}
+        >
+          {INDICATORS.map((name) => (
+            <option key={name} value={name}>
+              {name.replace('_', ' ').toUpperCase()}
+            </option>
+          ))}
+        </select>
+        <select
+          disabled={disabled}
+          value={value.timeframe}
+          onChange={(e) =>
+            onChange({ ...value, timeframe: e.target.value as IndicatorSpec['timeframe'] })
+          }
+          style={{ ...selectStyle, color: '#9498a4' }}
+        >
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+        </select>
+        <input
+          disabled={disabled}
+          type="number"
+          value={value.period}
+          onChange={(e) => onChange({ ...value, period: parseInt(e.target.value, 10) || 1 })}
+          style={periodStyle}
+        />
+      </div>
+    );
+  }
+  return (
+    <input
+      disabled={disabled}
+      type="text"
+      value={String(value ?? '')}
+      onChange={(e) => onChange(e.target.value)}
+      style={numberStyle}
+    />
+  );
+};
+
 export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   conditions,
   onChange,
@@ -20,8 +85,7 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   };
 
   const handleRemove = (index: number) => {
-    const next = conditions.filter((_, i) => i !== index);
-    onChange(next);
+    onChange(conditions.filter((_, i) => i !== index));
   };
 
   const handleAdd = () => {
@@ -36,15 +100,14 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
   };
 
   const isOutOfBounds = (cond: Condition): string | null => {
+    if (isSpec(cond.right)) return null;
     const val = parseFloat(String(cond.right));
-    if (isNaN(val)) return 'Invalid number';
-    if (typeof cond.left === 'object') {
-      if (cond.left.indicator === 'rsi' && (val < 20 || val > 90)) {
-        return 'RSI outside [20, 90] bounds';
-      }
-      if (cond.left.indicator === 'volume_ratio' && (val < 0 || val > 5)) {
-        return 'Volume ratio outside [0, 5] bounds';
-      }
+    if (isNaN(val)) return 'Enter a number, or compare two indicators';
+    if (isSpec(cond.left) && cond.left.indicator === 'rsi' && (val < 20 || val > 90)) {
+      return 'RSI outside [20, 90] bounds';
+    }
+    if (isSpec(cond.left) && cond.left.indicator === 'volume_ratio' && (val < 0 || val > 5)) {
+      return 'Volume ratio outside [0, 5] bounds';
     }
     return null;
   };
@@ -53,9 +116,6 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
       {conditions.map((cond, idx) => {
         const warning = isOutOfBounds(cond);
-        const isIndicator = typeof cond.left === 'object';
-        const indicator = isIndicator ? (cond.left as IndicatorSpec) : null;
-
         return (
           <div
             key={idx}
@@ -70,136 +130,32 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-              {/* Left operand */}
-              {isIndicator && indicator ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <select
-                    disabled={disabled}
-                    value={indicator.indicator}
-                    onChange={(e) =>
-                      handleUpdate(idx, {
-                        ...cond,
-                        left: { ...indicator, indicator: e.target.value as any },
-                      })
-                    }
-                    style={{
-                      backgroundColor: '#121418',
-                      color: 'var(--gold-primary)',
-                      border: '1px solid #2d3139',
-                      borderRadius: '4px',
-                      padding: '4px 6px',
-                      fontSize: '12px',
-                    }}
-                  >
-                    <option value="rsi">RSI</option>
-                    <option value="volume_ratio">Volume Ratio</option>
-                    <option value="ema_slope">EMA Slope</option>
-                    <option value="atr_ratio">ATR Ratio</option>
-                  </select>
-
-                  <select
-                    disabled={disabled}
-                    value={indicator.timeframe}
-                    onChange={(e) =>
-                      handleUpdate(idx, {
-                        ...cond,
-                        left: { ...indicator, timeframe: e.target.value as any },
-                      })
-                    }
-                    style={{
-                      backgroundColor: '#121418',
-                      color: '#9498a4',
-                      border: '1px solid #2d3139',
-                      borderRadius: '4px',
-                      padding: '4px 6px',
-                      fontSize: '12px',
-                    }}
-                  >
-                    <option value="15m">15m</option>
-                    <option value="1h">1h</option>
-                  </select>
-
-                  <input
-                    disabled={disabled}
-                    type="number"
-                    value={indicator.period}
-                    onChange={(e) =>
-                      handleUpdate(idx, {
-                        ...cond,
-                        left: { ...indicator, period: parseInt(e.target.value) || 14 },
-                      })
-                    }
-                    style={{
-                      width: '45px',
-                      backgroundColor: '#121418',
-                      color: '#e2e4e8',
-                      border: '1px solid #2d3139',
-                      borderRadius: '4px',
-                      padding: '4px',
-                      fontSize: '12px',
-                      textAlign: 'center',
-                    }}
-                  />
-                </div>
-              ) : (
-                <span
-                  style={{
-                    color: 'var(--gold-primary)',
-                    fontSize: '12px',
-                    fontFamily: 'monospace',
-                    padding: '4px 6px',
-                    backgroundColor: '#121418',
-                    borderRadius: '4px',
-                  }}
-                >
-                  {String(cond.left)}
-                </span>
-              )}
-
-              {/* Operator */}
+              <OperandField
+                value={cond.left}
+                disabled={disabled}
+                onChange={(left) => handleUpdate(idx, { ...cond, left })}
+              />
               <select
                 disabled={disabled}
                 value={cond.op}
-                onChange={(e) => handleUpdate(idx, { ...cond, op: e.target.value as any })}
-                style={{
-                  backgroundColor: '#121418',
-                  color: '#60a5fa',
-                  border: '1px solid #2d3139',
-                  borderRadius: '4px',
-                  padding: '4px 8px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                }}
+                onChange={(e) =>
+                  handleUpdate(idx, { ...cond, op: e.target.value as Condition['op'] })
+                }
+                style={{ ...selectStyle, color: '#60a5fa', fontWeight: 600 }}
               >
-                <option value=">">&gt;</option>
-                <option value="<">&lt;</option>
-                <option value=">=">&gt;=</option>
-                <option value="<=">&lt;=</option>
+                <option value=">">{'>'}</option>
+                <option value="<">{'<'}</option>
+                <option value=">=">{'>='}</option>
+                <option value="<=">{'<='}</option>
                 <option value="==">==</option>
                 <option value="crosses_above">crosses above</option>
                 <option value="crosses_below">crosses below</option>
               </select>
-
-              {/* Right operand */}
-              <input
+              <OperandField
+                value={cond.right}
                 disabled={disabled}
-                type="text"
-                value={String(cond.right)}
-                onChange={(e) => handleUpdate(idx, { ...cond, right: e.target.value })}
-                style={{
-                  width: '70px',
-                  backgroundColor: '#121418',
-                  color: '#10b981',
-                  border: '1px solid #2d3139',
-                  borderRadius: '4px',
-                  padding: '4px 6px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  fontFamily: 'monospace',
-                  textAlign: 'center',
-                }}
+                onChange={(right) => handleUpdate(idx, { ...cond, right })}
               />
-
               {!disabled && (
                 <button
                   type="button"
@@ -218,7 +174,6 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
                 </button>
               )}
             </div>
-
             {warning && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#ef4444', fontSize: '11px' }}>
                 <AlertTriangle size={12} />
@@ -228,7 +183,6 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           </div>
         );
       })}
-
       {!disabled && (
         <button
           type="button"
@@ -250,4 +204,37 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
       )}
     </div>
   );
+};
+
+const selectStyle: React.CSSProperties = {
+  backgroundColor: '#121418',
+  color: 'var(--gold-primary)',
+  border: '1px solid #2d3139',
+  borderRadius: '4px',
+  padding: '4px 6px',
+  fontSize: '12px',
+};
+
+const periodStyle: React.CSSProperties = {
+  width: '45px',
+  backgroundColor: '#121418',
+  color: '#e2e4e8',
+  border: '1px solid #2d3139',
+  borderRadius: '4px',
+  padding: '4px',
+  fontSize: '12px',
+  textAlign: 'center',
+};
+
+const numberStyle: React.CSSProperties = {
+  width: '70px',
+  backgroundColor: '#121418',
+  color: '#10b981',
+  border: '1px solid #2d3139',
+  borderRadius: '4px',
+  padding: '4px 6px',
+  fontSize: '12px',
+  fontWeight: 600,
+  fontFamily: 'monospace',
+  textAlign: 'center',
 };

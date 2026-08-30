@@ -97,7 +97,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
               Hermes Autonomous Research Laboratory
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Self-directed hypothesis testing, bounded mutations &amp; memory bank reflections
+              Hermes researches on its own after paper start (quota 8/day). This button only forces one extra cycle.
               {lastStep ? ` · last step: ${lastStep}` : ' · also runs in the background, 8/day'}
             </span>
           </div>
@@ -123,7 +123,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
           }}
         >
           <Sparkles size={14} fill="#000" />
-          {isRunning ? 'Hermes Reasoning...' : 'Trigger Hermes Step'}
+          {isRunning ? 'Hermes Reasoning...' : 'Run research now'}
         </button>
       </div>
 

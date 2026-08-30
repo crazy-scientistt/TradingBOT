@@ -368,7 +368,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   const last = hover || rows[rows.length - 1];
   const lastClose = liveQuote ? (liveQuote.bid + liveQuote.ask) / 2 : last?.close;
   const bull = last != null && last.close >= last.open;
-  const chartHeight = fullscreen ? 'calc(100vh - 96px)' : '460px';
+  const chartHeight = fullscreen ? 'calc(100vh - 96px)' : '320px';
 
   return (
     <div

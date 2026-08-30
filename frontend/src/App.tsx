@@ -168,9 +168,12 @@ const MainDashboard: React.FC = () => {
   const handleSelectTab = (tab: string) => {
     if (tab === 'Settings') {
       setIsSettingsOpen(true);
-    } else {
-      setActiveTab(tab);
+      return;
     }
+    setActiveTab(tab);
+    requestAnimationFrame(() => {
+      document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' });
+    });
   };
 
   return (
@@ -179,7 +182,7 @@ const MainDashboard: React.FC = () => {
       <Sidebar activeTab={activeTab} onSelectTab={handleSelectTab} />
 
       {/* Main Content Area */}
-      <div className="gg-main" style={{ backgroundColor: 'var(--bg-app)', minHeight: '100vh' }}>
+      <div className="gg-main" style={{ backgroundColor: 'var(--bg-app)' }}>
         {/* Top Header */}
         <TopHeader onOpenSettings={() => setIsSettingsOpen(true)} />
         <ConnectionBanner />
@@ -194,6 +197,7 @@ const MainDashboard: React.FC = () => {
             flexDirection: 'column',
             gap: '10px',
             overflowY: 'auto',
+            minHeight: 0,
           }}
         >
           {(activeTab === 'Home' || activeTab === 'Overview') && (
@@ -219,8 +223,8 @@ const MainDashboard: React.FC = () => {
               {/* Row 3: Bottom Section - Equity Curve (Left) + Live Context (Middle) + Risk & Health (Right) */}
               <div className="gg-row">
                 <EquityCurveCard data={equityHistory} />
-                <LiveContextCard items={liveContext} onViewAll={() => setActiveTab('News')} />
-                <RiskHealthCard items={riskHealth} onViewAll={() => setActiveTab('Cockpit')} />
+                <LiveContextCard items={liveContext} onViewAll={() => handleSelectTab('News')} />
+                <RiskHealthCard items={riskHealth} onViewAll={() => handleSelectTab('Qualify')} />
               </div>
             </>
           )}
@@ -230,7 +234,7 @@ const MainDashboard: React.FC = () => {
           {(activeTab === 'Learning' || activeTab === 'Hermes') && <ResearchLab />}
           {activeTab === 'Providers' && <RouteMatrix />}
           {activeTab === 'Cockpit' && (botState ? <EmergencyCockpit /> : <DataNotice title="Runtime status unavailable" detail="Emergency controls are unavailable until the server reports runtime state." />)}
-          {activeTab === 'Market' && (quote && candles.length > 0 ? <MarketView /> : <DataNotice title="Market data unavailable" detail="This view does not fabricate quotes or candles while the feed is disconnected." />)}
+          {activeTab === 'Market' && <MarketView />}
           {(activeTab === 'News' || activeTab === 'Context') && <ContextView />}
           {activeTab === 'Decisions' && <DecisionsView />}
           {activeTab === 'Trades' && <TradesView />}

@@ -120,7 +120,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
               Strategy Studio &amp; Genome Lab
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Deterministic Strategy DSL, Parameter Bounds &amp; Multi-Gate Promotion
+              Edit the live genome Hermes mutates. Compare indicators, backtest, then promote a candidate.
             </span>
           </div>
         </div>

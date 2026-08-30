@@ -12,7 +12,7 @@ export type GenomeStage =
   | 'archived';
 
 export interface IndicatorSpec {
-  indicator: 'rsi' | 'ema_slope' | 'volume_ratio' | 'atr_ratio';
+  indicator: 'rsi' | 'ema' | 'ema_slope' | 'volume_ratio' | 'atr_ratio';
   timeframe: '15m' | '1h';
   period: number;
 }
@@ -20,7 +20,7 @@ export interface IndicatorSpec {
 export interface Condition {
   left: IndicatorSpec | string;
   op: '>' | '<' | '>=' | '<=' | '==' | 'crosses_above' | 'crosses_below';
-  right: number | string;
+  right: IndicatorSpec | number | string;
 }
 
 export interface GuardBounds {

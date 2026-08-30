@@ -1,13 +1,38 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { EquityDataPoint } from '../../types/dashboard';
 
 interface EquityCurveCardProps {
   data: EquityDataPoint[];
 }
 
+const RANGE_DAYS: Record<string, number | null> = {
+  '7D': 7,
+  '30D': 30,
+  '90D': 90,
+  ALL: null,
+};
+
+function stamp(point: EquityDataPoint): number {
+  const parsed = Date.parse(point.date);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatTick(iso: string): string {
+  const parsed = Date.parse(iso);
+  if (!Number.isFinite(parsed)) return iso.slice(0, 10);
+  return new Date(parsed).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
 export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
   const [activeRange, setActiveRange] = useState('30D');
   const ranges = ['7D', '30D', '90D', 'ALL'];
+
+  const series = useMemo(() => {
+    const days = RANGE_DAYS[activeRange];
+    if (days == null) return data;
+    const cutoff = Date.now() - days * 86400000;
+    return data.filter((point) => stamp(point) >= cutoff);
+  }, [activeRange, data]);
 
   const width = 380;
   const height = 135;
@@ -16,46 +41,44 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
   const chartHeight = height - bottomAxisHeight;
   const chartWidth = width - rightAxisWidth;
 
-  const yMin = 88;
-  const yMax = 112;
-  const yLevels = [110, 105, 100, 95, 90];
+  const values = series.map((point) => point.value).filter((value) => Number.isFinite(value));
+  const yMinRaw = values.length ? Math.min(...values) : 0;
+  const yMaxRaw = values.length ? Math.max(...values) : 1;
+  const pad = Math.max((yMaxRaw - yMinRaw) * 0.08, 0.5);
+  const yMin = yMinRaw - pad;
+  const yMax = yMaxRaw + pad;
+  const yLevels = [yMax, (yMin + yMax) / 2, yMin];
 
   const getX = (index: number) => {
-    return 12 + (index / (data.length - 1)) * (chartWidth - 24);
+    if (series.length <= 1) return 12;
+    return 12 + (index / (series.length - 1)) * (chartWidth - 24);
   };
+  const getY = (val: number) =>
+    chartHeight - ((val - yMin) / (yMax - yMin || 1)) * (chartHeight - 12) - 4;
 
-  const getY = (val: number) => {
-    return chartHeight - ((val - yMin) / (yMax - yMin)) * (chartHeight - 12) - 4;
-  };
-
-  // Build path with smooth bezier curves
-  const linePath = data.reduce((acc, pt, idx, arr) => {
+  const linePath = series.reduce((acc, pt, idx, arr) => {
     const x = getX(idx);
     const y = getY(pt.value);
     if (idx === 0) return `M ${x} ${y}`;
-    
     const prevX = getX(idx - 1);
     const prevY = getY(arr[idx - 1].value);
     const cp1x = prevX + (x - prevX) / 2;
-    const cp1y = prevY;
-    const cp2x = prevX + (x - prevX) / 2;
-    const cp2y = y;
-    return `${acc} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x} ${y}`;
+    return `${acc} C ${cp1x} ${prevY}, ${cp1x} ${y}, ${x} ${y}`;
   }, '');
 
-  const baseline100Y = getY(100);
-
-  const dateLabels = [
-    { label: 'Apr 21', idx: 0 },
-    { label: 'Apr 28', idx: 2 },
-    { label: 'May 5', idx: 4 },
-    { label: 'May 12', idx: 7 },
-    { label: 'May 19', idx: 10 }
-  ];
+  const dateLabels =
+    series.length === 0
+      ? []
+      : series.length === 1
+        ? [{ label: formatTick(series[0].date), idx: 0 }]
+        : [
+            { label: formatTick(series[0].date), idx: 0 },
+            { label: formatTick(series[Math.floor(series.length / 2)].date), idx: Math.floor(series.length / 2) },
+            { label: formatTick(series[series.length - 1].date), idx: series.length - 1 },
+          ];
 
   return (
     <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
         <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           EQUITY CURVE (PAPER)
@@ -66,6 +89,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
             return (
               <button
                 key={r}
+                type="button"
                 onClick={() => setActiveRange(r)}
                 style={{
                   background: 'transparent',
@@ -75,7 +99,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
                   padding: '2px 0',
-                  position: 'relative'
+                  position: 'relative',
                 }}
               >
                 {r}
@@ -87,7 +111,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                     right: 0,
                     height: '2px',
                     backgroundColor: 'var(--gold-primary)',
-                    borderRadius: '1px'
+                    borderRadius: '1px',
                   }} />
                 )}
               </button>
@@ -96,74 +120,36 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
         </div>
       </div>
 
-      {/* SVG Line Chart */}
-      <div style={{ width: '100%', height: '135px' }}>
-        <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', overflow: 'visible' }}>
-          <defs>
-            <filter id="goldGlow" x="-20%" y="-20%" width="140%" height="140%">
-              <feGaussianBlur stdDeviation="1.2" result="blur" />
-              <feComposite in="SourceGraphic" in2="blur" operator="over" />
-            </filter>
-          </defs>
-
-          {/* Grid lines & Y-Axis Labels - pure neutral dark */}
-          {yLevels.map((lvl) => {
-            const y = getY(lvl);
-            const is100 = lvl === 100;
-            return (
-              <g key={`eq-lvl-${lvl}`}>
-                <line
-                  x1={12}
-                  y1={y}
-                  x2={chartWidth - 5}
-                  y2={y}
-                  stroke={is100 ? '#22252c' : '#151619'}
-                  strokeWidth="1"
-                  strokeDasharray={is100 ? '3 3' : undefined}
-                />
-                <text
-                  x={width - 24}
-                  y={y + 3.5}
-                  fill="#676b78"
-                  fontSize="9.5"
-                  fontFamily="var(--font-mono)"
-                  textAnchor="start"
-                >
-                  {lvl}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Baseline 100 line */}
-          <line
-            x1={12}
-            y1={baseline100Y}
-            x2={chartWidth - 5}
-            y2={baseline100Y}
-            stroke="#262830"
-            strokeWidth="1"
-            strokeDasharray="3 3"
-          />
-
-          {/* Glowing Golden Equity Line */}
-          <path
-            d={linePath}
-            fill="none"
-            stroke="var(--gold-primary)"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            filter="url(#goldGlow)"
-          />
-
-          {/* X-Axis Date Ticks */}
-          {dateLabels.map((d) => {
-            const x = getX(d.idx);
-            return (
+      {series.length < 2 ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#676b78', fontSize: '12px', textAlign: 'center', padding: '18px 8px' }}>
+          No paper equity snapshots yet. The curve appears after the bot records real account marks.
+        </div>
+      ) : (
+        <div style={{ width: '100%', height: '135px' }}>
+          <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+            {yLevels.map((lvl) => {
+              const y = getY(lvl);
+              return (
+                <g key={`eq-lvl-${lvl}`}>
+                  <line x1={12} y1={y} x2={chartWidth - 5} y2={y} stroke="#151619" strokeWidth="1" />
+                  <text x={width - 24} y={y + 3.5} fill="#676b78" fontSize="9.5" fontFamily="var(--font-mono)" textAnchor="start">
+                    {lvl.toFixed(lvl >= 100 ? 0 : 2)}
+                  </text>
+                </g>
+              );
+            })}
+            <path
+              d={linePath}
+              fill="none"
+              stroke="var(--gold-primary)"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {dateLabels.map((d) => (
               <text
-                key={`eq-date-${d.label}`}
-                x={x}
+                key={`eq-date-${d.label}-${d.idx}`}
+                x={getX(d.idx)}
                 y={height - 2}
                 fill="#676b78"
                 fontSize="9.5"
@@ -172,10 +158,10 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
               >
                 {d.label}
               </text>
-            );
-          })}
-        </svg>
-      </div>
+            ))}
+          </svg>
+        </div>
+      )}
     </div>
   );
 };

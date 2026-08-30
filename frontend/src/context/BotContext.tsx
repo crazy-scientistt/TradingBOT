@@ -289,7 +289,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const runtime = runtimeFromSnapshot(status, botStateData);
       const diagnostics = sectionData(snapshot.diagnostics);
       const opencodexCheck = diagnostics?.checks?.find((item) => item.name === 'opencodex_model');
-      const hermesCheck = diagnostics?.checks?.find((item) => item.name === 'hermes_memory_restart');
+      const hermesCheck = diagnostics?.checks?.find((item) => item.name === 'hermes_http');
       setRiskHealth([
         {
           id: 'database',
