@@ -103,6 +103,15 @@ class HermesResearchLoop:
                 gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
             )
 
+        pending_outbox = getattr(self.memory_bank.repo, "has_pending_outbox", None)
+        if callable(pending_outbox) and pending_outbox():
+            return LoopIterationResult(
+                iteration_id=iteration_id,
+                status="learning_outbox_pending",
+                quota_used=self.quota_repo.get_usage(date_str),
+                gate_results={"reason": "closed-trade lesson outbox is pending"},
+            )
+
         if self._steps_date != date_str:
             self._steps_date = date_str
             self._steps_today = 0

@@ -43,6 +43,9 @@ export interface RuntimeStatus {
   marketSource: string | null;
   degradedReasons: string[];
   executionOwner: string | null;
+  datasetStatus: string | null;
+  reflectionCount: number;
+  hermesStatus: string | null;
 }
 
 export interface BotContextType {
@@ -130,6 +133,9 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     marketSource: status?.market_source ?? null,
     degradedReasons: [...new Set(degradedReasons.map(String))],
     executionOwner: status?.execution_owner ?? null,
+    datasetStatus: status?.dataset_status ?? null,
+    reflectionCount: status?.reflection_count ?? 0,
+    hermesStatus: status?.hermes_status ?? null,
   };
 };
 

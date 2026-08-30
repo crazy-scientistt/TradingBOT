@@ -151,6 +151,8 @@ class TradingRuntime:
         self._learning = (
             LearningRecorder(reflection_repo) if reflection_repo is not None else None
         )
+        self._mae = Decimal("0")
+        self._mfe = Decimal("0")
         self._book_symbol = settings.symbol
         self._books_15m: dict[str, list[Candle]] = {settings.symbol: list(self._candles_15m)}
         self._books_1h: dict[str, list[Candle]] = {settings.symbol: list(self._candles_1h)}
@@ -304,6 +306,8 @@ class TradingRuntime:
             )
             self._persist_closed_trade(closed_trade, exit_fill=closed_trade.exit_fill)
             self._record_equity_snapshot(self._latest_quote)
+        self._mae = Decimal("0")
+        self._mfe = Decimal("0")
         self._paused = False
         self._halted = True
         self._transition_to(BotState.EMERGENCY_STOPPED, "EMERGENCY_STOP")
@@ -395,6 +399,8 @@ class TradingRuntime:
         if outcome.fill is not None:
             self._persist_entry(outcome.fill)
             self._position_symbol = candle.symbol
+            self._mae = Decimal("0")
+            self._mfe = Decimal("0")
             self._record_equity_snapshot(quote)
         if outcome.closed_trade is not None:
             self._persist_closed_trade(
@@ -418,8 +424,13 @@ class TradingRuntime:
 
     def _process_quote(self, quote: Quote) -> ExitOutcome | None:
         self._latest_quote = quote
-        if self._broker.position is not None and self._position_symbol and quote.symbol != self._position_symbol:
-            return None
+        if self._broker.position is not None:
+            entry = self._broker.position.entry_fill.price
+            unrealized = (quote.bid - entry) * self._broker.position.quantity
+            self._mae = min(self._mae, unrealized)
+            self._mfe = max(self._mfe, unrealized)
+            if self._position_symbol and quote.symbol != self._position_symbol:
+                return None
         outcome = self._coordinator.monitor_open_position(quote)
         if outcome is None or outcome.closed_trade is None:
             return outcome
@@ -951,19 +962,22 @@ class TradingRuntime:
                     trade_id,
                 ),
             )
-        self._record_trade_reflection(trade)
+            if self._learning is not None:
+                genome = self._coordinator.genome_repo.get_active_genome()
+                self._learning.record_closed_trade(
+                    trade,
+                    trade_id=trade_id,
+                    symbol=self._position_symbol or self._book_symbol or self._settings.symbol,
+                    genome_id=genome.genome_id if genome is not None else None,
+                    mae=self._mae,
+                    mfe=self._mfe,
+                    connection=connection,
+                )
+        self._mae = Decimal("0")
+        self._mfe = Decimal("0")
 
     def _record_trade_reflection(self, trade: ClosedPaperTrade) -> None:
-        if self._learning is None:
-            return
-        trade_id = self._stable_id("trade", trade.entry_fill.client_order_id)
-        genome = self._coordinator.genome_repo.get_active_genome()
-        self._learning.record_closed_trade(
-            trade,
-            trade_id=trade_id,
-            symbol=self._position_symbol or self._book_symbol or self._settings.symbol,
-            genome_id=genome.genome_id if genome is not None else None,
-        )
+        return None
 
     def _activate_book(self, symbol: str) -> None:
         if symbol == self._book_symbol:

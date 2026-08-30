@@ -90,6 +90,8 @@ class MarketIngestionService:
         self._poll_seconds = poll_seconds
         self._aux_close: dict[str, datetime] = {}
         self._aux_enabled = True
+        self._autonomous = None
+        self._autonomous_owner = False
         self._owned_http_client: httpx.AsyncClient | None = None
         self._live_socket = client is None
         if client is None:
@@ -214,6 +216,14 @@ class MarketIngestionService:
         self._publish()
         if self._aux_enabled:
             await self._warmup_aux_symbols()
+        if self._autonomous is not None:
+            seeder = getattr(self._autonomous, "seed_history", None)
+            if seeder is not None:
+                seeder(
+                    symbol,
+                    list(self._candles.get("15m") or []),
+                    list(self._candles.get("1h") or []),
+                )
 
     async def _warmup_aux_symbols(self) -> None:
         for symbol in self._settings.paper_spot_symbols():
@@ -234,6 +244,10 @@ class MarketIngestionService:
             if closed_15:
                 self._aux_close[symbol] = closed_15[-1].close_time
             self._runtime.seed_symbol_history(symbol, closed_15, closed_1h)
+            if self._autonomous is not None:
+                seeder = getattr(self._autonomous, "seed_history", None)
+                if seeder is not None:
+                    seeder(symbol, closed_15, closed_1h)
 
     async def _run(self) -> None:
         while True:
@@ -275,12 +289,33 @@ class MarketIngestionService:
         self._publish()
 
         if closed_entry_candle is not None:
-            await asyncio.to_thread(self._runtime.process_closed_candle, closed_entry_candle, quote)
-        await asyncio.to_thread(self._runtime.process_quote, quote)
+            await self._dispatch_closed(closed_entry_candle, quote)
+        await self._dispatch_quote(quote)
         await self._tick_aux_symbols()
 
     def set_aux_enabled(self, enabled: bool) -> None:
         self._aux_enabled = enabled
+
+    def set_autonomous(self, runtime: object | None, *, owner: bool) -> None:
+        self._autonomous = runtime
+        self._autonomous_owner = owner and runtime is not None
+        self._aux_enabled = self._autonomous_owner
+
+    async def _dispatch_closed(self, candle: Candle, quote: Quote) -> None:
+        if self._autonomous_owner and self._autonomous is not None:
+            on_closed = getattr(self._autonomous, "on_closed_candle", None)
+            if on_closed is not None:
+                await on_closed(candle, quote)
+            return
+        await asyncio.to_thread(self._runtime.process_closed_candle, candle, quote)
+
+    async def _dispatch_quote(self, quote: Quote, symbol: str | None = None) -> None:
+        if self._autonomous_owner and self._autonomous is not None:
+            on_quote = getattr(self._autonomous, "on_quote", None)
+            if on_quote is not None:
+                await on_quote(quote, symbol=symbol or self._settings.symbol)
+            return
+        await asyncio.to_thread(self._runtime.process_quote, quote)
 
     async def _tick_aux_symbols(self) -> None:
         if not self._aux_enabled:
@@ -302,7 +337,7 @@ class MarketIngestionService:
             if previous is not None and last.close_time <= previous:
                 continue
             self._aux_close[symbol] = last.close_time
-            await asyncio.to_thread(self._runtime.process_closed_candle, last, quote)
+            await self._dispatch_closed(last, quote)
 
     async def _run_socket(self) -> None:
         await run_binance_socket(
@@ -323,6 +358,11 @@ class MarketIngestionService:
             return
         self._last_runtime_quote = now
         self._publish()
+        if self._autonomous_owner:
+            task = asyncio.create_task(self._dispatch_quote(quote), name="goldguard-ws-quote")
+            self._runtime_tasks.add(task)
+            task.add_done_callback(self._runtime_work_done)
+            return
         self._spawn_runtime_work(
             lambda: self._runtime.process_quote(quote),
             "goldguard-ws-quote",
@@ -337,10 +377,18 @@ class MarketIngestionService:
             if appended and candle.timeframe == self._settings.entry_timeframe:
                 quote = self._latest_quote
                 if quote is not None:
-                    self._spawn_runtime_work(
-                        lambda: self._runtime.process_closed_candle(appended[-1], quote),
-                        "goldguard-ws-close",
-                    )
+                    if self._autonomous_owner:
+                        task = asyncio.create_task(
+                            self._dispatch_closed(appended[-1], quote),
+                            name="goldguard-ws-close",
+                        )
+                        self._runtime_tasks.add(task)
+                        task.add_done_callback(self._runtime_work_done)
+                    else:
+                        self._spawn_runtime_work(
+                            lambda: self._runtime.process_closed_candle(appended[-1], quote),
+                            "goldguard-ws-close",
+                        )
             self._refresh_verification()
             self._publish()
 

@@ -39,8 +39,8 @@ class PaperFuturesBroker:
         fee_rate: Decimal = Decimal("0.0005"),
         slippage_rate: Decimal = Decimal("0.0002"),
     ) -> None:
-        if starting_collateral <= 0:
-            raise ValueError("starting collateral must be positive")
+        if starting_collateral < 0:
+            raise ValueError("starting collateral cannot be negative")
         self._collateral = starting_collateral
         self._fee_rate = fee_rate
         self._slippage_rate = slippage_rate

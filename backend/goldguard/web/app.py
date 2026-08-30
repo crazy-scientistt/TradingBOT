@@ -62,6 +62,7 @@ from goldguard.providers.service import RouteService
 from goldguard.risk.engine import RiskEngine
 from goldguard.risk.state_machine import StateMachine
 from goldguard.security.service import AuthService
+from goldguard.services.autonomous_runtime import AutonomousRuntime
 from goldguard.services.ingestion import MarketIngestionService, MarketSnapshot
 from goldguard.services.promotion_controller import (
     CanaryEvent,
@@ -147,6 +148,7 @@ _risk_engine: RiskEngine | None = None
 _runtime: GenomeRuntime | None = None
 _trading_runtime: TradingRuntime | None = None
 _runtime_facade: RuntimeFacade | None = None
+_autonomous_runtime: AutonomousRuntime | None = None
 _backtest_engine: BacktestEngine | None = None
 _bot_state_machine: StateMachine | None = None
 _ingestion: MarketIngestionService | None = None
@@ -523,7 +525,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _settings, _db, _genome_repo, _ledger_repo, _candle_repo
     global _quota_repo, _provider_repo, _reflection_repo, _autonomy_repo, _promotion_repo
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
-    global _runtime_facade
+    global _runtime_facade, _autonomous_runtime
     global _ingestion, _provider_http_client, _hermes_http_client
     global _promotion_controller, _hermes_loop
     global _calendar, _dataset_service, _background_tasks
@@ -706,7 +708,18 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             stored = _profile_repo.active()
             if stored is not None:
                 active_profile = stored.profile
-        _runtime_facade = RuntimeFacade(profile=active_profile, legacy=_trading_runtime)
+        _autonomous_runtime = AutonomousRuntime(
+            settings=_settings,
+            database=_db,
+            profile=active_profile,
+            genome_repo=_genome_repo,
+            reflection_repo=_reflection_repo,
+        )
+        _runtime_facade = RuntimeFacade(
+            profile=active_profile,
+            legacy=_trading_runtime,
+            autonomous=_autonomous_runtime,
+        )
 
     # Hermes and promotion are built from the same durable repositories as the runtime.
     # The loop receives verified market data at each step; it never manufactures a series.
@@ -803,7 +816,10 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         )
         await _ingestion.start()
         if _runtime_facade is not None:
-            _ingestion.set_aux_enabled(_runtime_facade.owner is StrategyMode.AUTONOMOUS)
+            _ingestion.set_autonomous(
+                _autonomous_runtime,
+                owner=_runtime_facade.owner is StrategyMode.AUTONOMOUS,
+            )
 
     if _settings is not None and _settings.environment != "test":
         _background_tasks = [
@@ -969,16 +985,30 @@ def _max_drawdown_percent(values: list[float]) -> float | None:
 async def kpi() -> dict[str, Any]:
     """Overview cards. Any figure that needs data we do not have is reported as null."""
     settings = _require(_settings, "settings")
-    broker = _require(_broker, "paper broker")
     market = _market()
     quote = market.latest_quote
-
-    if quote is not None:
-        equity: float | None = float(broker.equity(quote))
-    elif broker.position is None:
-        equity = float(broker.cash)  # flat: equity is exactly cash, no mark-to-market needed
+    cash: float
+    equity: float | None
+    if (
+        _runtime_facade is not None
+        and not _runtime_facade.is_legacy_owner()
+        and _runtime_facade.autonomous is not None
+    ):
+        snap = await _runtime_facade.autonomous.broker.snapshot()
+        cash = float(snap.free_margin_usdt)
+        equity = float(snap.total_equity_usdt)
+        broker_cash_note = True
     else:
-        equity = None
+        broker = _require(_broker, "paper broker")
+        if quote is not None:
+            equity = float(broker.equity(quote))
+        elif broker.position is None:
+            equity = float(broker.cash)
+        else:
+            equity = None
+        cash = float(broker.cash)
+        broker_cash_note = False
+    _ = broker_cash_note
 
     account = _paper_account_id()
     snapshots = _ledger_repo.list_equity_snapshots(account) if _ledger_repo and account else []
@@ -1012,7 +1042,7 @@ async def kpi() -> dict[str, Any]:
             "equityCurrency": "USDT",
             "equityChangePercent": change_percent,
             "equityChangePeriod": "24H",
-            "cash": round(float(broker.cash), 2),
+            "cash": round(cash, 2),
             "cashCurrency": "USDT",
             "cashChangeNote": "Paper Mode" if settings.mode == "paper" else "Live Active",
             "totalPnl": total_pnl,
@@ -1266,11 +1296,53 @@ def _pipeline_steps() -> list[dict[str, Any]]:
 async def position() -> dict[str, Any]:
     """Open paper position, if any. A flat account returns ``position: null``."""
     settings = _require(_settings, "settings")
-    broker = _require(_broker, "paper broker")
     market = _market()
     quote = market.latest_quote
-    open_position = broker.position
     steps = _pipeline_steps()
+    extra: dict[str, Any] = {}
+    if (
+        _runtime_facade is not None
+        and not _runtime_facade.is_legacy_owner()
+        and _runtime_facade.autonomous is not None
+    ):
+        extra["pnlBySymbol"] = _runtime_facade.autonomous.pnl_by_symbol()
+        extra["executionOwner"] = "autonomous"
+        owned = _runtime_facade.autonomous.broker.open_positions()
+        if not owned:
+            return _env(
+                {"hasPosition": False, "position": None, "pipelineSteps": steps, **extra},
+                source="paper-portfolio",
+                observed_at=quote.observed_at if quote else None,
+                stale=market.stale,
+            )
+        current = owned[0]
+        unrealized = round(float(current.unrealized_pnl), 2)
+        return _env(
+            {
+                "hasPosition": True,
+                "position": {
+                    "direction": current.side.value,
+                    "isLive": False,
+                    "entry": float(current.entry_price),
+                    "stop": None,
+                    "target": None,
+                    "quantity": f"{current.quantity} {current.symbol}",
+                    "riskAmount": None,
+                    "riskPercent": None,
+                    "unrealizedPnl": unrealized,
+                    "symbol": current.symbol,
+                },
+                "pipelineSteps": steps,
+                **extra,
+            },
+            source="paper-portfolio",
+            availability="available",
+            observed_at=quote.observed_at if quote else None,
+            stale=market.stale,
+        )
+
+    broker = _require(_broker, "paper broker")
+    open_position = broker.position
 
     if open_position is None:
         return _env(
@@ -2053,7 +2125,8 @@ async def bot_state() -> dict[str, Any]:
 @app.get("/api/bot/status")
 async def bot_status() -> dict[str, Any]:
     """Compact runtime status for the header controls."""
-    if _trading_runtime is None:
+    runtime = _runtime_facade or _trading_runtime
+    if runtime is None:
         return _env(
             {"running": False, "paused": False, "halted": False, "state": None},
             availability="unavailable",
@@ -2061,7 +2134,7 @@ async def bot_status() -> dict[str, Any]:
             stale=True,
             detail="trading runtime failed to initialise",
         )
-    runtime_status = _trading_runtime.status()
+    runtime_status = runtime.status()
     return _env(
         {
             "running": runtime_status.running,
@@ -2103,7 +2176,7 @@ async def start_bot() -> dict[str, str]:
 @app.post("/api/bot/pause")
 async def pause_bot() -> dict[str, str]:
     """Stop opening new paper entries while protective monitoring continues."""
-    runtime = get_trading_runtime()
+    runtime = _runtime_facade or get_trading_runtime()
     if runtime.status().halted:
         return {"status": "halted"}
     runtime.pause()
@@ -2113,7 +2186,7 @@ async def pause_bot() -> dict[str, str]:
 @app.post("/api/bot/stop")
 async def stop_bot() -> dict[str, str]:
     """Emergency stop: close any paper position, halt mutations, persist the halt."""
-    runtime = get_trading_runtime()
+    runtime = _runtime_facade or get_trading_runtime()
     if runtime.status().halted:
         return {"status": "already_stopped"}
     try:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1428,32 +1429,91 @@ class ReflectionRepository:
         mfe: Decimal,
         exit_reason: str,
         payload: dict[str, Any],
+        connection: sqlite3.Connection | None = None,
     ) -> None:
-        with self.database.transaction() as connection:
-            connection.execute(
-                """
+        params = (
+            reflection_id,
+            trade_id,
+            namespace,
+            lesson_code,
+            lesson,
+            canonical_json(regime_tags),
+            str(net_pnl),
+            str(fee_drag),
+            str(mae),
+            str(mfe),
+            exit_reason,
+            canonical_json(payload),
+            utc_now_iso(),
+        )
+        sql = """
                 INSERT OR IGNORE INTO reflections(
                     id, trade_id, namespace, lesson_code, lesson,
                     regime_tags_json, net_pnl_text, fee_drag_text,
                     mae_text, mfe_text, exit_reason, payload_json, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    reflection_id,
-                    trade_id,
-                    namespace,
-                    lesson_code,
-                    lesson,
-                    canonical_json(regime_tags),
-                    str(net_pnl),
-                    str(fee_drag),
-                    str(mae),
-                    str(mfe),
-                    exit_reason,
-                    canonical_json(payload),
-                    utc_now_iso(),
-                ),
-            )
+                """
+        if connection is not None:
+            connection.execute(sql, params)
+            return
+        with self.database.transaction() as owned:
+            owned.execute(sql, params)
+
+    def enqueue_outbox(
+        self,
+        *,
+        trade_id: str,
+        payload: dict[str, Any],
+        error: str,
+        connection: sqlite3.Connection | None = None,
+    ) -> None:
+        now = utc_now_iso()
+        params = (
+            f"outbox-{trade_id}",
+            trade_id,
+            canonical_json(payload),
+            "pending",
+            1,
+            error[:500],
+            now,
+            now,
+        )
+        sql = """
+            INSERT INTO learning_outbox(
+                id, trade_id, payload_json, status, attempts, last_error, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(trade_id) DO UPDATE SET
+                attempts = attempts + 1,
+                last_error = excluded.last_error,
+                updated_at = excluded.updated_at
+            """
+        if connection is not None:
+            connection.execute(sql, params)
+            return
+        with self.database.transaction() as owned:
+            owned.execute(sql, params)
+
+    def mark_outbox(
+        self, connection: sqlite3.Connection, trade_id: str, status: str
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE learning_outbox
+            SET status = ?, updated_at = ?
+            WHERE trade_id = ?
+            """,
+            (status, utc_now_iso(), trade_id),
+        )
+
+    def has_pending_outbox(self) -> bool:
+        try:
+            with self.database.connect() as connection:
+                row = connection.execute(
+                    "SELECT 1 FROM learning_outbox WHERE status = 'pending' LIMIT 1"
+                ).fetchone()
+            return row is not None
+        except sqlite3.OperationalError:
+            return False
 
     def get_by_trade_id(self, trade_id: str) -> dict[str, Any] | None:
         with self.database.connect() as connection:
