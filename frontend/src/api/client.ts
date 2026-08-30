@@ -68,6 +68,7 @@ export interface StatusResponse {
   latest_lesson_trade?: string | null;
   last_gate?: string | null;
   canary_stage?: string | null;
+  ui_revision?: string | null;
 }
 
 export interface Quote {

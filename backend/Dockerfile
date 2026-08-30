@@ -39,6 +39,8 @@ USER goldguard
 
 ENV GOLDGUARD_DATA_DIR=/data
 ENV PYTHONPATH=/app/backend:/app
+ARG UI_REVISION=dev
+ENV GOLDGUARD_UI_REVISION=$UI_REVISION
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

@@ -83,6 +83,8 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        UI_REVISION: ${UI_REVISION:-local}
     restart: unless-stopped
     ports:
       - "8000:8000"

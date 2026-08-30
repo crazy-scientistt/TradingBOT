@@ -48,6 +48,7 @@ export interface RuntimeStatus {
   hermesStatus: string | null;
   latestLesson: string | null;
   lastGate: string | null;
+  uiRevision: string | null;
 }
 
 export interface BotContextType {
@@ -141,6 +142,7 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     hermesStatus: status?.hermes_status ?? null,
     latestLesson: status?.latest_lesson ?? null,
     lastGate: status?.last_gate ?? null,
+    uiRevision: status?.ui_revision ?? null,
   };
 };
 

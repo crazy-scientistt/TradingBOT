@@ -19,6 +19,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
@@ -968,6 +969,7 @@ async def app_status() -> dict[str, Any]:
             "market_source": market.source,
             "market_verified": market.verified,
             "canary": _observe_canary(),
+            "ui_revision": os.environ.get("GOLDGUARD_UI_REVISION", "dev"),
             "degraded_reasons": list(runtime_status.degraded_reasons) if runtime_status else [],
             **extra,
         },
@@ -2557,7 +2559,11 @@ async def serve_index() -> FileResponse | JSONResponse:
     """Serve the built frontend index."""
     index = _frontend_dist / "index.html"
     if index.exists():
-        return FileResponse(index, media_type="text/html")
+        return FileResponse(
+            index,
+            media_type="text/html",
+            headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"},
+        )
     return JSONResponse(
         {"message": "Frontend not built. Run 'npm run build' in frontend/."},
         status_code=200,
