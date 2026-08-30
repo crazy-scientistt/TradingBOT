@@ -79,6 +79,15 @@ export interface PositionResponse {
   hasPosition: boolean;
   position: PositionDetails | null;
   pipelineSteps: PipelineStep[];
+  pnlBySymbol?: Array<{
+    symbol: string;
+    product?: string;
+    quantity?: string;
+    entry?: string;
+    unrealized?: string;
+    side?: string;
+  }>;
+  executionOwner?: string;
 }
 
 export interface PreflightCheck {

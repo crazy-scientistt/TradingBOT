@@ -26,7 +26,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
       case 'RESEARCH_ACTIVE':
         return '#60a5fa';
       case 'AUTONOMY_SUSPENDED':
-        return '#f0b90b';
+        return 'var(--gold-primary)';
       case 'QUARANTINE':
       case 'KILL_SWITCH_ACTIVE':
         return '#ef4444';
@@ -89,8 +89,8 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
                   fontWeight: 700,
                   padding: '2px 6px',
                   borderRadius: '3px',
-                  backgroundColor: botState.full_autonomy ? 'rgba(16, 185, 129, 0.15)' : 'rgba(240, 185, 11, 0.15)',
-                  color: botState.full_autonomy ? '#10b981' : '#f0b90b',
+                  backgroundColor: botState.full_autonomy ? 'rgba(16, 185, 129, 0.15)' : 'rgba(61, 126, 255, 0.15)',
+                  color: botState.full_autonomy ? '#10b981' : 'var(--gold-primary)',
                 }}
               >
                 {botState.full_autonomy ? 'FULL AUTONOMY' : 'HUMAN APPROVAL MODE'}
@@ -171,7 +171,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
         <div
           style={{
             backgroundColor: '#0d0e12',
-            border: '1px solid rgba(240, 185, 11, 0.3)',
+            border: '1px solid rgba(61, 126, 255, 0.3)',
             borderRadius: '8px',
             padding: '14px',
             display: 'flex',
@@ -182,8 +182,8 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
         >
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-              <PauseCircle size={16} color="#f0b90b" />
-              <span style={{ fontSize: '14px', fontWeight: 700, color: '#f0b90b' }}>
+              <PauseCircle size={16} color="var(--gold-primary)" />
+              <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-primary)' }}>
                 Revoke Autonomy
               </span>
             </div>
@@ -197,9 +197,9 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
             onClick={() => setConfirmAction('revoke')}
             style={{
               padding: '8px 12px',
-              backgroundColor: 'rgba(240, 185, 11, 0.15)',
-              color: '#f0b90b',
-              border: '1px solid rgba(240, 185, 11, 0.4)',
+              backgroundColor: 'rgba(61, 126, 255, 0.15)',
+              color: 'var(--gold-primary)',
+              border: '1px solid rgba(61, 126, 255, 0.4)',
               fontWeight: 700,
               fontSize: '12.5px',
               borderRadius: '6px',

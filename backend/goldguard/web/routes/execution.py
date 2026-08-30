@@ -163,6 +163,7 @@ async def get_diagnostics() -> dict[str, Any]:
             if app_module._reflection_repo is not None
             else None
         ),
+        hermes_proposal_ok=getattr(app_module, "_hermes_proposal_ok", None),
     )
     blockers = list(data.get("blockers") or [])
     return _envelope(

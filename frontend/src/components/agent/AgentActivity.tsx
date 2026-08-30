@@ -76,8 +76,8 @@ export const AgentActivity: React.FC = () => {
           </button>
           <button onClick={pauseTrading} style={{
             padding: '8px 14px', borderRadius: '6px', fontWeight: 600, fontSize: '12px',
-            border: '1px solid rgba(240,185,11,0.4)', cursor: 'pointer',
-            backgroundColor: 'rgba(240,185,11,0.08)', color: '#f0b90b',
+            border: '1px solid rgba(61, 126, 255,0.4)', cursor: 'pointer',
+            backgroundColor: 'rgba(61, 126, 255,0.08)', color: 'var(--gold-primary)',
           }}>
             Pause new entries
           </button>
@@ -160,7 +160,7 @@ export const AgentActivity: React.FC = () => {
                   )}
                 </div>
                 {evt.audit_worthy && (
-                  <span title="Audit-worthy event" style={{ fontSize: '10px', color: '#f0b90b' }}>\u2605</span>
+                  <span title="Audit-worthy event" style={{ fontSize: '10px', color: 'var(--gold-primary)' }}>\u2605</span>
                 )}
               </div>
             ))}

@@ -31,8 +31,8 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
               OPEN POSITION
             </span>
-            <span className="badge-live">
-              LIVE
+            <span className={position.isLive ? 'badge-live' : 'badge-paper'}>
+              {position.isLive ? 'LIVE' : 'PAPER'}
             </span>
           </div>
           <button style={{
@@ -73,7 +73,9 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
             <span style={{ color: '#9498a4', fontWeight: 500 }}>STOP</span>
             <span style={{ color: '#ef4444', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
-              {position.stop.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+              {position.stop != null
+                ? position.stop.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : '—'}
             </span>
           </div>
 
@@ -81,7 +83,9 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
             <span style={{ color: '#9498a4', fontWeight: 500 }}>TARGET</span>
             <span style={{ color: '#22c55e', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
-              {position.target.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+              {position.target != null
+                ? position.target.toLocaleString('en-US', { minimumFractionDigits: 2 })
+                : '—'}
             </span>
           </div>
 
@@ -97,7 +101,7 @@ export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pi
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px' }}>
             <span style={{ color: '#9498a4', fontWeight: 500 }}>RISK</span>
             <span style={{ color: '#f8fafc', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
-              {position.riskPercent.toFixed(2)}%
+              {position.riskPercent != null ? `${position.riskPercent.toFixed(2)}%` : '—'}
             </span>
           </div>
         </div>

@@ -45,13 +45,15 @@ export interface KpiMetrics {
 }
 
 export interface PositionDetails {
-  direction: 'LONG' | 'SHORT';
+  direction: 'LONG' | 'SHORT' | string;
   isLive: boolean;
   entry: number;
-  stop: number;
-  target: number;
+  stop?: number | null;
+  target?: number | null;
   quantity: string;
-  riskPercent: number;
+  riskPercent?: number | null;
+  unrealizedPnl?: number | null;
+  symbol?: string;
 }
 
 export type PipelineStepStatus = 'completed' | 'active' | 'pending';

@@ -46,7 +46,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
             width: '26px',
             height: '26px',
             borderRadius: '50%',
-            backgroundColor: 'rgba(240, 185, 11, 0.12)',
+            backgroundColor: 'rgba(61, 126, 255, 0.12)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',

@@ -91,7 +91,7 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Cpu size={20} color="#f0b90b" />
+          <Cpu size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
               Providers
@@ -128,9 +128,9 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
           style={{
             padding: '12px 14px',
             borderRadius: '8px',
-            border: '1px solid rgba(240,185,11,0.35)',
-            backgroundColor: 'rgba(240,185,11,0.08)',
-            color: '#f0b90b',
+            border: '1px solid rgba(61, 126, 255,0.35)',
+            backgroundColor: 'rgba(61, 126, 255,0.08)',
+            color: 'var(--gold-primary)',
             fontSize: '13px',
           }}
         >
@@ -202,7 +202,7 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
                   </span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <Zap size={12} color="#f0b90b" />
+                  <Zap size={12} color="var(--gold-primary)" />
                   <span style={{ fontSize: '11.5px', fontWeight: 600, color: '#e2e4e8' }}>
                     {p.latency_ms != null ? `${p.latency_ms} ms` : '—'}
                   </span>
@@ -250,7 +250,7 @@ export const RouteMatrix: React.FC<RouteMatrixProps> = ({
                 }}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <span style={{ fontSize: '13.5px', fontWeight: 600, color: '#f0b90b' }}>
+                  <span style={{ fontSize: '13.5px', fontWeight: 600, color: 'var(--gold-primary)' }}>
                     {label}
                   </span>
                   <span style={{ fontSize: '11.5px', color: '#676b78' }}>

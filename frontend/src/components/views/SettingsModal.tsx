@@ -103,7 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Settings size={18} color="#f0b90b" />
+            <Settings size={18} color="var(--gold-primary)" />
             <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
               Paper settings
             </h3>
@@ -123,9 +123,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               style={{
                 padding: '10px 12px',
                 borderRadius: '6px',
-                border: '1px solid rgba(240, 185, 11, 0.45)',
-                backgroundColor: 'rgba(240, 185, 11, 0.08)',
-                color: '#f0b90b',
+                border: '1px solid rgba(61, 126, 255, 0.45)',
+                backgroundColor: 'rgba(61, 126, 255, 0.08)',
+                color: 'var(--gold-primary)',
                 fontWeight: 600,
                 fontSize: '12.5px',
               }}
@@ -277,7 +277,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             disabled={saving || loading || !settings}
             style={{
               padding: '8px 14px',
-              backgroundColor: '#f0b90b',
+              backgroundColor: 'var(--gold-primary)',
               color: '#0d0e12',
               border: 'none',
               borderRadius: '6px',

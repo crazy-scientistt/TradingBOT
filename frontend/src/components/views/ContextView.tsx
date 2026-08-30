@@ -8,13 +8,13 @@ export const ContextView: React.FC = () => {
   const getCategoryBadge = (cat: string) => {
     switch (cat) {
       case 'fed':
-        return { label: 'Fed Policy', color: '#f0b90b', bg: 'rgba(240, 185, 11, 0.1)' };
+        return { label: 'Fed Policy', color: 'var(--gold-primary)', bg: 'rgba(61, 126, 255, 0.1)' };
       case 'yields':
         return { label: 'Real Yields', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.1)' };
       case 'exchange':
         return { label: 'Paxos Reserve', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
       case 'macro':
-        return { label: 'Macro', color: '#f0b90b', bg: 'rgba(240, 185, 11, 0.1)' };
+        return { label: 'Macro', color: 'var(--gold-primary)', bg: 'rgba(61, 126, 255, 0.1)' };
       default:
         return { label: cat || 'Context', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)' };
     }
@@ -35,7 +35,7 @@ export const ContextView: React.FC = () => {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Layers size={20} color="#f0b90b" />
+          <Layers size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
               Macro Intelligence &amp; Live Context Synthesis

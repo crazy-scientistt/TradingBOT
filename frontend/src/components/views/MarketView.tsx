@@ -53,7 +53,7 @@ export const MarketView: React.FC = () => {
         backgroundColor: '#0d0e12', padding: '12px 16px', borderRadius: '8px', border: '1px solid #1e222b',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <TrendingUp size={20} color="#f0b90b" />
+          <TrendingUp size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>PAXG/USDT Market Data</h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
@@ -65,9 +65,9 @@ export const MarketView: React.FC = () => {
           {(['15m', '1h'] as const).map(iv => (
             <button key={iv} onClick={() => setInterval(iv)} style={{
               padding: '4px 10px', borderRadius: '4px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-              border: interval === iv ? '1px solid rgba(240,185,11,0.5)' : '1px solid #22242a',
-              backgroundColor: interval === iv ? 'rgba(240,185,11,0.08)' : '#141518',
-              color: interval === iv ? '#f0b90b' : '#9498a4',
+              border: interval === iv ? '1px solid rgba(61, 126, 255,0.5)' : '1px solid #22242a',
+              backgroundColor: interval === iv ? 'rgba(61, 126, 255,0.08)' : '#141518',
+              color: interval === iv ? 'var(--gold-primary)' : '#9498a4',
             }}>{iv}</button>
           ))}
         </div>
@@ -91,7 +91,7 @@ export const MarketView: React.FC = () => {
         </div>
         <div style={{ backgroundColor: '#0d0e12', border: '1px solid #1e222b', borderRadius: '8px', padding: '14px' }}>
           <span style={{ fontSize: '11.5px', color: '#676b78', display: 'block' }}>Spread</span>
-          <span style={{ fontSize: '18px', fontWeight: 700, color: '#f0b90b', fontFamily: 'monospace' }}>{quote ? fmt(quote.spread) : 'â€”'}</span>
+          <span style={{ fontSize: '18px', fontWeight: 700, color: 'var(--gold-primary)', fontFamily: 'monospace' }}>{quote ? fmt(quote.spread) : 'â€”'}</span>
           {quote && <span style={{ fontSize: '11px', color: '#9498a4', display: 'block' }}>{(quote.spread_rate * 10000).toFixed(1)} bps</span>}
         </div>
         <div style={{ backgroundColor: '#0d0e12', border: '1px solid #1e222b', borderRadius: '8px', padding: '14px' }}>
@@ -110,7 +110,7 @@ export const MarketView: React.FC = () => {
         </h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '12px' }}>
           <div style={{ backgroundColor: '#121418', border: '1px solid #1c2028', borderRadius: '6px', padding: '12px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#f0b90b' }}>RSI (14)</span>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--gold-primary)' }}>RSI (14)</span>
             <span style={{ fontSize: '14px', fontWeight: 700, color: '#e2e4e8', display: 'block', marginTop: '4px' }}>
               {rsi14 != null ? rsi14.toFixed(1) : 'warming up'}
             </span>

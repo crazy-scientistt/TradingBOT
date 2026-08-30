@@ -29,7 +29,7 @@ export const ToastContainer: React.FC = () => {
             case 'error':
               return { border: '1px solid rgba(239, 68, 68, 0.4)', bg: '#1f0d0e', color: '#ef4444', icon: AlertCircle };
             case 'warning':
-              return { border: '1px solid rgba(240, 185, 11, 0.4)', bg: '#1c1608', color: '#f0b90b', icon: AlertTriangle };
+              return { border: '1px solid rgba(61, 126, 255, 0.4)', bg: '#0b1018', color: 'var(--gold-primary)', icon: AlertTriangle };
             default:
               return { border: '1px solid rgba(96, 165, 250, 0.4)', bg: '#0d1522', color: '#60a5fa', icon: Info };
           }

@@ -84,7 +84,7 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
                     }
                     style={{
                       backgroundColor: '#121418',
-                      color: '#f0b90b',
+                      color: 'var(--gold-primary)',
                       border: '1px solid #2d3139',
                       borderRadius: '4px',
                       padding: '4px 6px',
@@ -144,7 +144,7 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
               ) : (
                 <span
                   style={{
-                    color: '#f0b90b',
+                    color: 'var(--gold-primary)',
                     fontSize: '12px',
                     fontFamily: 'monospace',
                     padding: '4px 6px',
@@ -236,9 +236,9 @@ export const ConditionBuilder: React.FC<ConditionBuilderProps> = ({
           style={{
             alignSelf: 'flex-start',
             padding: '4px 10px',
-            backgroundColor: 'rgba(240, 185, 11, 0.1)',
-            border: '1px dashed rgba(240, 185, 11, 0.4)',
-            color: '#f0b90b',
+            backgroundColor: 'rgba(61, 126, 255, 0.1)',
+            border: '1px dashed rgba(61, 126, 255, 0.4)',
+            color: 'var(--gold-primary)',
             borderRadius: '4px',
             fontSize: '11px',
             cursor: 'pointer',

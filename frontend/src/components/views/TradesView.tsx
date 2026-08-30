@@ -90,7 +90,7 @@ export const TradesView: React.FC = () => {
               </td></tr>
             ) : trades.map((t, i) => (
               <tr key={t.client_order_id || i} style={{ borderBottom: '1px solid #181a1f', backgroundColor: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>
-                <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#f0b90b', fontSize: '11px' }}>
+                <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: 'var(--gold-primary)', fontSize: '11px' }}>
                   {t.client_order_id || '—'}
                 </td>
                 <td style={{ padding: '10px 12px' }}>

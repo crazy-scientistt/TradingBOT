@@ -73,6 +73,25 @@ class HermesClient:
             raise HermesUnavailable("Hermes proposal exceeded the response limit")
         return encoded
 
+    async def probe_authenticated(self) -> bool:
+        """Auth round-trip. Does not spend a research proposal."""
+        try:
+            response = await self._http_client.get(
+                f"{self._base_url}/v1/models",
+                headers={"authorization": f"Bearer {self._api_key}"},
+                timeout=5.0,
+            )
+            if response.status_code < 500:
+                return True
+            response = await self._http_client.get(
+                f"{self._base_url}/health",
+                headers={"authorization": f"Bearer {self._api_key}"},
+                timeout=5.0,
+            )
+            return response.status_code < 500
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError):
+            return False
+
     async def complete(self, user_content: str) -> str:
         raw = await self.request_proposal_text(user_content)
         return raw

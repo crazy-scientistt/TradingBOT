@@ -275,14 +275,18 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         price: position.entry, color: '#38bdf8', lineWidth: 1,
         lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'entry',
       }));
-      lines.push(series.createPriceLine({
-        price: position.stop, color: '#ef5350', lineWidth: 1,
-        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'stop',
-      }));
-      lines.push(series.createPriceLine({
-        price: position.target, color: '#22c55e', lineWidth: 1,
-        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'target',
-      }));
+      if (position.stop != null) {
+        lines.push(series.createPriceLine({
+          price: position.stop, color: '#ef5350', lineWidth: 1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'stop',
+        }));
+      }
+      if (position.target != null) {
+        lines.push(series.createPriceLine({
+          price: position.target, color: '#22c55e', lineWidth: 1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: 'target',
+        }));
+      }
     }
     return () => {
       lines.forEach((line) => series.removePriceLine(line));

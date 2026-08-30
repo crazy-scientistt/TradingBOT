@@ -83,7 +83,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
       case 'holdout_passed':
       case 'val_passed':
       case 'dev_passed':
-        return '#f0b90b';
+        return 'var(--gold-primary)';
       case 'quarantined':
         return '#ef4444';
       default:
@@ -114,7 +114,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <Sparkles size={20} color="#f0b90b" />
+          <Sparkles size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
               Strategy Studio &amp; Genome Lab
@@ -135,7 +135,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
               alignItems: 'center',
               gap: '6px',
               padding: '8px 14px',
-              backgroundColor: '#f0b90b',
+              backgroundColor: 'var(--gold-primary)',
               color: '#000',
               fontWeight: 700,
               fontSize: '13px',
@@ -188,8 +188,8 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                   gap: '4px',
                   padding: '10px 10px',
                   borderRadius: '6px',
-                  border: isSel ? '1px solid rgba(240, 185, 11, 0.5)' : '1px solid #1c2028',
-                  backgroundColor: isSel ? 'rgba(240, 185, 11, 0.08)' : '#121418',
+                  border: isSel ? '1px solid rgba(61, 126, 255, 0.5)' : '1px solid #1c2028',
+                  backgroundColor: isSel ? 'rgba(61, 126, 255, 0.08)' : '#121418',
                   textAlign: 'left',
                   cursor: 'pointer',
                   transition: 'all 0.15s ease',
@@ -200,7 +200,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                     style={{
                       fontSize: '12.5px',
                       fontWeight: 600,
-                      color: isSel ? '#f0b90b' : '#e2e4e8',
+                      color: isSel ? 'var(--gold-primary)' : '#e2e4e8',
                     }}
                   >
                     {g.title}
@@ -294,7 +294,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 </div>
                 <div style={{ backgroundColor: '#121418', padding: '8px 10px', borderRadius: '6px' }}>
                   <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Win Rate</span>
-                  <span style={{ fontSize: '14px', fontWeight: 700, color: '#f0b90b' }}>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-primary)' }}>
                     {backtestMetrics.win_rate}
                   </span>
                 </div>

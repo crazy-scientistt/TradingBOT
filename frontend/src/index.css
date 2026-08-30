@@ -159,7 +159,7 @@ html, body {
 
 /* Glow effects */
 .glow-gold {
-  filter: drop-shadow(0 0 6px rgba(240, 185, 11, 0.4));
+  filter: drop-shadow(0 0 6px rgba(61, 126, 255, 0.4));
 }
 
 .glow-blue {

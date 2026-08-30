@@ -55,7 +55,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
         return { bg: 'rgba(16, 185, 129, 0.1)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' };
       case 'CHOP_WHIPSAW':
       case 'FEE_DRAG_HIGH':
-        return { bg: 'rgba(240, 185, 11, 0.1)', color: '#f0b90b', border: '1px solid rgba(240, 185, 11, 0.3)' };
+        return { bg: 'rgba(61, 126, 255, 0.1)', color: 'var(--gold-primary)', border: '1px solid rgba(61, 126, 255, 0.3)' };
       case 'STOP_HIT_EXPANSION':
       case 'PROCESS_VIOLATION':
       case 'BLACKOUT_BREACH':
@@ -91,7 +91,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <FlaskConical size={20} color="#f0b90b" />
+          <FlaskConical size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
               Hermes Autonomous Research Laboratory
@@ -112,7 +112,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
             alignItems: 'center',
             gap: '6px',
             padding: '8px 14px',
-            backgroundColor: '#f0b90b',
+            backgroundColor: 'var(--gold-primary)',
             color: '#000',
             fontWeight: 700,
             fontSize: '13px',
@@ -144,7 +144,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
             <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc' }}>
               Daily Backtest Engine Quota
             </span>
-            <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#f0b90b', fontFamily: 'monospace' }}>
+            <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--gold-primary)', fontFamily: 'monospace' }}>
               {quota?.backtests_used || 0} / {quota?.backtests_limit || 8}
             </span>
           </div>
@@ -154,7 +154,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
               style={{
                 width: `${backtestPct}%`,
                 height: '100%',
-                backgroundColor: backtestPct > 80 ? '#ef4444' : '#f0b90b',
+                backgroundColor: backtestPct > 80 ? '#ef4444' : 'var(--gold-primary)',
                 transition: 'width 0.3s ease',
               }}
             />
@@ -212,7 +212,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <BookOpen size={16} color="#f0b90b" />
+          <BookOpen size={16} color="var(--gold-primary)" />
           <h3 style={{ fontSize: '14px', fontWeight: 600, color: '#f8fafc', margin: 0 }}>
             Recent Trade Post-Mortems &amp; Memory Bank Lessons
           </h3>

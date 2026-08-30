@@ -63,9 +63,9 @@ const ConnectionBanner: React.FC = () => {
         margin: '8px 14px 0',
         padding: '8px 12px',
         borderRadius: '6px',
-        border: `1px solid ${error ? 'rgba(239, 68, 68, 0.45)' : 'rgba(240, 185, 11, 0.35)'}`,
-        backgroundColor: error ? 'rgba(239, 68, 68, 0.08)' : 'rgba(240, 185, 11, 0.08)',
-        color: error ? '#fca5a5' : '#f0b90b',
+        border: `1px solid ${error ? 'rgba(239, 68, 68, 0.45)' : 'rgba(61, 126, 255, 0.35)'}`,
+        backgroundColor: error ? 'rgba(239, 68, 68, 0.08)' : 'rgba(61, 126, 255, 0.08)',
+        color: error ? '#fca5a5' : 'var(--gold-primary)',
         fontSize: '12px',
       }}
     >

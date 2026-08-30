@@ -158,6 +158,7 @@ _promotion_repo: PromotionRepository | None = None
 _promotion_controller: PromotionController | None = None
 _hermes_loop: HermesResearchLoop | None = None
 _hermes_http_client: httpx.AsyncClient | None = None
+_hermes_proposal_ok: bool | None = None
 _calendar: EconomicCalendar | None = None
 _dataset_service: DatasetService | None = None
 _background_tasks: list[asyncio.Task[None]] = []
@@ -526,13 +527,14 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _quota_repo, _provider_repo, _reflection_repo, _autonomy_repo, _promotion_repo
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
     global _runtime_facade, _autonomous_runtime
-    global _ingestion, _provider_http_client, _hermes_http_client
+    global _ingestion, _provider_http_client, _hermes_http_client, _hermes_proposal_ok
     global _promotion_controller, _hermes_loop
     global _calendar, _dataset_service, _background_tasks
 
     _promotion_controller = None
     _hermes_loop = None
     _hermes_http_client = None
+    _hermes_proposal_ok = None
     _calendar = EconomicCalendar()
     _dataset_service = None
     _background_tasks = []
@@ -767,6 +769,10 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 api_key=_settings.hermes_bridge_token.get_secret_value(),
                 http_client=_hermes_http_client,
             )
+            try:
+                _hermes_proposal_ok = await hermes_agent.probe_authenticated()
+            except Exception:
+                _hermes_proposal_ok = False
         _hermes_loop = HermesResearchLoop(
             proposal_generator=StrategyProposalGenerator(
                 hermes_gateway, hermes_client=hermes_agent
@@ -902,7 +908,11 @@ async def health() -> dict[str, Any]:
         backtests, web_calls = _quota_repo.get_usage(today)
         results["quota"] = {"backtests_today": backtests, "web_calls_today": web_calls}
 
-    results["bot_running"] = _trading_runtime.status().running if _trading_runtime else False
+    results["bot_running"] = (
+        (_runtime_facade or _trading_runtime).status().running
+        if (_runtime_facade or _trading_runtime)
+        else False
+    )
     results["market"] = _market().availability
     return results
 
@@ -912,7 +922,11 @@ async def app_status() -> dict[str, Any]:
     """Runtime mode, active strategy, and autonomy configuration."""
     settings = _require(_settings, "settings")
     active_genome = _genome_repo.get_active_genome() if _genome_repo else None
-    runtime_status = _trading_runtime.status() if _trading_runtime else None
+    runtime_status = (
+        _runtime_facade.status()
+        if _runtime_facade is not None
+        else (_trading_runtime.status() if _trading_runtime else None)
+    )
     market = _market()
     return _env(
         {

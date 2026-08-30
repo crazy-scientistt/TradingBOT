@@ -70,7 +70,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                 style={{
                   background: 'transparent',
                   border: 'none',
-                  color: isActive ? '#f0b90b' : '#676b78',
+                  color: isActive ? 'var(--gold-primary)' : '#676b78',
                   fontSize: '11px',
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
@@ -86,7 +86,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
                     left: 0,
                     right: 0,
                     height: '2px',
-                    backgroundColor: '#f0b90b',
+                    backgroundColor: 'var(--gold-primary)',
                     borderRadius: '1px'
                   }} />
                 )}
@@ -150,7 +150,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
           <path
             d={linePath}
             fill="none"
-            stroke="#f0b90b"
+            stroke="var(--gold-primary)"
             strokeWidth="1.8"
             strokeLinecap="round"
             strokeLinejoin="round"

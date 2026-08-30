@@ -13,7 +13,7 @@ from goldguard.domain.enums import BotState, ExecutionMode, ProductKind
 from goldguard.domain.models import Candle, Quote
 from goldguard.domain.profile import AutonomousProfile
 from goldguard.execution.models import MarketScope
-from goldguard.market.catalog import SymbolCatalog
+from goldguard.market.catalog import SymbolCatalog, SymbolNotEligible
 from goldguard.memory.recorder import LearningRecorder
 from goldguard.risk.circuit_breaker import CircuitBreaker
 from goldguard.services.emergency import EmergencyService
@@ -191,12 +191,25 @@ class AutonomousRuntime:
             return
         if not self._supervisor.new_entries_allowed(scope):
             return
+        if not await self._catalog_allows(candle.symbol):
+            return
         self._planner.set_cash(self._spot.cash)
         outcome = await self._coordinator.evaluate(scope, candle)
         if outcome.action == "ENTER":
             self._planner.mark_open(candle.symbol)
             self._mae[candle.symbol] = Decimal("0")
             self._mfe[candle.symbol] = Decimal("0")
+
+    async def _catalog_allows(self, symbol: str) -> bool:
+        if self._catalog.spot_client is None:
+            return True
+        try:
+            if self._catalog._snapshot is None:
+                await self._catalog.refresh()
+            self._catalog.require(ProductKind.SPOT, symbol)
+            return True
+        except (SymbolNotEligible, Exception):
+            return False
 
     async def _record_close(self, symbol: str, result: object) -> None:
         self._planner.mark_flat(symbol)

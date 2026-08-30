@@ -65,8 +65,8 @@ export const GenomeEditor: React.FC<GenomeEditorProps> = ({
               borderRadius: '5px',
               fontSize: '12px',
               border: 'none',
-              backgroundColor: viewMode === 'visual' ? 'rgba(240, 185, 11, 0.15)' : '#181a20',
-              color: viewMode === 'visual' ? '#f0b90b' : '#9498a4',
+              backgroundColor: viewMode === 'visual' ? 'rgba(61, 126, 255, 0.15)' : '#181a20',
+              color: viewMode === 'visual' ? 'var(--gold-primary)' : '#9498a4',
               cursor: 'pointer',
               fontWeight: 500,
             }}
@@ -84,8 +84,8 @@ export const GenomeEditor: React.FC<GenomeEditorProps> = ({
               borderRadius: '5px',
               fontSize: '12px',
               border: 'none',
-              backgroundColor: viewMode === 'json' ? 'rgba(240, 185, 11, 0.15)' : '#181a20',
-              color: viewMode === 'json' ? '#f0b90b' : '#9498a4',
+              backgroundColor: viewMode === 'json' ? 'rgba(61, 126, 255, 0.15)' : '#181a20',
+              color: viewMode === 'json' ? 'var(--gold-primary)' : '#9498a4',
               cursor: 'pointer',
               fontWeight: 500,
             }}
@@ -140,7 +140,7 @@ export const GenomeEditor: React.FC<GenomeEditorProps> = ({
           {/* Hypothesis & Scientific Evidence */}
           <div style={{ backgroundColor: '#121418', padding: '10px 12px', borderRadius: '6px', border: '1px solid #1c2028' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
-              <Award size={14} color="#f0b90b" />
+              <Award size={14} color="var(--gold-primary)" />
               <span style={{ fontSize: '12px', fontWeight: 600, color: '#e2e4e8' }}>Scientific Hypothesis</span>
             </div>
             <p style={{ margin: 0, fontSize: '12.5px', color: '#9498a4', lineHeight: 1.4 }}>
@@ -228,7 +228,7 @@ export const GenomeEditor: React.FC<GenomeEditorProps> = ({
               </div>
               <div>
                 <span style={{ fontSize: '11px', color: '#676b78', display: 'block' }}>Regime invalidation</span>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: genome.exit.regime_invalidation ? '#f0b90b' : '#9498a4', fontFamily: 'monospace' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: genome.exit.regime_invalidation ? 'var(--gold-primary)' : '#9498a4', fontFamily: 'monospace' }}>
                   {genome.exit.regime_invalidation ? 'Enabled' : 'Disabled'}
                 </span>
               </div>

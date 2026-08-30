@@ -36,7 +36,7 @@ export const ChartControls: React.FC<ChartControlsProps> = ({
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: isActive ? '#f0b90b' : '#9498a4',
+                color: isActive ? 'var(--gold-primary)' : '#9498a4',
                 fontSize: '12px',
                 fontWeight: isActive ? 600 : 400,
                 cursor: 'pointer',
@@ -53,7 +53,7 @@ export const ChartControls: React.FC<ChartControlsProps> = ({
                   left: 0,
                   right: 0,
                   height: '2px',
-                  backgroundColor: '#f0b90b',
+                  backgroundColor: 'var(--gold-primary)',
                   borderRadius: '1px'
                 }} />
               )}
@@ -73,7 +73,7 @@ export const ChartControls: React.FC<ChartControlsProps> = ({
               style={{
                 background: 'transparent',
                 border: 'none',
-                color: isActive ? '#f0b90b' : '#676b78',
+                color: isActive ? 'var(--gold-primary)' : '#676b78',
                 fontSize: '11.5px',
                 fontWeight: isActive ? 600 : 400,
                 cursor: 'pointer',

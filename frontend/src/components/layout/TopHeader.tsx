@@ -55,8 +55,8 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
         <span
           className="badge-paper"
           style={{
-            border: '1px solid rgba(240, 185, 11, 0.45)',
-            backgroundColor: 'rgba(240, 185, 11, 0.08)',
+            border: '1px solid rgba(61, 126, 255, 0.45)',
+            backgroundColor: 'rgba(61, 126, 255, 0.08)',
             color: 'var(--gold-primary)',
             padding: '5px 12px',
             borderRadius: '4px',
@@ -123,13 +123,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
                     color: p === selectedPair ? 'var(--gold-primary)' : '#cbd5e1',
                     fontWeight: p === selectedPair ? 600 : 400,
                     cursor: 'pointer',
-                    backgroundColor: p === selectedPair ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
+                    backgroundColor: p === selectedPair ? 'rgba(61, 126, 255, 0.08)' : 'transparent',
                     transition: 'background-color 0.15s ease',
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.06)')}
                   onMouseLeave={(e) =>
                     (e.currentTarget.style.backgroundColor =
-                      p === selectedPair ? 'rgba(240, 185, 11, 0.08)' : 'transparent')
+                      p === selectedPair ? 'rgba(61, 126, 255, 0.08)' : 'transparent')
                   }
                 >
                   {p}
