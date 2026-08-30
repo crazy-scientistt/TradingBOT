@@ -123,7 +123,7 @@ export const AgentActivity: React.FC = () => {
             padding: '24px', textAlign: 'center', color: '#9498a4', fontSize: '13px', lineHeight: 1.6,
           }}>
             <div>The agent has not evaluated a closed candle yet.</div>
-            <div style={{ marginTop: '6px' }}>Press <strong style={{ color: '#10b981' }}>Start Paper Trading</strong> and the analysis will appear here.</div>
+            <div style={{ marginTop: '6px' }}>Set starting capital in Settings, press <strong style={{ color: '#10b981' }}>Start Paper Trading</strong>. Hermes researches, trades, and auto-promotes — no Promote click.</div>
             <div style={{ marginTop: '10px', fontSize: '11px', color: '#676b78' }}>
               Only the latest 30 events are shown to keep the page light. Full history is saved durably in the database (Decisions / Trades tabs).
             </div>

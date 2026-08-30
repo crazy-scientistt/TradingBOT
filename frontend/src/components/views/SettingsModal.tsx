@@ -240,10 +240,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             <ShieldCheck size={18} color="#10b981" />
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#10b981' }}>
-                Saves in the app
+                You set capital. Hermes does the rest.
               </span>
               <span style={{ fontSize: '11px', color: '#9498a4' }}>
-                Changing starting balance opens a new paper session. Do not edit Railway env vars for this.
+                Save starting balance, then press Start. Hermes researches, trades paper, learns, and auto-promotes when gates pass.
               </span>
             </div>
           </div>

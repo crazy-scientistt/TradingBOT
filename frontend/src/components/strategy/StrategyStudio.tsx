@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   Play,
-  CheckCircle,
   GitCompare,
   TrendingUp,
   Layers,
@@ -15,13 +14,15 @@ import { api } from '../../api/client';
 interface StrategyStudioProps {
   initialGenomes?: StrategyGenome[];
   activeGenomeId?: string;
-  onPromote?: (genomeId: string) => void;
+}
+
+interface BacktestTrade {
+  pnl?: number;
 }
 
 export const StrategyStudio: React.FC<StrategyStudioProps> = ({
   initialGenomes,
   activeGenomeId: propActiveGenomeId,
-  onPromote: propOnPromote,
 }) => {
   let botContext: ReturnType<typeof useBot> | null = null;
   try {
@@ -30,17 +31,17 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
     // Isolated test environment
   }
 
-  const genomesList = initialGenomes || (botContext ? botContext.genomes : []);
-  const [genomes, setGenomes] = useState<StrategyGenome[]>(genomesList);
+  const genomes = initialGenomes || (botContext ? botContext.genomes : []);
   const activeId = propActiveGenomeId || (botContext ? botContext.activeGenomeId : 'trend-pullback-v1');
   const [selectedId, setSelectedId] = useState<string>(activeId);
   const [isRunningBacktest, setIsRunningBacktest] = useState(false);
-  const [backtestMetrics, setBacktestMetrics] = useState<BacktestPerformance | null>(null);
+  const [backtestMetrics, setBacktestMetrics] = useState<(BacktestPerformance & { trades?: BacktestTrade[] }) | null>(null);
   const [backtestError, setBacktestError] = useState<string | null>(null);
 
   const activeGenome = genomes.find((g) => g.genome_id === activeId) || genomes[0];
   const selectedGenome = genomes.find((g) => g.genome_id === selectedId) || activeGenome;
   const isCandidate = selectedGenome && activeGenome && selectedGenome.genome_id !== activeGenome.genome_id;
+  const autoOn = botContext?.runtimeStatus?.autopromotionEnabled ?? false;
 
   const handleRunBacktest = async () => {
     setIsRunningBacktest(true);
@@ -57,20 +58,6 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
       if (botContext) botContext.addToast('error', 'Backtest failed', msg);
     } finally {
       setIsRunningBacktest(false);
-    }
-  };
-
-  const handleSave = async (updated: StrategyGenome) => {
-    const next = genomes.map((g) => (g.genome_id === updated.genome_id ? updated : g));
-    setGenomes(next);
-    try {
-      await api.saveGenome(updated);
-      if (botContext) {
-        botContext.addToast('success', 'Genome Saved', `Saved configuration for ${updated.genome_id}`);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Save failed';
-      if (botContext) botContext.addToast('error', 'Save failed', msg);
     }
   };
 
@@ -91,6 +78,27 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
     }
   };
 
+  const equityPoints = (() => {
+    const trades = backtestMetrics?.trades;
+    if (!trades || trades.length === 0) return '';
+    let equity = 100;
+    const values = [equity];
+    for (const trade of trades) {
+      equity += Number(trade.pnl ?? 0);
+      values.push(equity);
+    }
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    return values
+      .map((value, index) => {
+        const x = (index / (values.length - 1)) * 500;
+        const y = 70 - ((value - min) / span) * 60;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(' ');
+  })();
+
   return (
     <div
       style={{
@@ -101,7 +109,6 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
         color: '#e2e4e8',
       }}
     >
-      {/* Top Banner */}
       <div
         style={{
           display: 'flex',
@@ -111,21 +118,39 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
           padding: '12px 16px',
           borderRadius: '8px',
           border: '1px solid #1e222b',
+          gap: '12px',
+          flexWrap: 'wrap',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Sparkles size={20} color="var(--gold-primary)" />
           <div>
             <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: '#f8fafc' }}>
-              Strategy Studio &amp; Genome Lab
+              Strategy Studio & Genome Lab
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Edit the live genome Hermes mutates. Compare indicators, backtest, then promote a candidate.
+              Read-only view of the genome Hermes mutates. Hermes researches, shadow-tests,
+              and auto-promotes when every gate passes. You only set capital and press Start.
             </span>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span
+            style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              padding: '6px 8px',
+              borderRadius: '4px',
+              border: autoOn ? '1px solid rgba(16,185,129,0.4)' : '1px solid #2d3139',
+              color: autoOn ? '#10b981' : '#9498a4',
+              backgroundColor: autoOn ? 'rgba(16,185,129,0.08)' : '#181a20',
+              textTransform: 'uppercase',
+            }}
+          >
+            {autoOn ? 'Hermes auto-promotes' : 'Auto-promote after Start'}
+          </span>
           <button
             type="button"
             onClick={handleRunBacktest}
@@ -146,39 +171,16 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
             }}
           >
             <Play size={14} fill="#000" />
-            {isRunningBacktest ? 'Simulating Engine...' : 'Run Backtest'}
+            {isRunningBacktest ? 'Simulating Engine...' : 'Inspect backtest'}
           </button>
-          {isCandidate && selectedGenome && (
-            <button
-              type="button"
-              onClick={() => {
-                if (propOnPromote) propOnPromote(selectedGenome.genome_id);
-                else if (botContext) void botContext.promoteGenome(selectedGenome.genome_id);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '8px 14px',
-                backgroundColor: '#181a20',
-                color: '#e2e4e8',
-                fontWeight: 700,
-                fontSize: '13px',
-                borderRadius: '6px',
-                border: '1px solid #2d3139',
-                cursor: 'pointer',
-              }}
-            >
-              Promote candidate
-            </button>
-          )}
-
         </div>
       </div>
 
-      {/* Main Grid: Left (Genome selector) + Right (Editor & Backtest) */}
+      {backtestError && (
+        <div role="alert" style={{ color: '#fca5a5', fontSize: '12px' }}>{backtestError}</div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '12px' }}>
-        {/* Left Column: Genome List */}
         <div
           style={{
             display: 'flex',
@@ -251,7 +253,6 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
           })}
         </div>
 
-        {/* Right Column: Editor + Diff + Performance */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {isCandidate && (
             <div
@@ -272,18 +273,13 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 </span>
               </div>
               <span style={{ fontSize: '11.5px', color: '#9498a4' }}>
-                Refinements bounded by Domain Bounds
+                Hermes owns mutations. Promotion is automatic.
               </span>
             </div>
           )}
 
-          {/* Genome Editor */}
-          <GenomeEditor
-            genome={selectedGenome}
-            onChange={(updated) => handleSave(updated)}
-          />
+          <GenomeEditor genome={selectedGenome} readOnly />
 
-          {/* Performance & Metrics Section */}
           {backtestMetrics && (
             <div
               style={{
@@ -299,7 +295,7 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <TrendingUp size={16} color="#10b981" />
                 <span style={{ fontSize: '13.5px', fontWeight: 600, color: '#f8fafc' }}>
-                  Deterministic Backtest Metrics (IS &amp; OOS Friction Included)
+                  Deterministic Backtest Metrics (IS & OOS Friction Included)
                 </span>
               </div>
 
@@ -348,29 +344,34 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
                 </div>
               </div>
 
-              {/* Inline Simulated Curve */}
-              <div style={{ marginTop: '6px' }}>
-                <span style={{ fontSize: '11.5px', color: '#676b78', marginBottom: '6px', display: 'block' }}>
-                  Equity Progression (Simulated Friction)
-                </span>
-                <svg
-                  viewBox="0 0 500 80"
-                  style={{
-                    width: '100%',
-                    height: '80px',
-                    backgroundColor: '#121418',
-                    borderRadius: '6px',
-                    padding: '6px',
-                  }}
-                >
-                  <polyline
-                    fill="none"
-                    stroke="#10b981"
-                    strokeWidth="2"
-                    points="0,70 50,65 100,58 150,62 200,45 250,48 300,32 350,35 400,20 450,22 500,10"
-                  />
-                </svg>
-              </div>
+              {equityPoints ? (
+                <div style={{ marginTop: '6px' }}>
+                  <span style={{ fontSize: '11.5px', color: '#676b78', marginBottom: '6px', display: 'block' }}>
+                    Equity from this backtest (fees included)
+                  </span>
+                  <svg
+                    viewBox="0 0 500 80"
+                    style={{
+                      width: '100%',
+                      height: '80px',
+                      backgroundColor: '#121418',
+                      borderRadius: '6px',
+                      padding: '6px',
+                    }}
+                  >
+                    <polyline
+                      fill="none"
+                      stroke="#10b981"
+                      strokeWidth="2"
+                      points={equityPoints}
+                    />
+                  </svg>
+                </div>
+              ) : (
+                <div style={{ fontSize: '12px', color: '#676b78' }}>
+                  No trade series returned for this backtest, so no equity curve is drawn.
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -144,6 +144,7 @@ const QualificationStrip: React.FC = () => {
       {runtimeStatus.latestLesson ? <span>LAST {runtimeStatus.latestLesson}</span> : null}
       {runtimeStatus.lastGate ? <span>GATE {runtimeStatus.lastGate}</span> : null}
       {runtimeStatus.uiRevision ? <span>REV {runtimeStatus.uiRevision}</span> : null}
+      <span>{runtimeStatus.autopromotionEnabled ? 'AUTOPROMOTE ON' : 'AUTOPROMOTE AFTER START'}</span>
       <span>LIVE OFF</span>
     </div>
   );

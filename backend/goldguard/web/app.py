@@ -374,26 +374,33 @@ async def _dataset_worker() -> None:
             await asyncio.sleep(24 * 60 * 60)
 
 
+async def _run_hermes_cycle() -> None:
+    """One Hermes iteration. Promotion commits only after Start enables autopromotion."""
+    if _hermes_loop is None or not _is_full_autonomy():
+        return
+    try:
+        market = _market()
+        candles, _dataset_id = _research_candles(market)
+        if len(candles) < 100:
+            return
+        result = await _hermes_loop.step(
+            candles_15m=candles,
+            market_summary=market.detail or "",
+            dataset=_hermes_dataset(market),
+            now=datetime.now(UTC),
+        )
+        logger.info("Hermes cycle: %s", result.status)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("Hermes cycle failed: %s", exc)
+
+
 async def _hermes_worker() -> None:
-    await asyncio.sleep(120)
+    await asyncio.sleep(15)
     while True:
-        try:
-            if _hermes_loop is not None and _is_full_autonomy():
-                market = _market()
-                candles, _dataset_id = _research_candles(market)
-                if len(candles) >= 100:
-                    result = await _hermes_loop.step(
-                        candles_15m=candles,
-                        market_summary=market.detail or "",
-                        dataset=_hermes_dataset(market),
-                        now=datetime.now(UTC),
-                    )
-                    logger.info("Hermes background step: %s", result.status)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.warning("Hermes background step failed: %s", exc)
-        await asyncio.sleep(3 * 60 * 60)
+        await _run_hermes_cycle()
+        await asyncio.sleep(15 * 60)
 
 
 def _observe_canary() -> dict[str, Any]:
@@ -983,6 +990,9 @@ async def app_status() -> dict[str, Any]:
     extra["latest_lesson"] = latest_lesson
     extra["latest_lesson_trade"] = latest_trade
     extra["last_gate"] = last_gate
+    extra["autopromotion_enabled"] = bool(
+        _hermes_loop is not None and _hermes_loop.config.autopromotion_enabled
+    )
     return _env(
         {
             "environment": settings.environment,
@@ -2431,6 +2441,11 @@ async def start_bot() -> dict[str, str]:
         runtime.start()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if _autonomy_repo is not None and not _autonomy_repo.is_full_autonomy():
+        _autonomy_repo.restore()
+    if _hermes_loop is not None:
+        _hermes_loop.set_autopromotion(True)
+        asyncio.create_task(_run_hermes_cycle(), name="goldguard-hermes-on-start")
     asyncio.create_task(_refresh_ai_context(), name="goldguard-context-on-start")
     return {"status": "started"}
 
@@ -2455,6 +2470,8 @@ async def stop_bot() -> dict[str, str]:
         runtime.stop()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if _hermes_loop is not None:
+        _hermes_loop.set_autopromotion(False)
     return {"status": "stopped"}
 
 

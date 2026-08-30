@@ -78,6 +78,7 @@ export interface StatusResponse {
   last_gate?: string | null;
   canary_stage?: string | null;
   ui_revision?: string | null;
+  autopromotion_enabled?: boolean;
 }
 
 export interface Quote {

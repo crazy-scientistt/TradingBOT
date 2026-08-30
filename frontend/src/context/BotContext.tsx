@@ -51,6 +51,7 @@ export interface RuntimeStatus {
   lastGate: string | null;
   uiRevision: string | null;
   scopes: string[];
+  autopromotionEnabled: boolean;
 }
 
 export interface BotContextType {
@@ -148,6 +149,7 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     lastGate: status?.last_gate ?? null,
     uiRevision: status?.ui_revision ?? null,
     scopes: status?.scopes ?? [],
+    autopromotionEnabled: Boolean(status?.autopromotion_enabled),
   };
 };
 

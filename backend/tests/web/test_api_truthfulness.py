@@ -318,6 +318,23 @@ def test_preflight_blocks_start_and_explains_why(client: TestClient) -> None:
     assert response.json()["detail"]
 
 
+def test_start_enables_hermes_autopromotion(client, monkeypatch) -> None:
+    from goldguard.web import app as app_module
+
+    async def clear_preflight() -> list:
+        return []
+
+    monkeypatch.setattr(app_module, "_preflight_checks", clear_preflight)
+    assert app_module._hermes_loop is not None
+    assert app_module._hermes_loop.config.autopromotion_enabled is False
+
+    response = client.post("/api/bot/start")
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] in {"started", "already_running"}
+    assert app_module._hermes_loop.config.autopromotion_enabled is True
+    body = _envelope(client.get("/api/status"))
+    assert body["data"]["autopromotion_enabled"] is True
+
 def test_emergency_stop_cannot_be_cleared_by_start(client: TestClient) -> None:
     assert client.post("/api/bot/stop").status_code == 200
     assert _envelope(client.get("/api/bot/status"))["data"]["halted"] is True

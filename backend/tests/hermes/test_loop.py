@@ -560,3 +560,63 @@ async def test_hermes_validation_failure_reports_quota_after_evaluation(database
     assert result.status == "val_failed"
     assert QuotaRepository(database).get_usage("2026-08-26") == (2, 0)
     assert result.quota_used == (2, 0)
+
+
+@pytest.mark.asyncio
+async def test_unbound_shadow_is_held_as_shadow_not_rejected(database: Database) -> None:
+    class Unbound:
+        def evaluate(self, candidate, dataset, baseline, **kwargs):  # type: ignore[no-untyped-def]
+            return PromotionDecision(
+                promoted=False,
+                stage="candidate",
+                candidate_id=candidate.genome_id,
+                candidate_hash="candidate-hash",
+                baseline_id=baseline.genome_id,
+                baseline_hash="baseline-hash",
+                dataset_id=dataset.dataset_id,
+                detail="paper shadow evidence is not candidate-bound",
+                rejection_reasons=("SHADOW_EVIDENCE_UNBOUND",),
+            )
+
+    candles = generate_market_data(num_days=10)
+    dataset = EvidenceDataset(
+        dataset_id="app:binance-rest:observed",
+        verified=True,
+        candles_15m=tuple(candles),
+        shadow=ShadowEvidence(days=0, net_pnl=Decimal("0"), trades=0, slippage_acceptable=False),
+    )
+    transport = _gateway_returning(VALID_PROPOSAL)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        loop = _loop(
+            database,
+            http_client=http_client,
+            controller=Unbound(),
+            engine=_StubEngine(),
+            harness=_StubHarness(),
+            autopromotion_enabled=True,
+        )
+        result = await loop.step(
+            candles_15m=candles,
+            dataset=dataset,
+            now=datetime(2026, 8, 26, 12, tzinfo=UTC),
+        )
+    assert result.status == "shadow_pending"
+    assert result.candidate_genome_id is not None
+    assert GenomeRepository(database).get_genome_status(result.candidate_genome_id) == "shadow"
+
+
+def test_start_flag_turns_autopromotion_on(database: Database) -> None:
+    loop = HermesResearchLoop(
+        proposal_generator=None,  # type: ignore[arg-type]
+        backtest_engine=None,  # type: ignore[arg-type]
+        wf_harness=None,  # type: ignore[arg-type]
+        promotion_pipeline=None,  # type: ignore[arg-type]
+        genome_repo=GenomeRepository(database),
+        quota_repo=QuotaRepository(database),
+        memory_bank=MemoryBank(ReflectionRepository(database)),
+    )
+    assert loop.config.autopromotion_enabled is False
+    loop.set_autopromotion(True)
+    assert loop.config.autopromotion_enabled is True
+    loop.set_autopromotion(False)
+    assert loop.config.autopromotion_enabled is False

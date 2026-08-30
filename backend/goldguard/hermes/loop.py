@@ -1,6 +1,6 @@
 from collections import deque
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import uuid4
@@ -29,6 +29,8 @@ class PromotionJudge(Protocol):
         candidate: StrategyGenome,
         dataset: EvidenceDataset,
         baseline: StrategyGenome,
+        *,
+        commit: bool = True,
     ) -> PromotionDecision: ...
 
 
@@ -49,6 +51,15 @@ class LoopIterationResult:
     gate_results: dict[str, Any] = field(default_factory=dict)
     quota_used: tuple[int, int] = (0, 0)
     circuit_breaker_tripped: bool = False
+
+
+_SHADOW_HOLD_REASONS = frozenset(
+    {
+        "SHADOW_EVIDENCE_UNBOUND",
+        "INSUFFICIENT_SHADOW_DURATION",
+        "SHADOW_EVIDENCE_MISMATCH",
+    }
+)
 
 
 class HermesResearchLoop:
@@ -83,6 +94,10 @@ class HermesResearchLoop:
         self._steps_today = 0
         self.last_result: LoopIterationResult | None = None
         self.journal: deque[dict[str, Any]] = deque(maxlen=30)
+
+    def set_autopromotion(self, enabled: bool) -> None:
+        """Paper Start turns this on. Hermes then promotes without a human click."""
+        self.config = replace(self.config, autopromotion_enabled=bool(enabled))
 
     async def step(
         self,
@@ -243,6 +258,28 @@ class HermesResearchLoop:
             )
             fresh_usage = self.quota_repo.get_usage(date_str)
             if not decision.promoted:
+                hold_reasons = _SHADOW_HOLD_REASONS.intersection(decision.rejection_reasons)
+                if hold_reasons:
+                    self.genome_repo.update_status(cand_id, "shadow")
+                    self.consecutive_failures = 0
+                    return LoopIterationResult(
+                        iteration_id=iteration_id,
+                        status="shadow_pending",
+                        candidate_genome_id=cand_id,
+                        gate_results={
+                            **decision.gate_reports,
+                            "reasons": list(decision.rejection_reasons),
+                            "hypothesis": candidate_genome.hypothesis,
+                            "title": candidate_genome.title,
+                            "evidence_refs": list(candidate_genome.evidence_refs),
+                            "detail": (
+                                "Hermes is shadow-testing this candidate. "
+                                "It is not the active strategy until gates pass."
+                            ),
+                        },
+                        quota_used=fresh_usage,
+                        circuit_breaker_tripped=False,
+                    )
                 self.consecutive_failures = 0
                 return LoopIterationResult(
                     iteration_id=iteration_id,
@@ -359,10 +396,6 @@ class HermesResearchLoop:
         # Success on the screening gates. The loop itself may never promote: when a
         # controller is attached it is the sole authority, re-running the full gate
         # sequence (including the sealed holdout) and opening the canary.
-        # ponytail: with a controller attached the dev/validation backtests run twice per
-        # candidate — once here, once inside the controller. Promotion runs at most once a
-        # day, so pass the screening results through if that ever stops being true.
-        # Success: reset consecutive failures
         self.consecutive_failures = 0
         return LoopIterationResult(
             iteration_id=iteration_id,

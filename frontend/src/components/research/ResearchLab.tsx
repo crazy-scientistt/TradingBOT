@@ -94,7 +94,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
               Hermes Autonomous Research Laboratory
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Open notebook of what Hermes proposed, why it was held, and lessons from closed trades.
+              Hermes already researches after Start. This button is an optional inspect of one cycle, not a required click.
               {lastLabel ? ` · last: ${lastLabel}` : ''}
             </span>
           </div>
@@ -111,7 +111,7 @@ export const ResearchLab: React.FC<ResearchLabProps> = ({
           }}
         >
           <Sparkles size={14} fill="#000" />
-          {isRunning ? 'Hermes Reasoning...' : 'Run research now'}
+          {isRunning ? 'Hermes Reasoning...' : 'Inspect one cycle'}
         </button>
       </div>
 

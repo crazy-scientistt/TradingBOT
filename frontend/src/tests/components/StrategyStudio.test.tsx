@@ -79,6 +79,7 @@ describe('StrategyStudio', () => {
 
     expect(screen.getByText('candidate')).toBeInTheDocument();
     expect(screen.getByText(/Diff vs Active/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Promote candidate/i })).not.toBeInTheDocument();
   });
 
   it('triggers inline backtest and displays performance metrics', async () => {
@@ -99,7 +100,7 @@ describe('StrategyStudio', () => {
         activeGenomeId="trend-pullback-v1"
       />
     );
-    const runBtn = screen.getByRole('button', { name: /Run Backtest/i });
+    const runBtn = screen.getByRole('button', { name: /Inspect backtest/i });
     fireEvent.click(runBtn);
 
     expect(await screen.findByText(/Win Rate/i)).toBeInTheDocument();

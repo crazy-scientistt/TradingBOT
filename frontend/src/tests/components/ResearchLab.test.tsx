@@ -61,7 +61,7 @@ describe('ResearchLab', () => {
         onRunStep={handleStep}
       />
     );
-    const stepBtn = screen.getByRole('button', { name: /Run research now/i });
+    const stepBtn = screen.getByRole('button', { name: /Inspect one cycle/i });
     fireEvent.click(stepBtn);
     expect(handleStep).toHaveBeenCalled();
   });
