@@ -12,7 +12,11 @@ REQUIRED_CHECKS = (
     "paper_spot",
     "paper_futures",
     "opencodex_model",
+    "hermes_http",
+    "hermes_proposal",
     "hermes_memory_restart",
+    "dataset_verified",
+    "reflection_persist",
     "promotion_rollback",
     "telegram_test",
     "database_restart",
@@ -61,6 +65,9 @@ async def collect_stack_diagnostics(
     database_ready: bool,
     paper_broker_ready: bool,
     http_client: httpx.AsyncClient | None = None,
+    dataset_status: str = "UNKNOWN",
+    reflection_count: int | None = None,
+    hermes_proposal_ok: bool | None = None,
 ) -> dict[str, Any]:
     """Honest local/Railway stack report. Missing probes stay failed, never auto-pass."""
 
@@ -118,6 +125,7 @@ async def collect_stack_diagnostics(
 
         hermes_url = settings.hermes_base_url
         if not hermes_url or not settings.hermes_bridge_token:
+            checks.append(_check("hermes_http", "fail", "HERMES_UNCONFIGURED"))
             checks.append(_check("hermes_memory_restart", "fail", "HERMES_UNCONFIGURED"))
             blockers.append("HERMES_UNCONFIGURED")
         else:
@@ -132,10 +140,40 @@ async def collect_stack_diagnostics(
                 if ok:
                     break
             if ok:
-                checks.append(_check("hermes_memory_restart", "pass", detail))
+                checks.append(_check("hermes_http", "pass", detail))
+                checks.append(
+                    _check(
+                        "hermes_memory_restart",
+                        "not_run",
+                        "HTTP health is not memory or learning proof",
+                    )
+                )
             else:
+                checks.append(_check("hermes_http", "fail", f"HERMES_{detail}"))
                 checks.append(_check("hermes_memory_restart", "fail", f"HERMES_{detail}"))
                 blockers.append("HERMES_UNREACHABLE")
+
+        if hermes_proposal_ok is True:
+            checks.append(_check("hermes_proposal", "pass", "authenticated proposal round trip"))
+        elif hermes_proposal_ok is False:
+            checks.append(_check("hermes_proposal", "fail", "HERMES_PROPOSAL_FAILED"))
+            blockers.append("HERMES_PROPOSAL_FAILED")
+        else:
+            checks.append(_check("hermes_proposal", "not_run", "awaiting Hermes proposal round trip"))
+
+        if str(dataset_status) == "VERIFIED":
+            checks.append(_check("dataset_verified", "pass", "VERIFIED"))
+        else:
+            checks.append(_check("dataset_verified", "fail", str(dataset_status)))
+            if str(dataset_status) in {"CORRUPT", "DOWNLOADING", "UNKNOWN"}:
+                blockers.append("DATASET_NOT_VERIFIED")
+
+        if reflection_count is None:
+            checks.append(_check("reflection_persist", "not_run", "awaiting closed paper trade"))
+        else:
+            checks.append(
+                _check("reflection_persist", "pass", f"reflections={reflection_count}")
+            )
 
         checks.append(
             _check("promotion_rollback", "not_run", "awaiting paper qualification")

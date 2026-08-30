@@ -44,6 +44,8 @@ from goldguard.context.engine import ContextEngine
 from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.context.sources import OpenCodexSearchProvider
 from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
+from goldguard.domain.enums import StrategyMode
+from goldguard.domain.profile import default_autonomous_profile
 from goldguard.hermes.bindings import build_tool_bindings
 from goldguard.hermes.client import HermesClient
 from goldguard.hermes.generator import StrategyProposalGenerator
@@ -68,6 +70,7 @@ from goldguard.services.promotion_controller import (
     ShadowEvidence,
 )
 from goldguard.services.runtime import TradingRuntime
+from goldguard.services.runtime_facade import RuntimeFacade
 from goldguard.services.settings_service import (
     SettingsService,
     configure_settings_service,
@@ -143,6 +146,7 @@ _broker: PaperBroker | None = None
 _risk_engine: RiskEngine | None = None
 _runtime: GenomeRuntime | None = None
 _trading_runtime: TradingRuntime | None = None
+_runtime_facade: RuntimeFacade | None = None
 _backtest_engine: BacktestEngine | None = None
 _bot_state_machine: StateMachine | None = None
 _ingestion: MarketIngestionService | None = None
@@ -519,6 +523,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     global _settings, _db, _genome_repo, _ledger_repo, _candle_repo
     global _quota_repo, _provider_repo, _reflection_repo, _autonomy_repo, _promotion_repo
     global _broker, _risk_engine, _runtime, _trading_runtime, _backtest_engine, _bot_state_machine
+    global _runtime_facade
     global _ingestion, _provider_http_client, _hermes_http_client
     global _promotion_controller, _hermes_loop
     global _calendar, _dataset_service, _background_tasks
@@ -696,6 +701,12 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             calendar=_calendar,
             reflection_repo=_reflection_repo,
         )
+        active_profile = default_autonomous_profile()
+        if _profile_repo is not None:
+            stored = _profile_repo.active()
+            if stored is not None:
+                active_profile = stored.profile
+        _runtime_facade = RuntimeFacade(profile=active_profile, legacy=_trading_runtime)
 
     # Hermes and promotion are built from the same durable repositories as the runtime.
     # The loop receives verified market data at each step; it never manufactures a series.
@@ -744,7 +755,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 http_client=_hermes_http_client,
             )
         _hermes_loop = HermesResearchLoop(
-            proposal_generator=StrategyProposalGenerator(hermes_gateway, hermes_client=hermes_agent),
+            proposal_generator=StrategyProposalGenerator(
+                hermes_gateway, hermes_client=hermes_agent
+            ),
             backtest_engine=_backtest_engine,
             wf_harness=WalkForwardHarness(
                 FrictionConfig(
@@ -762,6 +775,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 max_iterations_per_day=8,
                 max_backtest_calls=_settings.research_backtest_max_per_day,
                 max_web_calls=_settings.research_web_calls_max_per_day,
+                autopromotion_enabled=_settings.autopromotion_enabled,
             ),
         )
         evidence_repo = EvidenceRepository(_db) if _db is not None else None
@@ -788,6 +802,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             candle_repo=_candle_repo,
         )
         await _ingestion.start()
+        if _runtime_facade is not None:
+            _ingestion.set_aux_enabled(_runtime_facade.owner is StrategyMode.AUTONOMOUS)
 
     if _settings is not None and _settings.environment != "test":
         _background_tasks = [
@@ -897,6 +913,21 @@ async def app_status() -> dict[str, Any]:
             "market_verified": market.verified,
             "canary": _observe_canary(),
             "degraded_reasons": list(runtime_status.degraded_reasons) if runtime_status else [],
+            **(
+                _runtime_facade.describe(
+                    genome_id=active_genome.genome_id if active_genome else None,
+                    reflection_count=(
+                        len(_reflection_repo.list_reflections(limit=200))
+                        if _reflection_repo is not None
+                        else 0
+                    ),
+                    dataset_status=_dataset_status_label(),
+                    hermes_status="configured" if settings.hermes_base_url else "unconfigured",
+                    live_enabled=settings.live_capability_enabled,
+                )
+                if _runtime_facade is not None
+                else {}
+            ),
         },
         source="runtime",
         availability="available" if runtime_status else "degraded",
@@ -907,6 +938,20 @@ async def app_status() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 2. KPI cards
 # ---------------------------------------------------------------------------
+def _dataset_status_label() -> str:
+    settings = _settings
+    if settings is None:
+        return "UNKNOWN"
+    path = settings.data_dir / "market" / settings.symbol / "manifest.json"
+    if not path.exists():
+        return "UNKNOWN"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "CORRUPT"
+    return str(payload.get("status") or "UNKNOWN")
+
+
 def _max_drawdown_percent(values: list[float]) -> float | None:
     """Peak-to-trough decline across recorded snapshots. None until there is history."""
     if len(values) < 2:
@@ -2033,7 +2078,7 @@ async def bot_status() -> dict[str, Any]:
 @app.post("/api/bot/start")
 async def start_bot() -> dict[str, str]:
     """Arm the paper runtime. Refuses with a readable reason when a gate is not clear."""
-    runtime = get_trading_runtime()
+    runtime = _runtime_facade or get_trading_runtime()
     current = runtime.status()
     if current.running and not current.paused:
         return {"status": "already_running"}

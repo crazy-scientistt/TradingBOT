@@ -59,6 +59,11 @@ export interface StatusResponse {
   market_verified?: boolean;
   degraded_reasons?: string[];
   canary?: Record<string, unknown>;
+  execution_owner?: string;
+  scopes?: string[];
+  reflection_count?: number;
+  dataset_status?: string;
+  hermes_status?: string;
 }
 
 export interface Quote {

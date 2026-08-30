@@ -16,6 +16,7 @@ from goldguard.context.playbook import ChecklistInputs, ChecklistResult
 from goldguard.domain.defaults import SAFE_DEFAULT_V1
 from goldguard.domain.enums import AiDecision, CandidateAction, ChecklistAction
 from goldguard.domain.models import Candle, Quote
+from goldguard.hermes.client import HermesClient
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
 from goldguard.market.binance import SymbolFilters
@@ -204,7 +205,13 @@ async def test_end_to_end_shadow_trading_and_research_cycle(database: Database) 
             route_service=route_service,
             gateway_client=gateway_client,
         )
-        hermes_generator = StrategyProposalGenerator(gateway_client=gateway_client)
+        hermes_generator = StrategyProposalGenerator(
+            hermes_client=HermesClient(
+                base_url="http://hermes.test",
+                api_key="test-key",
+                http_client=http_client,
+            )
+        )
 
         # Test live async decision veto engine directly
         dec_req = DecisionRequest(

@@ -157,6 +157,12 @@ async def get_diagnostics() -> dict[str, Any]:
         database_ready=app_module._db is not None,
         paper_broker_ready=app_module._broker is not None,
         http_client=app_module._provider_http_client,
+        dataset_status=getattr(app_module, "_dataset_status_label", lambda: "UNKNOWN")(),
+        reflection_count=(
+            len(app_module._reflection_repo.list_reflections(limit=200))
+            if app_module._reflection_repo is not None
+            else None
+        ),
     )
     blockers = list(data.get("blockers") or [])
     return _envelope(

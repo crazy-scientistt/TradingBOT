@@ -15,6 +15,8 @@ class RuntimeSafetySnapshot:
     has_open_entry_orders: bool
     live_armed: bool
     account_equity_usdt: Decimal
+    running: bool = False
+    paused: bool = True
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,13 @@ class SettingsService:
             blockers.append("Cannot change profile with an open position")
         if runtime.has_open_entry_orders and not same_execution_settings:
             blockers.append("Cannot change profile with open entry orders")
+        if (
+            active is not None
+            and active.profile.strategy_mode != candidate.strategy_mode
+            and runtime.running
+            and not runtime.paused
+        ):
+            blockers.append("Cannot change execution owner while paper is running")
 
         equity = runtime.account_equity_usdt
         if not equity.is_finite() or equity < 0:

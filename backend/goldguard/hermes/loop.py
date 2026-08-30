@@ -37,6 +37,7 @@ class HermesLoopConfig:
     max_backtest_calls: int = 50
     max_web_calls: int = 20
     consecutive_failure_limit: int = 3
+    autopromotion_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,13 @@ class HermesResearchLoop:
             )
 
         if self.promotion_controller is not None and dataset is not None:
+            if not dataset.verified:
+                return LoopIterationResult(
+                    iteration_id=iteration_id,
+                    status="dataset_unverified",
+                    quota_used=self.quota_repo.get_usage(date_str),
+                    gate_results={"reason": "CORRUPT or unverified dataset cannot qualify Hermes"},
+                )
             set_budget = getattr(self.promotion_controller, "set_backtest_budget", None)
             if callable(set_budget):
                 set_budget(
@@ -189,6 +197,17 @@ class HermesResearchLoop:
                     },
                     quota_used=fresh_usage,
                     circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
+                )
+            if not self.config.autopromotion_enabled:
+                return LoopIterationResult(
+                    iteration_id=iteration_id,
+                    status="promotion_held",
+                    candidate_genome_id=cand_id,
+                    gate_results={
+                        **decision.gate_reports,
+                        "reason": "autopromotion_enabled is false",
+                    },
+                    quota_used=fresh_usage,
                 )
             self.consecutive_failures = 0
             return LoopIterationResult(

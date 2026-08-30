@@ -35,7 +35,11 @@ class RuntimeSupervisor:
         self._running = False
         self._daily_trade_count = 0
         self._stale_block = False
+        self._stale_block = False
         self._tasks: list[asyncio.Task[None]] = []
+        self._last_closed: dict[MarketScope, object] = {}
+        self._seen_closes: set[tuple[str, str]] = set()
+        self._learning = None
 
     def market_scopes(self) -> tuple[MarketScope, ...]:
         scopes: list[MarketScope] = []
@@ -104,12 +108,29 @@ class RuntimeSupervisor:
         try:
             while self._running:
                 for scope in self.market_scopes():
-                    if self.new_entries_allowed(scope):
-                        # Do not invent fake orders. Entries require a real planner.
-                        pass
+                    if not self.new_entries_allowed(scope):
+                        continue
+                    candle = self._last_closed.get(scope)
+                    if candle is None:
+                        continue
+                    close_key = (scope.symbol, str(getattr(candle, "close_time", "")))
+                    if close_key in self._seen_closes:
+                        continue
+                    self._seen_closes.add(close_key)
+                    try:
+                        await self._coordinator.evaluate(scope, candle)
+                    except Exception:
+                        continue
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
             raise
+
+    def note_closed_candle(
+        self, scope: MarketScope, candle: object, quote: object | None = None
+    ) -> None:
+        self._last_closed[scope] = candle
+        if quote is not None and scope in self._market._scopes:
+            self._market.record_quote(scope, quote)
 
     async def _protection_loop(self) -> None:
         try:
@@ -146,7 +167,17 @@ class RuntimeSupervisor:
     async def start(self) -> None:
         self._running = True
         self._stale_block = False
-        await self._market.start(self.market_scopes())
+        scopes: list[MarketScope] = []
+        for scope in self.market_scopes():
+            try:
+                if self._market.catalog._snapshot is None:
+                    await self._market.catalog.refresh()
+                self._market.catalog.require(scope.product, scope.symbol)
+            except Exception:
+                self.disable_scope(scope)
+                continue
+            scopes.append(scope)
+        await self._market.start(tuple(scopes))
         if not self._tasks:
             self._tasks = [
                 asyncio.create_task(self._entry_loop(), name="entry-loop"),

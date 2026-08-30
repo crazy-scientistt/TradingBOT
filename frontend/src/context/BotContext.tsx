@@ -42,6 +42,7 @@ export interface RuntimeStatus {
   marketVerified: boolean;
   marketSource: string | null;
   degradedReasons: string[];
+  executionOwner: string | null;
 }
 
 export interface BotContextType {
@@ -128,6 +129,7 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     marketVerified: Boolean(status?.market_verified),
     marketSource: status?.market_source ?? null,
     degradedReasons: [...new Set(degradedReasons.map(String))],
+    executionOwner: status?.execution_owner ?? null,
   };
 };
 

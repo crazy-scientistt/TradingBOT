@@ -32,8 +32,7 @@ from goldguard.services.coordinator import (
     ExitOutcome,
     TradingCoordinator,
 )
-from goldguard.memory.engine import MemoryBank
-from goldguard.memory.reflections import ReflectionEngine, TradeOutcome
+from goldguard.memory.recorder import LearningRecorder
 from goldguard.storage.database import Database
 from goldguard.storage.repositories import (
     AgentEventRepository,
@@ -149,7 +148,9 @@ class TradingRuntime:
         self._market_source = market_source
         self._market_verified = market_verified
         self._calendar = calendar
-        self._reflection_repo = reflection_repo
+        self._learning = (
+            LearningRecorder(reflection_repo) if reflection_repo is not None else None
+        )
         self._book_symbol = settings.symbol
         self._books_15m: dict[str, list[Candle]] = {settings.symbol: list(self._candles_15m)}
         self._books_1h: dict[str, list[Candle]] = {settings.symbol: list(self._candles_1h)}
@@ -234,6 +235,8 @@ class TradingRuntime:
         self._books_15m[self._book_symbol] = list(self._candles_15m)
         self._books_1h[self._book_symbol] = list(self._candles_1h)
         self._refresh_market_status()
+
+    def seed_symbol_history(
         self, symbol: str, candles_15m: list[Candle], candles_1h: list[Candle]
     ) -> None:
         self._books_15m[symbol] = list(candles_15m)
@@ -951,22 +954,16 @@ class TradingRuntime:
         self._record_trade_reflection(trade)
 
     def _record_trade_reflection(self, trade: ClosedPaperTrade) -> None:
-        if self._reflection_repo is None:
+        if self._learning is None:
             return
-        fees = trade.entry_fill.fee + trade.exit_fill.fee
-        outcome = TradeOutcome(
-            trade_id=self._stable_id("trade", trade.entry_fill.client_order_id),
-            namespace="forward",
-            hypothesis="paper closed cycle",
-            realized_pnl=trade.realized_pnl,
-            maximum_adverse_excursion=Decimal("0"),
-            maximum_favorable_excursion=Decimal("0"),
-            fees=fees,
-            exit_reason=trade.exit_reason.value,
-            regime_tags=(self._position_symbol or self._settings.symbol,),
+        trade_id = self._stable_id("trade", trade.entry_fill.client_order_id)
+        genome = self._coordinator.genome_repo.get_active_genome()
+        self._learning.record_closed_trade(
+            trade,
+            trade_id=trade_id,
+            symbol=self._position_symbol or self._book_symbol or self._settings.symbol,
+            genome_id=genome.genome_id if genome is not None else None,
         )
-        reflection = ReflectionEngine().create(outcome)
-        MemoryBank(self._reflection_repo).record_reflection(reflection)
 
     def _activate_book(self, symbol: str) -> None:
         if symbol == self._book_symbol:

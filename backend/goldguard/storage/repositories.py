@@ -1432,7 +1432,7 @@ class ReflectionRepository:
         with self.database.transaction() as connection:
             connection.execute(
                 """
-                INSERT INTO reflections(
+                INSERT OR IGNORE INTO reflections(
                     id, trade_id, namespace, lesson_code, lesson,
                     regime_tags_json, net_pnl_text, fee_drag_text,
                     mae_text, mfe_text, exit_reason, payload_json, created_at
@@ -1454,6 +1454,22 @@ class ReflectionRepository:
                     utc_now_iso(),
                 ),
             )
+
+    def get_by_trade_id(self, trade_id: str) -> dict[str, Any] | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reflections WHERE trade_id = ? LIMIT 1",
+                (trade_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": str(row["id"]),
+            "trade_id": str(row["trade_id"]),
+            "namespace": str(row["namespace"]),
+            "lesson_code": str(row["lesson_code"]),
+            "lesson": str(row["lesson"]),
+        }
 
     def list_reflections(
         self,

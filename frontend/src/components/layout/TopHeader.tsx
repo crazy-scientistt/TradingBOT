@@ -68,6 +68,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
           title="Live capability is not exposed by this dashboard"
         >
           {isPaperMode ? 'PAPER MODE' : 'LIVE MODE (READ-ONLY)'}
+          {runtimeStatus?.executionOwner ? ` · ${runtimeStatus.executionOwner.toUpperCase()}` : ''}
         </span>
 
         {/* Pair Selector Dropdown */}

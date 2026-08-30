@@ -2,11 +2,11 @@ import json
 
 import httpx
 import pytest
+from goldguard.hermes.client import HermesClient
 from goldguard.hermes.generator import (
     ProposalValidationError,
     StrategyProposalGenerator,
 )
-from goldguard.providers.client import GatewayClient
 from goldguard.strategy.genome import genome_hash, trend_pullback_v1
 
 
@@ -39,8 +39,12 @@ async def test_proposal_generator_creates_valid_bounded_genome() -> None:
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
-        generator = StrategyProposalGenerator(gateway_client=gateway)
+        hermes = HermesClient(
+            base_url="http://hermes.test",
+            api_key="test-key",
+            http_client=http_client,
+        )
+        generator = StrategyProposalGenerator(hermes_client=hermes)
         proposal_genome = await generator.propose(
             parent_genome=parent,
             reflections=[{"lesson_code": "CHOP_WHIPSAW", "lesson": "False breakout in low volume"}],
@@ -83,8 +87,12 @@ async def test_proposal_generator_rejects_out_of_bounds_parameter() -> None:
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
-        generator = StrategyProposalGenerator(gateway_client=gateway)
+        hermes = HermesClient(
+            base_url="http://hermes.test",
+            api_key="test-key",
+            http_client=http_client,
+        )
+        generator = StrategyProposalGenerator(hermes_client=hermes)
         with pytest.raises(ProposalValidationError, match="outside safe parameter bounds"):
             await generator.propose(
                 parent_genome=parent,
@@ -124,8 +132,12 @@ async def test_proposal_generator_rejects_more_than_two_mutations() -> None:
 
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
-        gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
-        generator = StrategyProposalGenerator(gateway_client=gateway)
+        hermes = HermesClient(
+            base_url="http://hermes.test",
+            api_key="test-key",
+            http_client=http_client,
+        )
+        generator = StrategyProposalGenerator(hermes_client=hermes)
         with pytest.raises(ProposalValidationError, match="maximum of 2 parameter changes"):
             await generator.propose(
                 parent_genome=parent,

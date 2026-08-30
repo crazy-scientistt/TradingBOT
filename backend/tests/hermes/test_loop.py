@@ -9,6 +9,7 @@ from goldguard.backtest.engine import BacktestEngine, BacktestResult
 from goldguard.backtest.metrics import PerformanceReport
 from goldguard.backtest.walk_forward import WalkForwardHarness, WalkForwardReport
 from goldguard.domain.models import Candle
+from goldguard.hermes.client import HermesClient
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
 from goldguard.memory.engine import MemoryBank
@@ -88,7 +89,13 @@ async def test_hermes_research_loop_quota_exhaustion_blocks_iteration(
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
         gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
-        generator = StrategyProposalGenerator(gateway_client=gateway)
+        generator = StrategyProposalGenerator(
+            hermes_client=HermesClient(
+                base_url="http://hermes.test",
+                api_key="test-key",
+                http_client=http_client,
+            )
+        )
 
         loop = HermesResearchLoop(
             proposal_generator=generator,
@@ -161,7 +168,13 @@ async def test_hermes_research_loop_successful_proposal_flow(database: Database)
     transport = httpx.MockTransport(mock_handler)
     async with httpx.AsyncClient(transport=transport) as http_client:
         gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
-        generator = StrategyProposalGenerator(gateway_client=gateway)
+        generator = StrategyProposalGenerator(
+            hermes_client=HermesClient(
+                base_url="http://hermes.test",
+                api_key="test-key",
+                http_client=http_client,
+            )
+        )
 
         loop = HermesResearchLoop(
             proposal_generator=generator,
@@ -292,13 +305,20 @@ def _loop(
     engine: object | None = None,
     harness: object | None = None,
     max_backtests: int = 10,
+    autopromotion_enabled: bool = False,
 ) -> HermesResearchLoop:
     genome_repo = GenomeRepository(database)
     if genome_repo.get_active_genome() is None:
         genome_repo.save_genome(trend_pullback_v1(), origin="baseline", status="active")
     gateway = GatewayClient(base_url="http://localhost:10100", http_client=http_client)
     return HermesResearchLoop(
-        proposal_generator=StrategyProposalGenerator(gateway_client=gateway),
+        proposal_generator=StrategyProposalGenerator(
+            hermes_client=HermesClient(
+                base_url="http://hermes.test",
+                api_key="test-key",
+                http_client=http_client,
+            )
+        ),
         backtest_engine=engine or BacktestEngine(),  # type: ignore[arg-type]
         wf_harness=harness or WalkForwardHarness(),  # type: ignore[arg-type]
         promotion_pipeline=PromotionPipeline(
@@ -311,7 +331,10 @@ def _loop(
         memory_bank=MemoryBank(ReflectionRepository(database)),
         autonomy_repo=AutonomyRepository(database),
         promotion_controller=controller,
-        config=HermesLoopConfig(max_backtest_calls=max_backtests),
+        config=HermesLoopConfig(
+            max_backtest_calls=max_backtests,
+            autopromotion_enabled=autopromotion_enabled,
+        ),
     )
 
 
@@ -389,10 +412,54 @@ async def test_a_passing_candidate_is_handed_to_the_promotion_controller(
             now=datetime(2026, 8, 26, 12, tzinfo=UTC),
         )
 
-    assert result.status == "promoted"
+    assert result.status == "promotion_held"
     assert result.candidate_genome_id is not None
     assert recorded == [result.candidate_genome_id], "the controller must judge the candidate"
-    assert result.gate_results["promoted_by"] == "promotion_controller"
+    assert "autopromotion_enabled is false" in result.gate_results["reason"]
+
+
+@pytest.mark.asyncio
+async def test_autopromotion_flag_is_required_to_activate_a_candidate(
+    database: Database,
+) -> None:
+    class Approve:
+        def evaluate(self, candidate, dataset, baseline):  # type: ignore[no-untyped-def]
+            return PromotionDecision(
+                promoted=True,
+                stage="canary",
+                candidate_id=candidate.genome_id,
+                candidate_hash="candidate-hash",
+                baseline_id=baseline.genome_id,
+                baseline_hash="baseline-hash",
+                dataset_id=dataset.dataset_id,
+                detail="all gates passed",
+                promoted_by="promotion_controller",
+                promotion_id="prom-1",
+            )
+
+    candles = generate_market_data(num_days=10)
+    dataset = EvidenceDataset(
+        dataset_id="paxg-3y-15m",
+        verified=True,
+        candles_15m=tuple(candles),
+        shadow=ShadowEvidence(days=21, net_pnl=Decimal("2.50"), trades=9, slippage_acceptable=True),
+    )
+    transport = _gateway_returning(VALID_PROPOSAL)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        loop = _loop(
+            database,
+            http_client=http_client,
+            controller=Approve(),
+            engine=_StubEngine(),
+            harness=_StubHarness(),
+            autopromotion_enabled=True,
+        )
+        result = await loop.step(
+            candles_15m=candles,
+            dataset=dataset,
+            now=datetime(2026, 8, 26, 12, tzinfo=UTC),
+        )
+    assert result.status == "promoted"
 
 
 @pytest.mark.asyncio

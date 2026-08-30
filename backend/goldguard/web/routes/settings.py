@@ -52,10 +52,14 @@ def _get_runtime_snapshot() -> RuntimeSafetySnapshot:
     has_open_positions = False
     has_open_entry_orders = False
     live_armed = False
+    running = False
+    paused = True
 
     if app_module._trading_runtime is not None:
         status = app_module._trading_runtime.status()
         has_open_positions = status.has_position
+        running = status.running
+        paused = status.paused
     elif app_module._broker is not None:
         has_open_positions = app_module._broker.position is not None
 
@@ -72,6 +76,8 @@ def _get_runtime_snapshot() -> RuntimeSafetySnapshot:
         has_open_entry_orders=has_open_entry_orders,
         live_armed=live_armed,
         account_equity_usdt=equity,
+        running=running,
+        paused=paused,
     )
 
 

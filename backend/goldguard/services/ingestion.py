@@ -89,6 +89,7 @@ class MarketIngestionService:
         self._candle_repo = candle_repo
         self._poll_seconds = poll_seconds
         self._aux_close: dict[str, datetime] = {}
+        self._aux_enabled = True
         self._owned_http_client: httpx.AsyncClient | None = None
         self._live_socket = client is None
         if client is None:
@@ -211,7 +212,8 @@ class MarketIngestionService:
         self._failures = 0
         self._refresh_verification()
         self._publish()
-        await self._warmup_aux_symbols()
+        if self._aux_enabled:
+            await self._warmup_aux_symbols()
 
     async def _warmup_aux_symbols(self) -> None:
         for symbol in self._settings.paper_spot_symbols():
@@ -277,7 +279,12 @@ class MarketIngestionService:
         await asyncio.to_thread(self._runtime.process_quote, quote)
         await self._tick_aux_symbols()
 
+    def set_aux_enabled(self, enabled: bool) -> None:
+        self._aux_enabled = enabled
+
     async def _tick_aux_symbols(self) -> None:
+        if not self._aux_enabled:
+            return
         for symbol in self._settings.paper_spot_symbols():
             if symbol == self._settings.symbol:
                 continue
