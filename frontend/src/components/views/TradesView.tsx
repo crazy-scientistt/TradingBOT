@@ -20,6 +20,8 @@ const fmtNum = (v: string | null | undefined, decimals = 2): string => {
 
 export const TradesView: React.FC = () => {
   const [trades, setTrades] = useState<TradeRow[]>([]);
+  const [positions, setPositions] = useState<Array<Record<string, string>>>([]);
+  const [pnl, setPnl] = useState<Record<string, string> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,8 +29,14 @@ export const TradesView: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.getTrades();
+      const [res, open, book] = await Promise.all([
+        api.getTrades(),
+        api.getOpenPositions(),
+        api.getPnl(),
+      ]);
       setTrades(res);
+      setPositions(Array.isArray(open) ? open : []);
+      setPnl(book && typeof book === 'object' && !Array.isArray(book) ? book : Array.isArray(book) ? (book[0] ?? null) : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load trade history.');
     } finally {
@@ -65,6 +73,31 @@ export const TradesView: React.FC = () => {
         <div style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '12px', color: '#fca5a5',
           border: '1px solid rgba(239,68,68,0.3)', backgroundColor: 'rgba(239,68,68,0.06)' }}>
           {error}
+        </div>
+      )}
+
+      {positions.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+          {positions.map((row) => (
+            <div key={row.position_id || row.symbol} style={{
+              backgroundColor: '#0d0e12', border: '1px solid #1e222b', borderRadius: '8px',
+              padding: '10px 12px', minWidth: '160px',
+            }}>
+              <div style={{ fontSize: '10px', color: '#676b78', letterSpacing: '0.06em' }}>{row.symbol} {row.side}</div>
+              <div style={{ fontFamily: 'var(--font-mono)', color: '#f8fafc', fontSize: '13px' }}>
+                net {row.net_pnl_usdt ?? '0'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {pnl && (
+        <div style={{
+          backgroundColor: '#0d0e12', border: '1px solid #1e222b', borderRadius: '8px',
+          padding: '10px 12px', fontSize: '12px', color: '#9498a4',
+        }}>
+          Realized {String(pnl.realized_pnl_usdt ?? pnl.realized ?? '—')} · fees {String(pnl.fees_usdt ?? '—')}
         </div>
       )}
 

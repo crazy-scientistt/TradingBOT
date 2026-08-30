@@ -210,7 +210,12 @@ class HermesResearchLoop:
                 )
             self.genome_repo.save_genome(candidate_genome, origin="hermes", status="candidate")
             cand_id = candidate_genome.genome_id
-            decision = self.promotion_controller.evaluate(candidate_genome, dataset, parent)
+            decision = self.promotion_controller.evaluate(
+                candidate_genome,
+                dataset,
+                parent,
+                commit=self.config.autopromotion_enabled,
+            )
             fresh_usage = self.quota_repo.get_usage(date_str)
             if not decision.promoted:
                 self._record_failure()

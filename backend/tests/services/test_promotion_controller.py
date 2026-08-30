@@ -355,6 +355,18 @@ def test_holdout_failure_quarantines_the_candidate(tmp_path) -> None:
     assert environment.genomes.get_genome_status(environment.baseline.genome_id) == "active"
 
 
+def test_evaluate_commit_false_does_not_activate(env: _Env) -> None:
+    candidate = _candidate()
+    env.genomes.save_genome(candidate, origin="hermes", status="candidate")
+    decision = env.controller.evaluate(
+        candidate, _dataset(), env.baseline, commit=False
+    )
+    assert decision.promoted is True
+    assert decision.stage == "validated"
+    active = env.genomes.get_active_genome()
+    assert active is not None and active.genome_id == env.baseline.genome_id
+
+
 def test_canary_drawdown_rolls_back_to_the_baseline(env: _Env) -> None:
     candidate = _candidate()
     env.genomes.save_genome(candidate, origin="hermes", status="candidate")

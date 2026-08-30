@@ -104,6 +104,7 @@ const QualificationStrip: React.FC = () => {
       }}
     >
       <span>OWNER {owner.toUpperCase()}</span>
+      {runtimeStatus.scopes?.length ? <span>{runtimeStatus.scopes.join(" · ")}</span> : null}
       <span>DATASET {dataset}</span>
       <span>HERMES {hermes.toUpperCase()}</span>
       <span>LESSONS {lessons}</span>

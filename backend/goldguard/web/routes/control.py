@@ -34,6 +34,14 @@ def arm_live(
 ) -> dict[str, Any]:
     arming_service = get_arming_service()
     settings_service = get_settings_service()
+    from goldguard.web import app as app_module
+
+    settings = app_module._settings
+    if settings is None or not settings.live_capability_enabled or settings.mode != "live":
+        raise HTTPException(
+            status_code=409,
+            detail="live capability is disabled; paper remains the only execution mode",
+        )
     active = settings_service._repository.active()
     profile = active.profile if active is not None else default_autonomous_profile()
     report = get_preflight_service().evaluate(profile)
@@ -79,8 +87,9 @@ def control_pause(
 ) -> dict[str, str]:
     from goldguard.web import app as app_module
 
-    if app_module._trading_runtime is not None:
-        app_module._trading_runtime.pause()
+    runtime = app_module._runtime_facade or app_module._trading_runtime
+    if runtime is not None:
+        runtime.pause()
     return {"status": "paused"}
 
 
@@ -97,6 +106,10 @@ def control_close_all(
 ) -> dict[str, Any]:
     from goldguard.web import app as app_module
 
-    if app_module._trading_runtime is not None:
-        app_module._trading_runtime.stop()
-    return {"status": "positions_closed", "positions_closed_count": 0}
+    runtime = app_module._runtime_facade or app_module._trading_runtime
+    count = 0
+    if runtime is not None:
+        before = runtime.status().has_position
+        runtime.stop()
+        count = 1 if before else 0
+    return {"status": "positions_closed", "positions_closed_count": count}

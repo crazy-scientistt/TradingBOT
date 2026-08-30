@@ -369,7 +369,7 @@ async def test_a_passing_candidate_is_handed_to_the_promotion_controller(
     recorded: list[str] = []
 
     class RecordingController:
-        def evaluate(self, candidate, dataset, baseline):  # type: ignore[no-untyped-def]
+        def evaluate(self, candidate, dataset, baseline, **kwargs):  # type: ignore[no-untyped-def]
             recorded.append(candidate.genome_id)
             return PromotionDecision(
                 promoted=True,
@@ -423,7 +423,7 @@ async def test_autopromotion_flag_is_required_to_activate_a_candidate(
     database: Database,
 ) -> None:
     class Approve:
-        def evaluate(self, candidate, dataset, baseline):  # type: ignore[no-untyped-def]
+        def evaluate(self, candidate, dataset, baseline, **kwargs):  # type: ignore[no-untyped-def]
             return PromotionDecision(
                 promoted=True,
                 stage="canary",
@@ -465,7 +465,7 @@ async def test_autopromotion_flag_is_required_to_activate_a_candidate(
 @pytest.mark.asyncio
 async def test_a_rejected_candidate_is_reported_not_promoted(database: Database) -> None:
     class RejectingController:
-        def evaluate(self, candidate, dataset, baseline):  # type: ignore[no-untyped-def]
+        def evaluate(self, candidate, dataset, baseline, **kwargs):  # type: ignore[no-untyped-def]
             return PromotionDecision(
                 promoted=False,
                 stage="quarantined",

@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     live_capability_enabled: bool = False
     live_max_capital: Decimal = Field(default=Decimal("0"), ge=0)
 
+    telegram_bot_token: SecretStr | None = Field(default=None, repr=False)
+    telegram_chat_id: str | None = None
+
     # Session secret
     session_secret: SecretStr = Field(
         default_factory=lambda: SecretStr(secrets.token_urlsafe(32)),

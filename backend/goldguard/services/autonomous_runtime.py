@@ -54,7 +54,7 @@ class AutonomousRuntime:
         )
         self._broker = PaperPortfolioBroker(spot=self._spot, futures=self._futures)
         self._books: dict[str, dict[str, list[Candle]]] = {}
-        self._planner = GenomeEntryPlanner(self._books, cash)
+        self._planner = GenomeEntryPlanner(self._books, cash, genome_repo=genome_repo)
         self._coordinator = ExecutionCoordinator(
             broker=self._broker,
             repository=ExecutionRepository(database),
@@ -82,6 +82,11 @@ class AutonomousRuntime:
         self._mae: dict[str, Decimal] = {}
         self._mfe: dict[str, Decimal] = {}
         self._flatten_task: asyncio.Task[None] | None = None
+        self._dataset_status = lambda: "OK"
+
+    def set_dataset_status(self, getter: object) -> None:
+        if callable(getter):
+            self._dataset_status = getter
 
     @property
     def broker(self) -> PaperPortfolioBroker:
@@ -205,6 +210,8 @@ class AutonomousRuntime:
         if not self._supervisor.new_entries_allowed(scope):
             return
         if not await self._catalog_allows(candle.symbol):
+            return
+        if self._dataset_status() == "CORRUPT":
             return
         self._planner.set_cash(self._spot.cash)
         outcome = await self._coordinator.evaluate(scope, candle)

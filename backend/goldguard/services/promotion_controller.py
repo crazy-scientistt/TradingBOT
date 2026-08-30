@@ -149,6 +149,8 @@ class PromotionController:
         candidate: StrategyGenome,
         dataset: EvidenceDataset,
         baseline: StrategyGenome,
+        *,
+        commit: bool = True,
     ) -> PromotionDecision:
         candidate_hash = genome_hash(candidate)
         baseline_hash = genome_hash(baseline)
@@ -239,6 +241,20 @@ class PromotionController:
         if not self._autonomy.is_full_autonomy():
             state = self._autonomy.state()
             return reject(("AUTONOMY_REVOKED",), f"autonomy is revoked: {state['revoked_reason']}")
+
+        if not commit:
+            return PromotionDecision(
+                promoted=True,
+                stage="validated",
+                candidate_id=candidate.genome_id,
+                candidate_hash=candidate_hash,
+                baseline_id=baseline.genome_id,
+                baseline_hash=baseline_hash,
+                dataset_id=dataset.dataset_id,
+                detail="gates passed; activation held",
+                rejection_reasons=(),
+                gate_reports=gate_reports,
+            )
 
         promotion_id = f"prom-{uuid4().hex[:8]}"
         try:

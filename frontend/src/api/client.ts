@@ -392,6 +392,18 @@ export const api = {
     return fetchJson(`${API_BASE}/trades`);
   },
 
+  async getOrders(): Promise<any[]> {
+    return fetchJson(`${API_BASE}/orders`);
+  },
+
+  async getOpenPositions(): Promise<any[]> {
+    return fetchJson(`${API_BASE}/positions`);
+  },
+
+  async getPnl(): Promise<any> {
+    return fetchJson(`${API_BASE}/pnl`);
+  },
+
   async getSettings(): Promise<EffectiveSettings> {
     return fetchJson(`${API_BASE}/settings`);
   },

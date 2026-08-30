@@ -823,6 +823,9 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         )
         await _ingestion.start()
         if _runtime_facade is not None:
+            if _autonomous_runtime is not None:
+                _autonomous_runtime._catalog.spot_client = getattr(_ingestion, "_client", None)
+                _autonomous_runtime.set_dataset_status(_dataset_status_label)
             _ingestion.set_autonomous(
                 _autonomous_runtime,
                 owner=_runtime_facade.owner is StrategyMode.AUTONOMOUS,
@@ -964,7 +967,14 @@ async def app_status() -> dict[str, Any]:
             "bot_state": runtime_status.state.value if runtime_status else None,
             "full_autonomy": _is_full_autonomy(),
             "active_genome_id": active_genome.genome_id if active_genome else None,
-            "paper_balance": str(_broker.cash) if _broker else None,
+            "paper_balance": (
+                str((_runtime_facade.autonomous.broker.spot.cash)
+                    if _runtime_facade is not None
+                    and not _runtime_facade.is_legacy_owner()
+                    and _runtime_facade.autonomous is not None
+                    else (_broker.cash if _broker else None)
+                )
+            ),
             "live_enabled": settings.live_capability_enabled,
             "market_source": market.source,
             "market_verified": market.verified,
@@ -2102,7 +2112,8 @@ async def bot_state() -> dict[str, Any]:
     settings = _require(_settings, "settings")
     active_genome = _genome_repo.get_active_genome() if _genome_repo else None
     daily_limit = float(SAFE_DEFAULT_V1.daily_loss_halt * 100)
-    if _trading_runtime is None:
+    owner = _runtime_facade or _trading_runtime
+    if owner is None:
         return _env(
             {
                 "state": None,
@@ -2120,7 +2131,7 @@ async def bot_state() -> dict[str, Any]:
             detail="trading runtime failed to initialise",
         )
 
-    runtime_status = _trading_runtime.status()
+    runtime_status = owner.status()
     day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     realized = (
         _ledger_repo.realized_pnl_since(runtime_status.paper_account_id, day_start)

@@ -159,7 +159,9 @@ async def collect_stack_diagnostics(
             checks.append(_check("hermes_proposal", "fail", "HERMES_PROPOSAL_FAILED"))
             blockers.append("HERMES_PROPOSAL_FAILED")
         else:
-            checks.append(_check("hermes_proposal", "not_run", "awaiting Hermes proposal round trip"))
+            checks.append(
+            _check("hermes_proposal", "not_run", "awaiting Hermes proposal round trip")
+        )
 
         if str(dataset_status) == "VERIFIED":
             checks.append(_check("dataset_verified", "pass", "VERIFIED"))
@@ -168,7 +170,7 @@ async def collect_stack_diagnostics(
             if str(dataset_status) in {"CORRUPT", "DOWNLOADING", "UNKNOWN"}:
                 blockers.append("DATASET_NOT_VERIFIED")
 
-        if reflection_count is None:
+        if reflection_count is None or reflection_count == 0:
             checks.append(_check("reflection_persist", "not_run", "awaiting closed paper trade"))
         else:
             checks.append(

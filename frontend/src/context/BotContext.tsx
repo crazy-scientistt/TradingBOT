@@ -49,6 +49,7 @@ export interface RuntimeStatus {
   latestLesson: string | null;
   lastGate: string | null;
   uiRevision: string | null;
+  scopes: string[];
 }
 
 export interface BotContextType {
@@ -143,6 +144,7 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     latestLesson: status?.latest_lesson ?? null,
     lastGate: status?.last_gate ?? null,
     uiRevision: status?.ui_revision ?? null,
+    scopes: status?.scopes ?? [],
   };
 };
 

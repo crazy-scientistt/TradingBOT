@@ -10,14 +10,23 @@ from goldguard.domain.models import Candle
 from goldguard.execution.models import MarketScope
 from goldguard.services.execution_coordinator import EntryPlan
 from goldguard.strategy.engine import StrategyEngine, StrategyFeatures
+from goldguard.strategy.genome import StrategyGenome
 from goldguard.strategy.indicators import atr_wilder, ema_series, median_volume_ratio, rsi_wilder
+from goldguard.strategy.runtime import GenomeRuntime
 
 
 class GenomeEntryPlanner:
-    def __init__(self, books: dict[str, dict[str, list[Candle]]], cash: Decimal) -> None:
+    def __init__(
+        self,
+        books: dict[str, dict[str, list[Candle]]],
+        cash: Decimal,
+        genome_repo: object | None = None,
+    ) -> None:
         self._books = books
         self._cash = cash
         self._engine = StrategyEngine(SAFE_DEFAULT_V1)
+        self._runtime = GenomeRuntime()
+        self._genome_repo = genome_repo
         self._open_symbols: set[str] = set()
 
     def set_cash(self, cash: Decimal) -> None:
@@ -41,18 +50,29 @@ class GenomeEntryPlanner:
         features = self._features(candle.symbol)
         if features is None:
             return EntryPlan(approved=False, reason="INSUFFICIENT_HISTORY")
-        result = self._engine.evaluate(features, has_position=False)
+        genome = None
+        getter = getattr(self._genome_repo, "get_active_genome", None)
+        if callable(getter):
+            genome = getter()
+        if isinstance(genome, StrategyGenome):
+            result = self._runtime.evaluate(genome, features, has_position=False)
+            stop_mult = float(genome.exit.stop_atr_multiple)
+            reward = float(genome.exit.r_multiple_min)
+        else:
+            result = self._engine.evaluate(features, has_position=False)
+            stop_mult = float(SAFE_DEFAULT_V1.stop_atr_multiple)
+            reward = float(SAFE_DEFAULT_V1.reward_r_multiple)
         if result.action is not CandidateAction.ENTRY_CANDIDATE:
             return EntryPlan(
                 approved=False,
                 reason=result.reason_codes[0] if result.reason_codes else "HOLD",
             )
         stop_rate = max(
-            features.atr_rate * float(SAFE_DEFAULT_V1.stop_atr_multiple),
+            features.atr_rate * stop_mult,
             float(SAFE_DEFAULT_V1.minimum_stop_rate),
         )
         stop_rate = min(stop_rate, float(SAFE_DEFAULT_V1.maximum_stop_rate))
-        take_rate = stop_rate * float(SAFE_DEFAULT_V1.reward_r_multiple)
+        take_rate = stop_rate * reward
         entry = candle.close
         stop = entry * (Decimal("1") - Decimal(str(stop_rate)))
         take = entry * (Decimal("1") + Decimal(str(take_rate)))

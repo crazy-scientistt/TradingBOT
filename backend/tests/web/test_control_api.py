@@ -82,7 +82,7 @@ def test_arm_is_blocked_without_runtime_evidence_and_disarm_remains_available(
         headers=headers,
     )
     assert arm_res.status_code == 409
-    assert "paper_qualification" in arm_res.json()["detail"]
+    assert "live capability is disabled" in arm_res.json()["detail"]
 
     disarm_res = client.post("/api/live/disarm", headers=headers)
     assert disarm_res.status_code == 200
