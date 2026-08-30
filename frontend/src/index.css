@@ -205,6 +205,36 @@ html, body {
   width: 100%;
 }
 
+.gg-row-dock {
+  flex: 0 0 auto;
+  min-height: 180px;
+  max-height: 220px;
+}
+
+.gg-row-dock > .dashboard-card {
+  min-height: 0;
+  max-height: 220px;
+  overflow: hidden;
+}
+
+.gg-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #2d3139 transparent;
+}
+
+.gg-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.gg-scroll::-webkit-scrollbar-thumb {
+  background: #2d3139;
+  border-radius: 6px;
+}
+
 .gg-kpis {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -275,6 +305,14 @@ html, body {
 
   .gg-row {
     flex-direction: column;
+  }
+
+  .gg-row-dock {
+    max-height: none;
+  }
+
+  .gg-row-dock > .dashboard-card {
+    max-height: 220px;
   }
 
   .gg-kpis {

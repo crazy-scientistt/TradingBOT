@@ -75,23 +75,30 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items, onViewA
   };
 
   return (
-    <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      {/* Header */}
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
-        LIVE CONTEXT
+    <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>LIVE CONTEXT</span>
+        {items.length > 0 && (
+          <span style={{ fontSize: '10px', color: '#676b78', letterSpacing: 0, fontWeight: 500 }}>
+            {items.length} observations
+          </span>
+        )}
       </div>
 
-      {/* News Items List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {items.map((item) => (
+      <div className="gg-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
+        {items.length === 0 ? (
+          <div style={{ color: '#676b78', fontSize: '12px', padding: '12px 4px' }}>
+            No live quotes or calendar rows yet.
+          </div>
+        ) : items.map((item) => (
           <div key={item.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '9px' }}>
             {getIcon(item.category)}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }}>
               <div style={{ fontSize: '11.5px', fontWeight: 500, color: '#f8fafc', lineHeight: 1.25 }}>
                 {item.title}
               </div>
               <div style={{ fontSize: '10.5px', color: '#38bdf8' }}>
-                <span style={{ cursor: 'pointer' }}>{item.source}</span>
+                <span>{item.source}</span>
                 <span style={{ color: '#676b78', margin: '0 4px' }}>·</span>
                 <span style={{ color: '#38bdf8' }}>{item.time}</span>
               </div>
@@ -100,8 +107,7 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items, onViewA
         ))}
       </div>
 
-      {/* Footer Link */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px', flexShrink: 0 }}>
         <button
           type="button"
           onClick={onViewAll}

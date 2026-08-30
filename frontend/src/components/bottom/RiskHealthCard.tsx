@@ -25,14 +25,12 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items, onViewAll
   };
 
   return (
-    <div className="dashboard-card" style={{ flex: 1, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      {/* Header */}
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px' }}>
+    <div className="dashboard-card" style={{ flex: 1, padding: '10px 14px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '6px', flexShrink: 0 }}>
         RISK & HEALTH
       </div>
 
-      {/* Status List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '9px' }}>
+      <div className="gg-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '9px', paddingRight: '4px' }}>
         {items.map((item) => {
           const isOk = item.status === 'OK';
           const isInfo = item.status === 'INFO';
@@ -81,7 +79,7 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items, onViewAll
       </div>
 
       {/* Footer Link */}
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px', flexShrink: 0 }}>
         <button
           type="button"
           onClick={onViewAll}

@@ -78,8 +78,8 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
           ];
 
   return (
-    <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: '175px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+    <div className="dashboard-card" style={{ flex: 1.15, padding: '10px 14px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexShrink: 0 }}>
         <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
           EQUITY CURVE (PAPER)
         </span>
