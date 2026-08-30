@@ -73,10 +73,12 @@ export interface EquityDataPoint {
 
 export interface NewsItem {
   id: string;
-  category: 'fed' | 'yields' | 'exchange';
+  category: 'fed' | 'yields' | 'exchange' | 'macro' | 'agent' | 'search' | string;
   title: string;
   source: string;
   time: string;
+  direction?: string;
+  severity?: string;
 }
 
 export interface HealthStatusItem {

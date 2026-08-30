@@ -100,8 +100,56 @@ def test_bot_state_daily_loss_is_measured_not_assumed(client: TestClient) -> Non
 
 def test_context_has_no_static_headlines(client: TestClient) -> None:
     body = _envelope(client.get("/api/context"))
-    assert body["data"] == []
-    assert body["availability"] == "unavailable"
+    rows = body["data"] or []
+    for row in rows:
+        source = str(row.get("source") or "")
+        assert "fixture" not in source.lower()
+        assert "lorem" not in str(row.get("title") or "").lower()
+
+
+def test_context_includes_live_quote_when_market_has_one(client: TestClient, monkeypatch) -> None:
+    from datetime import UTC, datetime, timedelta
+    from decimal import Decimal
+
+    from goldguard.domain.models import Candle, Quote
+    from goldguard.services.ingestion import MarketSnapshot
+    from goldguard.web import app as app_module
+
+    now = datetime.now(UTC)
+    monkeypatch.setattr(
+        app_module,
+        "_market",
+        lambda: MarketSnapshot(
+            availability="available",
+            source="binance-ws",
+            observed_at=now,
+            stale=False,
+            detail=None,
+            verified=True,
+            candles_15m=(
+                Candle(
+                    symbol="PAXGUSDT",
+                    timeframe="15m",
+                    open_time=now - timedelta(minutes=15),
+                    close_time=now,
+                    open=Decimal("4400"),
+                    high=Decimal("4410"),
+                    low=Decimal("4390"),
+                    close=Decimal("4405"),
+                    volume=Decimal("12"),
+                    closed=True,
+                ),
+            ),
+            candles_1h=(),
+            latest_quote=Quote(bid=Decimal("4404.1"), ask=Decimal("4404.3"), observed_at=now),
+            filters=None,
+        ),
+    )
+    body = _envelope(client.get("/api/context"))
+    titles = " ".join(str(row.get("title") or "") for row in (body["data"] or []))
+    assert "PAXGUSDT live mid" in titles
+    assert "PAXGUSDT last 15m close" in titles
+    assert body["availability"] == "available"
 
 
 def test_reflections_are_not_seeded_at_boot(client: TestClient) -> None:

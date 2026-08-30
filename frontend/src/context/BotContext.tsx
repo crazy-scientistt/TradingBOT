@@ -238,7 +238,11 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const refreshAll = useCallback(async () => {
-    setDataStatus((previous) => ({ ...previous, loading: true, error: null }));
+    setDataStatus((previous) => ({
+      ...previous,
+      loading: previous.lastUpdatedAt == null,
+      error: null,
+    }));
     try {
       const snapshot = await api.getDashboard();
       const status = sectionData(snapshot.status);
@@ -332,7 +336,10 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDataStatus({
         loading: false,
         error: null,
-        degraded: allSections.some(sectionIsDegraded) || !snapshot.preflight?.ready,
+        degraded: ['health', 'status', 'quote'].some((name) => {
+            const section = (snapshot as unknown as Record<string, unknown>)[name];
+            return sectionIsDegraded(section);
+          }),
         lastUpdatedAt: snapshot.generated_at ?? new Date().toISOString(),
       });
     } catch (error) {
@@ -354,7 +361,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               ...previous,
               error: previous.error?.startsWith('Disconnected from the agent event stream') ? null : previous.error,
             })),
-            onError: (error) => setDataStatus((previous) => ({ ...previous, degraded: true, error: error.message })),
+            onError: () => undefined,
           });
     return () => {
       window.clearInterval(interval);

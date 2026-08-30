@@ -93,11 +93,13 @@ class OpenCodexSearchProvider:
     ) -> None:
         self.gateway_client = gateway_client
         self.model = model
+        self.last_error: str | None = None
 
     async def search(self, query: str, max_results: int = 5) -> list[RawSearchResult]:
+        self.last_error = None
         prompt = (
-            f"Search query: {query}\n"
-            f"Return a JSON array of up to {max_results} recent, real https sources.\n"
+            f"Public market facts for: {query}\n"
+            f"Return a JSON array of up to {max_results} real https citations.\n"
             'Each item: {"url":"https://...","title":"...","content":"one-sentence fact"}\n'
             "Only JSON. No markdown. Prefer federalreserve.gov, bls.gov, reuters.com, "
             "gold.org, paxos.com, binance.com."
@@ -106,12 +108,20 @@ class OpenCodexSearchProvider:
             model=self.model,
             messages=[ChatMessage(role="user", content=prompt)],
             temperature=0.1,
-            reasoning_effort="high",
+            tools=[],
+            tool_choice="none",
         )
         try:
             resp = await self.gateway_client.chat_completion(req)
-            return _parse_search_results(resp.content, max_results)
-        except Exception:
+            results = _parse_search_results(resp.content, max_results)
+            if not results:
+                self.last_error = "Gemini returned no parseable citations"
+            return results
+        except Exception as exc:
+            import logging
+
+            self.last_error = str(exc)
+            logging.getLogger(__name__).warning("OpenCodex search failed: %s", exc)
             return []
 
 

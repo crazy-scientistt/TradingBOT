@@ -89,6 +89,8 @@ class MarketIngestionService:
         self._candle_repo = candle_repo
         self._poll_seconds = poll_seconds
         self._aux_close: dict[str, datetime] = {}
+        self._aux_quotes: dict[str, Quote] = {}
+        self._aux_bars: dict[str, Candle] = {}
         self._aux_enabled = True
         self._autonomous = None
         self._autonomous_owner = False
@@ -182,6 +184,12 @@ class MarketIngestionService:
             filters=self._filters,
         )
 
+    def aux_quotes(self) -> dict[str, Quote]:
+        return dict(self._aux_quotes)
+
+    def aux_bars(self) -> dict[str, Candle]:
+        return dict(self._aux_bars)
+
     # -- internals ----------------------------------------------------------------
 
     def _load_persisted(self) -> None:
@@ -243,6 +251,11 @@ class MarketIngestionService:
             closed_1h = [item for item in bars_1h if item.closed]
             if closed_15:
                 self._aux_close[symbol] = closed_15[-1].close_time
+                self._aux_bars[symbol] = closed_15[-1]
+            try:
+                self._aux_quotes[symbol] = await self._client.quote(symbol)
+            except Exception as exc:
+                logger.warning("aux warmup quote failed for %s: %s", symbol, exc)
             self._runtime.seed_symbol_history(symbol, closed_15, closed_1h)
             if self._autonomous is not None:
                 seeder = getattr(self._autonomous, "seed_history", None)
@@ -325,6 +338,7 @@ class MarketIngestionService:
                 continue
             try:
                 quote = await self._client.quote(symbol)
+                self._aux_quotes[symbol] = quote
                 fetched = await self._client.klines(symbol=symbol, interval="15m", limit=4)
             except Exception as exc:
                 logger.warning("aux spot tick failed for %s: %s", symbol, exc)
@@ -333,6 +347,7 @@ class MarketIngestionService:
             if not closed:
                 continue
             last = closed[-1]
+            self._aux_bars[symbol] = last
             previous = self._aux_close.get(symbol)
             if previous is not None and last.close_time <= previous:
                 continue

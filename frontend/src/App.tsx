@@ -50,12 +50,45 @@ const DataNotice: React.FC<{ title: string; detail?: string }> = ({ title, detai
 
 const ConnectionBanner: React.FC = () => {
   const { loading, error, degraded, dataStatus } = useBot();
-  if (!loading && !error && !degraded) return null;
-  const message = error
-    ? `Disconnected from live data: ${error}`
-    : loading
-      ? 'Connecting to the paper-trading service…'
-      : 'Live data is degraded. Values below are limited to observations returned by the service.';
+  if (error) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          margin: '8px 14px 0',
+          padding: '8px 12px',
+          borderRadius: '6px',
+          border: '1px solid rgba(239, 68, 68, 0.45)',
+          backgroundColor: 'rgba(239, 68, 68, 0.08)',
+          color: '#fca5a5',
+          fontSize: '12px',
+        }}
+      >
+        Disconnected from live data: {error}
+      </div>
+    );
+  }
+  if (loading && !dataStatus.lastUpdatedAt) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          margin: '8px 14px 0',
+          padding: '8px 12px',
+          borderRadius: '6px',
+          border: '1px solid rgba(61, 126, 255, 0.35)',
+          backgroundColor: 'rgba(61, 126, 255, 0.08)',
+          color: 'var(--gold-primary)',
+          fontSize: '12px',
+        }}
+      >
+        Connecting to the paper-trading service…
+      </div>
+    );
+  }
+  if (!degraded) return null;
   return (
     <div
       role="status"
@@ -64,14 +97,14 @@ const ConnectionBanner: React.FC = () => {
         margin: '8px 14px 0',
         padding: '8px 12px',
         borderRadius: '6px',
-        border: `1px solid ${error ? 'rgba(239, 68, 68, 0.45)' : 'rgba(61, 126, 255, 0.35)'}`,
-        backgroundColor: error ? 'rgba(239, 68, 68, 0.08)' : 'rgba(61, 126, 255, 0.08)',
-        color: error ? '#fca5a5' : 'var(--gold-primary)',
+        border: '1px solid rgba(61, 126, 255, 0.35)',
+        backgroundColor: 'rgba(61, 126, 255, 0.08)',
+        color: 'var(--gold-primary)',
         fontSize: '12px',
       }}
     >
-      {message}
-      {dataStatus.lastUpdatedAt && !loading && (
+      Live data is degraded. Values below are limited to observations returned by the service.
+      {dataStatus.lastUpdatedAt && (
         <span style={{ color: '#9498a4', marginLeft: '8px' }}>
           Last snapshot: {new Date(dataStatus.lastUpdatedAt).toLocaleTimeString()}
         </span>

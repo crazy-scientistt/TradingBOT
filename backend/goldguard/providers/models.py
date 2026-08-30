@@ -45,6 +45,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     response_format: dict[str, Any] | None = None
     reasoning_effort: str | None = None
+    tools: list[Any] | None = None
+    tool_choice: str | None = None
 
 
 class UsageMeta(BaseModel):

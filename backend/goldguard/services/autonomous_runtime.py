@@ -81,6 +81,8 @@ class AutonomousRuntime:
         self._halted = False
         self._mae: dict[str, Decimal] = {}
         self._mfe: dict[str, Decimal] = {}
+        self._last_quotes: dict[str, dict[str, str]] = {}
+        self._last_evals: dict[str, dict[str, str]] = {}
         self._flatten_task: asyncio.Task[None] | None = None
         self._dataset_status = lambda: "OK"
 
@@ -185,6 +187,13 @@ class AutonomousRuntime:
         if target not in self._profile.spot_pairs:
             return
         mid = (quote.bid + quote.ask) / Decimal("2")
+        self._last_quotes[target] = {
+            "symbol": target,
+            "mid": f"{mid:.4f}".rstrip("0").rstrip("."),
+            "bid": str(quote.bid),
+            "ask": str(quote.ask),
+            "observed_at": quote.observed_at.isoformat(),
+        }
         self._spot.on_price(target, mid)
         self._track_excursion(target, mid)
         scope = MarketScope(
@@ -208,19 +217,98 @@ class AutonomousRuntime:
         self._supervisor.note_closed_candle(scope, candle, quote)
         await self.on_quote(quote, symbol=candle.symbol)
         if not self._running or self._paused or self._halted:
+            self._last_evals[candle.symbol] = {
+                "symbol": candle.symbol,
+                "action": "WATCH",
+                "reason": "paper_not_armed",
+                "close": str(candle.close),
+                "close_time": candle.close_time.isoformat(),
+            }
             return
         if not self._supervisor.new_entries_allowed(scope):
+            self._last_evals[candle.symbol] = {
+                "symbol": candle.symbol,
+                "action": "HOLD",
+                "reason": "new_entries_blocked",
+                "close": str(candle.close),
+                "close_time": candle.close_time.isoformat(),
+            }
             return
         if not await self._catalog_allows(candle.symbol):
+            self._last_evals[candle.symbol] = {
+                "symbol": candle.symbol,
+                "action": "HOLD",
+                "reason": "symbol_not_eligible",
+                "close": str(candle.close),
+                "close_time": candle.close_time.isoformat(),
+            }
             return
         if self._dataset_status() == "CORRUPT":
+            self._last_evals[candle.symbol] = {
+                "symbol": candle.symbol,
+                "action": "HOLD",
+                "reason": "dataset_corrupt",
+                "close": str(candle.close),
+                "close_time": candle.close_time.isoformat(),
+            }
             return
         self._planner.set_cash(self._spot.cash)
         outcome = await self._coordinator.evaluate(scope, candle)
+        self._last_evals[candle.symbol] = {
+            "symbol": candle.symbol,
+            "action": outcome.action,
+            "reason": outcome.reason or outcome.action,
+            "close": str(candle.close),
+            "close_time": candle.close_time.isoformat(),
+        }
         if outcome.action == "ENTER":
             self._planner.mark_open(candle.symbol)
             self._mae[candle.symbol] = Decimal("0")
             self._mfe[candle.symbol] = Decimal("0")
+
+    def context_rows(self) -> list[dict[str, object]]:
+        """What the paper agent last read. Empty until a live quote or closed bar arrives."""
+        rows: list[dict[str, object]] = []
+        for symbol, payload in self._last_evals.items():
+            close_time = payload.get("close_time") or ""
+            rows.append(
+                {
+                    "id": f"eval-{symbol}-{close_time}",
+                    "category": "agent",
+                    "title": (
+                        f"{symbol} last closed 15m {payload.get('close')} → "
+                        f"{payload.get('action')} ({payload.get('reason')})"
+                    ),
+                    "direction": "bullish"
+                    if payload.get("action") == "ENTER"
+                    else "neutral",
+                    "severity": "medium",
+                    "contradictory": False,
+                    "source": "paper-agent",
+                    "time": close_time[11:16] if len(close_time) >= 16 else "",
+                }
+            )
+        if self._last_evals:
+            return rows
+        if self._last_quotes:
+            latest = max(self._last_quotes.values(), key=lambda item: item.get("observed_at", ""))
+            observed = latest.get("observed_at") or ""
+            rows.append(
+                {
+                    "id": f"watch-{latest.get('symbol')}-{observed}",
+                    "category": "agent",
+                    "title": (
+                        f"Agent is reading {latest.get('symbol')} mid {latest.get('mid')} live. "
+                        "Entries wait for the next closed 15m candle."
+                    ),
+                    "direction": "neutral",
+                    "severity": "low",
+                    "contradictory": False,
+                    "source": "paper-agent",
+                    "time": observed[11:16] if len(observed) >= 16 else "",
+                }
+            )
+        return rows
 
     async def _catalog_allows(self, symbol: str) -> bool:
         if self._catalog.spot_client is None:

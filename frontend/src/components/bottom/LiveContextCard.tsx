@@ -57,7 +57,20 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items, onViewA
           </div>
         );
       default:
-        return null;
+        return (
+          <div style={{
+            width: '26px',
+            height: '26px',
+            borderRadius: '50%',
+            backgroundColor: '#122338',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0
+          }}>
+            <TrendingUp size={13} color="#38bdf8" />
+          </div>
+        );
     }
   };
 

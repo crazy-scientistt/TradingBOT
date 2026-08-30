@@ -136,7 +136,19 @@ class EconomicCalendar:
         rows: list[dict[str, Any]] = []
         now = datetime.now(UTC)
         blackout, active = self.is_blackout(now)
-        for event in self.upcoming():
+        upcoming = self.upcoming()
+        preferred = [event for event in upcoming if event.high_impact_usd]
+        if len(preferred) < 6:
+            for event in upcoming:
+                if event in preferred:
+                    continue
+                if event.country.lower() in USD_COUNTRIES:
+                    preferred.append(event)
+                if len(preferred) >= 6:
+                    break
+        if not preferred:
+            preferred = upcoming[:6]
+        for event in preferred[:8]:
             rows.append(
                 {
                     "id": f"{event.when.isoformat()}-{event.title}",
@@ -162,6 +174,11 @@ class EconomicCalendar:
                 }
             )
         return rows
+
+    def bind_client(self, http_client: httpx.AsyncClient) -> None:
+        self._client = http_client
+        if self.source == "unconfigured":
+            self.detail = "calendar client bound; waiting for first fetch"
 
     async def refresh(self) -> None:
         if self._client is None:

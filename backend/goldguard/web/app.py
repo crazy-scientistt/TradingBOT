@@ -163,6 +163,7 @@ _hermes_proposal_ok: bool | None = None
 _calendar: EconomicCalendar | None = None
 _dataset_service: DatasetService | None = None
 _background_tasks: list[asyncio.Task[None]] = []
+_last_ai_context_error: str | None = None
 
 # Probe results live in memory only: the providers table has no latency column, and a
 # latency measured in a previous process is not a fact about this one.
@@ -300,22 +301,22 @@ def _research_candles(market: MarketSnapshot) -> tuple[tuple[Any, ...], str]:
 
 
 async def _calendar_worker() -> None:
-    cycles = 0
     while True:
         if _calendar is not None:
             await _calendar.refresh()
-        if cycles % 2 == 0:
-            try:
-                await _refresh_ai_context()
-            except Exception as exc:
-                logger.warning("AI context refresh failed: %s", exc)
-        cycles += 1
+        try:
+            await _refresh_ai_context()
+        except Exception as exc:
+            logger.warning("AI context refresh failed: %s", exc)
         await asyncio.sleep(15 * 60)
 
 
 async def _refresh_ai_context() -> None:
+    global _last_ai_context_error
     settings = _settings
     if settings is None or not settings.gateway_base_url or _hermes_http_client is None:
+        if not settings or not settings.gateway_base_url:
+            _last_ai_context_error = "OpenCodex gateway is not configured"
         return
     gateway = GatewayClient(
         base_url=settings.gateway_base_url,
@@ -326,12 +327,14 @@ async def _refresh_ai_context() -> None:
         ),
         http_client=_hermes_http_client,
     )
+    provider = OpenCodexSearchProvider(gateway)
     engine = ContextEngine(
-        search_provider=OpenCodexSearchProvider(gateway),
+        search_provider=provider,
         quota_repo=_quota_repo,
         max_daily_searches=settings.research_web_calls_max_per_day,
     )
     snapshot = await engine.fetch_snapshot(symbol=settings.symbol)
+    _last_ai_context_error = provider.last_error
     if _ledger_repo is not None and snapshot.items:
         _ledger_repo.save_context_snapshot(snapshot=snapshot, freshness="live")
     if _trading_runtime is not None:
@@ -683,6 +686,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     _provider_probes.clear()
     if _provider_repo is not None and _settings.gateway_base_url:
         _provider_http_client = httpx.AsyncClient()
+        if _calendar is not None:
+            _calendar.bind_client(_provider_http_client)
         ai_veto = DecisionVetoEngine(
             route_service=RouteService(_provider_repo),
             gateway_client=GatewayClient(
@@ -754,6 +759,8 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         and _backtest_engine is not None
     ):
         _hermes_http_client = httpx.AsyncClient()
+        if _calendar is not None:
+            _calendar.bind_client(_hermes_http_client)
         hermes_gateway = GatewayClient(
             base_url=_settings.gateway_base_url or "http://127.0.0.1:9",
             auth_token=(
@@ -1523,58 +1530,158 @@ async def equity_curve() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 @app.get("/api/context")
 async def live_context() -> dict[str, Any]:
-    """Items from the newest persisted context snapshot. Empty until one is captured."""
-    ledger = _require(_ledger_repo, "ledger repository")
-    snapshot = ledger.latest_context_snapshot()
-    items = snapshot["summary"].get("items", []) if snapshot else []
-    if not snapshot or not items:
-        if _calendar is not None:
-            calendar_rows = _calendar.as_context_rows()
-            if calendar_rows:
-                return _env(
-                    calendar_rows,
-                    availability="available" if _calendar.detail is None else "degraded",
-                    source=_calendar.source,
-                    observed_at=_calendar.updated_at,
-                    stale=_calendar.updated_at is None,
-                    detail=_calendar.detail or "economic calendar",
-                )
-        return _env(
-            [],
-            availability="unavailable",
-            source="context-ledger",
-            stale=True,
-            detail="no context snapshot with items has been captured yet",
-        )
-
-    sources = snapshot["sources"]
-    fetched_at = datetime.fromisoformat(str(snapshot["fetched_at"]))
-    rows: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
-        source_indexes = item.get("source_indexes") or []
-        source_name = "unattributed"
-        if source_indexes and source_indexes[0] < len(sources):
-            source_name = str(sources[source_indexes[0]]["url"])
-        published = item.get("published_at") or snapshot["fetched_at"]
+    """Live market readings, agent last eval, calendar, then Gemini search items."""
+    rows: list[dict[str, Any]] = _live_market_context_rows()
+    sources = ["market"]
+    if _autonomous_runtime is not None:
+        agent_rows = _autonomous_runtime.context_rows()
+        if agent_rows:
+            rows.extend(agent_rows)
+            sources.append("paper-agent")
+    if _calendar is not None:
+        calendar_rows = _calendar.as_context_rows()
+        if calendar_rows:
+            rows.extend(calendar_rows)
+            sources.append(_calendar.source)
+        elif _calendar.detail:
+            rows.append(
+                {
+                    "id": "calendar-status",
+                    "category": "fed",
+                    "title": f"USD calendar: {_calendar.detail}",
+                    "direction": "neutral",
+                    "severity": "low",
+                    "contradictory": False,
+                    "source": _calendar.source,
+                    "time": datetime.now(UTC).strftime("%H:%M"),
+                }
+            )
+            sources.append(_calendar.source)
+    if _last_ai_context_error:
         rows.append(
             {
-                "id": f"{snapshot['id']}-{index}",
-                "category": str(item.get("driver", "unknown")),
-                "title": str(item.get("summary", "")),
-                "direction": str(item.get("direction", "neutral")),
-                "severity": str(item.get("severity", "low")),
-                "contradictory": bool(item.get("contradictory", False)),
-                "source": source_name,
-                "time": str(published)[11:16],
+                "id": "search-status",
+                "category": "search",
+                "title": (
+                    "Gemini web grounding is offline. "
+                    f"{_last_ai_context_error[:180]}"
+                ),
+                "direction": "neutral",
+                "severity": "low",
+                "contradictory": False,
+                "source": "opencodex",
+                "time": datetime.now(UTC).strftime("%H:%M"),
             }
         )
+        sources.append("opencodex")
+    ledger = _ledger_repo
+    snapshot = ledger.latest_context_snapshot() if ledger is not None else None
+    items = snapshot["summary"].get("items", []) if snapshot else []
+    if snapshot and items:
+        snapshot_sources = snapshot["sources"]
+        fetched_at = datetime.fromisoformat(str(snapshot["fetched_at"]))
+        for index, item in enumerate(items):
+            source_indexes = item.get("source_indexes") or []
+            source_name = "unattributed"
+            if source_indexes and source_indexes[0] < len(snapshot_sources):
+                source_name = str(snapshot_sources[source_indexes[0]]["url"])
+            published = item.get("published_at") or snapshot["fetched_at"]
+            rows.append(
+                {
+                    "id": f"{snapshot['id']}-{index}",
+                    "category": str(item.get("driver", "unknown")),
+                    "title": str(item.get("summary", "")),
+                    "direction": str(item.get("direction", "neutral")),
+                    "severity": str(item.get("severity", "low")),
+                    "contradictory": bool(item.get("contradictory", False)),
+                    "source": source_name,
+                    "time": str(published)[11:16],
+                }
+            )
+        sources.append("context-ledger")
+        return _env(
+            rows,
+            source="+".join(sources),
+            observed_at=fetched_at,
+            stale=(datetime.now(UTC) - fetched_at) > timedelta(hours=6),
+            detail=f"conflict level {snapshot['conflict_level']}",
+        )
+    if rows:
+        return _env(
+            rows,
+            availability="available",
+            source="+".join(sources),
+            observed_at=datetime.now(UTC),
+            stale=False,
+            detail="live market, agent, and calendar observations",
+        )
     return _env(
-        rows,
+        [],
+        availability="unavailable",
         source="context-ledger",
-        observed_at=fetched_at,
-        stale=(datetime.now(UTC) - fetched_at) > timedelta(hours=6),
-        detail=f"conflict level {snapshot['conflict_level']}",
+        stale=True,
+        detail="no context snapshot with items has been captured yet",
     )
+
+
+def _quote_context_row(symbol: str, quote: Any, source: str) -> dict[str, Any]:
+    mid = (quote.bid + quote.ask) / Decimal("2")
+    spread = quote.ask - quote.bid
+    return {
+        "id": f"quote-{symbol}-{quote.observed_at.isoformat()}",
+        "category": "exchange",
+        "title": (
+            f"{symbol} live mid {mid:.4f}  bid {quote.bid}  ask {quote.ask}  "
+            f"spread {spread}"
+        ),
+        "direction": "neutral",
+        "severity": "medium",
+        "contradictory": False,
+        "source": source or "binance-public",
+        "time": quote.observed_at.strftime("%H:%M"),
+    }
+
+
+def _bar_context_row(bar: Any, source: str) -> dict[str, Any]:
+    return {
+        "id": f"bar-{bar.symbol}-{bar.close_time.isoformat()}",
+        "category": "macro",
+        "title": (
+            f"{bar.symbol} last 15m close {bar.close}  "
+            f"range {bar.low}-{bar.high}"
+        ),
+        "direction": "neutral",
+        "severity": "low",
+        "contradictory": False,
+        "source": source or "binance-public",
+        "time": bar.close_time.strftime("%H:%M"),
+    }
+
+
+def _live_market_context_rows() -> list[dict[str, Any]]:
+    market = _market()
+    symbol = _settings.symbol if _settings is not None else "PAXGUSDT"
+    rows: list[dict[str, Any]] = []
+    quoted: set[str] = set()
+    barred: set[str] = set()
+    quote = market.latest_quote
+    if quote is not None:
+        rows.append(_quote_context_row(symbol, quote, market.source or "binance-public"))
+        quoted.add(symbol)
+    if market.candles_15m:
+        bar = market.candles_15m[-1]
+        rows.append(_bar_context_row(bar, market.source or "binance-public"))
+        barred.add(bar.symbol)
+    if _ingestion is not None:
+        for aux_symbol, aux_quote in _ingestion.aux_quotes().items():
+            if aux_symbol not in quoted:
+                rows.append(_quote_context_row(aux_symbol, aux_quote, "binance-rest"))
+                quoted.add(aux_symbol)
+        for aux_symbol, aux_bar in _ingestion.aux_bars().items():
+            if aux_bar.symbol not in barred:
+                rows.append(_bar_context_row(aux_bar, "binance-rest"))
+                barred.add(aux_bar.symbol)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2324,6 +2431,7 @@ async def start_bot() -> dict[str, str]:
         runtime.start()
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    asyncio.create_task(_refresh_ai_context(), name="goldguard-context-on-start")
     return {"status": "started"}
 
 

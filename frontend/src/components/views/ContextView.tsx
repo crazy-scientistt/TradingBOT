@@ -12,9 +12,13 @@ export const ContextView: React.FC = () => {
       case 'yields':
         return { label: 'Real Yields', color: '#60a5fa', bg: 'rgba(96, 165, 250, 0.1)' };
       case 'exchange':
-        return { label: 'Paxos Reserve', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
+        return { label: 'Live Quote', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)' };
       case 'macro':
-        return { label: 'Macro', color: 'var(--gold-primary)', bg: 'rgba(61, 126, 255, 0.1)' };
+        return { label: 'Closed Bar', color: 'var(--gold-primary)', bg: 'rgba(61, 126, 255, 0.1)' };
+      case 'agent':
+        return { label: 'Agent Read', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)' };
+      case 'search':
+        return { label: 'Gemini', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)' };
       default:
         return { label: cat || 'Context', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.1)' };
     }
@@ -41,7 +45,7 @@ export const ContextView: React.FC = () => {
               Macro Intelligence &amp; Live Context Synthesis
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Real-time central bank feeds, 10Y real yields, and Paxos gold attestations via Gemini Grounding
+              Live Binance quotes, last closed 15m bars, and the paper agent's last read. Calendar and Gemini attach when they actually return.
             </span>
           </div>
         </div>
@@ -55,7 +59,7 @@ export const ContextView: React.FC = () => {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         {liveContext.length === 0 ? (
           <div style={{ padding: '32px', textAlign: 'center', color: '#9498a4', fontSize: '13px' }}>
-            No macro context observations yet. The AI context layer will populate here once the agent evaluates market conditions.
+            No live quote, closed bar, or agent read yet. Start paper trading so the bot keeps reading the public market.
           </div>
         ) : liveContext.map((item) => {
           const badge = getCategoryBadge(item.category);
