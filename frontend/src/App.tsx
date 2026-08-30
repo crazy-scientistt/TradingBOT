@@ -19,6 +19,7 @@ import { MarketView } from './components/views/MarketView';
 import { ContextView } from './components/views/ContextView';
 import { DecisionsView } from './components/views/DecisionsView';
 import { TradesView } from './components/views/TradesView';
+import { QualifyView } from './components/views/QualifyView';
 import { SettingsModal } from './components/views/SettingsModal';
 import { ToastContainer } from './components/common/ToastContainer';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -232,6 +233,7 @@ const MainDashboard: React.FC = () => {
           {(activeTab === 'News' || activeTab === 'Context') && <ContextView />}
           {activeTab === 'Decisions' && <DecisionsView />}
           {activeTab === 'Trades' && <TradesView />}
+          {activeTab === 'Qualify' && <QualifyView />}
         </main>
       </div>
 

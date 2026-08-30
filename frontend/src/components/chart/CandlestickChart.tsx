@@ -80,6 +80,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   const [hover, setHover] = useState<Candle | null>(null);
   const [status, setStatus] = useState('Connecting live feed…');
   const [fullscreen, setFullscreen] = useState(false);
+  const [tvMode, setTvMode] = useState(false);
 
   const applyBars = useCallback((nextRows: Candle[], fit = false) => {
     if (!candleSeries.current || !chartRef.current) return;
@@ -422,6 +423,22 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
               : '—'}
           </span>
           <button
+            onClick={() => setTvMode((value) => !value)}
+            style={{
+              background: tvMode ? 'rgba(61,126,255,0.15)' : 'transparent',
+              border: '1px solid #1c2330',
+              color: tvMode ? 'var(--gold-primary)' : '#9498a4',
+              cursor: 'pointer',
+              padding: '3px 8px',
+              fontSize: '10px',
+              fontWeight: 700,
+              borderRadius: '4px',
+            }}
+            title="TradingView"
+          >
+            TV
+          </button>
+          <button
             onClick={() => void toggleFullscreen()}
             style={{ background: 'transparent', border: 'none', color: '#9498a4', cursor: 'pointer', padding: '4px' }}
             title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
@@ -430,10 +447,18 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
           </button>
         </div>
       </div>
-      <div
-        ref={containerRef}
-        style={{ width: '100%', height: chartHeight, flex: fullscreen ? 1 : undefined, backgroundColor: '#0b0c0e' }}
-      />
+      {tvMode ? (
+        <iframe
+          title="TradingView PAXGUSDT"
+          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE%3APAXGUSDT&interval=${activeTf === '1D' ? 'D' : activeTf === '4h' ? '240' : activeTf === '1h' ? '60' : activeTf === '5m' ? '5' : activeTf === '1m' ? '1' : '15'}&theme=dark&style=1&locale=en&hideideas=1`}
+          style={{ width: '100%', height: chartHeight, border: 0, backgroundColor: '#0b0c0e' }}
+        />
+      ) : (
+        <div
+          ref={containerRef}
+          style={{ width: '100%', height: chartHeight, flex: fullscreen ? 1 : undefined, backgroundColor: '#0b0c0e' }}
+        />
+      )}
       <ChartControls
         activeTimeframe={activeTf}
         onSelectTimeframe={(tf) => setActiveTf(tf as ChartTf)}

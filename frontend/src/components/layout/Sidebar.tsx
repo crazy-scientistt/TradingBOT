@@ -9,6 +9,7 @@ import {
   Sparkles,
   Cpu,
   ShieldAlert,
+  ShieldCheck,
   Activity
 } from 'lucide-react';
 import { GoldGuardLogo, HermesIcon } from '../common/Icons';
@@ -35,6 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
     { name: 'Decisions', icon: CheckCircle2 },
     { name: 'Trades', icon: Briefcase },
     { name: 'Cockpit', icon: ShieldAlert },
+    { name: 'Qualify', icon: ShieldCheck },
   ];
 
   const handleSelect = (name: string) => {
