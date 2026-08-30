@@ -33,6 +33,38 @@ from goldguard.strategy.indicators import (
 from goldguard.strategy.runtime import GenomeRuntime
 
 
+def _hourly_from_15m(candles_15m: Sequence[Candle]) -> list[Candle]:
+    """Build closed 1h bars from a 15m series so HTF bias exists without a second feed."""
+
+    buckets: dict[datetime, list[Candle]] = {}
+    for candle in candles_15m:
+        hour = candle.open_time.replace(minute=0, second=0, microsecond=0)
+        buckets.setdefault(hour, []).append(candle)
+    hourly: list[Candle] = []
+    hour_step = timedelta(hours=1)
+    for hour in sorted(buckets):
+        rows = buckets[hour]
+        if len(rows) < 4:
+            continue
+        first = rows[0]
+        last = rows[-1]
+        hourly.append(
+            Candle(
+                symbol=first.symbol,
+                timeframe="1h",
+                open_time=hour,
+                close_time=hour + hour_step - timedelta(milliseconds=1),
+                open=first.open,
+                high=max(row.high for row in rows),
+                low=min(row.low for row in rows),
+                close=last.close,
+                volume=sum((row.volume for row in rows), Decimal("0")),
+                closed=True,
+            )
+        )
+    return hourly
+
+
 @dataclass(frozen=True)
 class FrictionConfig:
     commission_rate: Decimal = Decimal("0.001")  # 0.1% taker fee
@@ -98,6 +130,8 @@ class _IndicatorSeries:
             contiguous.append(run >= min(position + 1, 50))
 
         hourly = list(candles_1h or ())
+        if not hourly:
+            hourly = _hourly_from_15m(candles_15m)
         closes_1h = [float(candle.close) for candle in hourly]
         hour_closes = [candle.close_time for candle in hourly]
         hour_index: list[int | None] = []

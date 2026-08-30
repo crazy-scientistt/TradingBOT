@@ -144,3 +144,58 @@ async def test_proposal_generator_rejects_more_than_two_mutations() -> None:
                 reflections=[],
                 market_summary="Test",
             )
+
+
+@pytest.mark.asyncio
+async def test_empty_parameter_changes_retries_then_applies_stop() -> None:
+    parent = trend_pullback_v1()
+    calls = {"n": 0}
+
+    async def mock_handler(req: httpx.Request) -> httpx.Response:
+        del req
+        calls["n"] += 1
+        if calls["n"] == 1:
+            body = {
+                "hypothesis": "Needs a real mutation on the second pass.",
+                "evidence_refs": ["live-market"],
+                "parameter_changes": {},
+            }
+        else:
+            body = {
+                "hypothesis": "Tightening stop distance improves payoff after false breakouts.",
+                "evidence_refs": ["live-market"],
+                "parameter_changes": {"stop_atr_multiple": "1.2"},
+            }
+        return httpx.Response(
+            200,
+            json={
+                "id": "chat-hermes-retry",
+                "model": "google-antigravity/gemini-3.7-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": json.dumps(body)},
+                    }
+                ],
+            },
+        )
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        hermes = HermesClient(
+            base_url="http://hermes.test",
+            api_key="test-key",
+            http_client=http_client,
+        )
+        generator = StrategyProposalGenerator(hermes_client=hermes)
+        genome = await generator.propose(
+            parent_genome=parent,
+            reflections=[],
+            market_summary="Test",
+        )
+
+    from decimal import Decimal
+
+    assert calls["n"] == 2
+    assert genome.exit.stop_atr_multiple == Decimal("1.2")
+    assert genome.exit.stop_atr_multiple < parent.exit.stop_atr_multiple

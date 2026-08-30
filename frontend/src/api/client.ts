@@ -76,6 +76,7 @@ export interface StatusResponse {
   latest_lesson?: string | null;
   latest_lesson_trade?: string | null;
   last_gate?: string | null;
+  last_gate_detail?: Record<string, unknown> | null;
   canary_stage?: string | null;
   ui_revision?: string | null;
   autopromotion_enabled?: boolean;

@@ -34,7 +34,8 @@ class HermesClient:
                     "role": "system",
                     "content": (
                         "Return one declarative strategy proposal as strict JSON. "
-                        "Change exactly one allowed parameter and cite supplied evidence IDs."
+                        "parameter_changes must contain 1 or 2 allowed keys. "
+                        "Never return an empty parameter_changes object."
                     ),
                 },
                 {
@@ -105,7 +106,8 @@ class HermesClient:
                     "role": "system",
                     "content": (
                         "Return one declarative strategy proposal as strict JSON. "
-                        "Change at most two allowed parameters and cite supplied evidence IDs."
+                        "parameter_changes must contain 1 or 2 allowed keys "
+                        "with decimal string values. Never return an empty object."
                     ),
                 },
                 {"role": "user", "content": user_content},

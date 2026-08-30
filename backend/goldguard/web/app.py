@@ -292,7 +292,10 @@ def _research_candles(market: MarketSnapshot) -> tuple[tuple[Any, ...], str]:
         except Exception:
             history = ()
         if len(history) >= 100:
-            return history, f"history:{settings.symbol}:verified"
+            # 3y is verified on disk; gates use the recent working window so the
+            # API event loop is not blocked for minutes on every Hermes cycle.
+            working = history[-25_000:] if len(history) > 25_000 else history
+            return working, f"history:{settings.symbol}:verified"
     return tuple(market.candles_15m), (
         f"app:{market.source}:{market.observed_at.isoformat()}"
         if market.observed_at
@@ -355,21 +358,66 @@ async def _dataset_worker() -> None:
         end = datetime.now(UTC)
         start = end - timedelta(days=365 * 3)
         try:
-            logger.info("Bootstrapping 3-year %s dataset from %s", settings.symbol, start.date())
-            manifest = await service.bootstrap(settings.symbol, start, end)
-            if getattr(manifest, "status", None) is not None and str(manifest.status) != "VERIFIED":
-                logger.error(
-                    "3-year dataset not verified for %s: status=%s error=%s",
-                    settings.symbol,
-                    manifest.status,
-                    getattr(manifest, "last_error", None),
+            current = service.status(settings.symbol)
+            if str(current) == "VERIFIED":
+                logger.info("Existing %s dataset already verified", settings.symbol)
+                _background_tasks.append(
+                    asyncio.create_task(_run_hermes_cycle(), name="goldguard-hermes-on-dataset")
                 )
             else:
-                logger.info("3-year dataset verified for %s", settings.symbol)
+                healed = service.heal_corrupt(settings.symbol)
+                if healed is not None and str(healed.status) == "VERIFIED":
+                    logger.info("Healed existing %s dataset without re-download", settings.symbol)
+                    _background_tasks.append(
+                        asyncio.create_task(_run_hermes_cycle(), name="goldguard-hermes-on-dataset")
+                    )
+                else:
+                    logger.info(
+                        "Bootstrapping 3-year %s dataset from %s",
+                        settings.symbol,
+                        start.date(),
+                    )
+                    manifest = await service.bootstrap(settings.symbol, start, end)
+                    if (
+                        getattr(manifest, "status", None) is not None
+                        and str(manifest.status) != "VERIFIED"
+                    ):
+                        recovered = service.heal_corrupt(settings.symbol)
+                        if recovered is not None and str(recovered.status) == "VERIFIED":
+                            logger.info(
+                                "Healed 3-year dataset for %s after overlap/alignment",
+                                settings.symbol,
+                            )
+                            manifest = recovered
+                        else:
+                            logger.error(
+                                "3-year dataset not verified for %s: status=%s error=%s",
+                                settings.symbol,
+                                manifest.status,
+                                getattr(manifest, "last_error", None),
+                            )
+                    if str(getattr(manifest, "status", "")) == "VERIFIED":
+                        logger.info("3-year dataset verified for %s", settings.symbol)
+                        _background_tasks.append(
+                            asyncio.create_task(
+                                _run_hermes_cycle(), name="goldguard-hermes-on-dataset"
+                            )
+                        )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning("Dataset bootstrap failed: %s", exc)
+            try:
+                recovered = service.heal_corrupt(settings.symbol)
+                if recovered is not None and str(recovered.status) == "VERIFIED":
+                    logger.info("Healed %s dataset after bootstrap exception", settings.symbol)
+                    _background_tasks.append(
+                        asyncio.create_task(
+                            _run_hermes_cycle(), name="goldguard-hermes-on-dataset"
+                        )
+                    )
+            except Exception:
+                pass
         while True:
             await asyncio.sleep(24 * 60 * 60)
 
@@ -1004,6 +1052,11 @@ async def app_status() -> dict[str, Any]:
     extra["latest_lesson"] = latest_lesson
     extra["latest_lesson_trade"] = latest_trade
     extra["last_gate"] = last_gate
+    extra["last_gate_detail"] = (
+        dict(_hermes_loop.last_result.gate_results)
+        if _hermes_loop is not None and getattr(_hermes_loop, "last_result", None) is not None
+        else None
+    )
     extra["autopromotion_enabled"] = bool(
         _hermes_loop is not None and _hermes_loop.config.autopromotion_enabled
     )
@@ -1045,6 +1098,11 @@ def _dataset_status_label() -> str:
     settings = _settings
     if settings is None:
         return "UNKNOWN"
+    if _dataset_service is not None:
+        try:
+            return str(_dataset_service.status(settings.symbol).value)
+        except Exception:
+            pass
     path = settings.data_dir / "market" / settings.symbol / "manifest.json"
     if not path.exists():
         return "UNKNOWN"

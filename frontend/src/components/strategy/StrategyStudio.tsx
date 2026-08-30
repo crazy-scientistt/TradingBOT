@@ -20,6 +20,67 @@ interface BacktestTrade {
   pnl?: number;
 }
 
+function describePromotionWait(input: {
+  autoOn: boolean;
+  lastGate: string | null;
+  lastGateDetail: Record<string, unknown> | null;
+  datasetStatus: string | null;
+  running: boolean;
+}): { title: string; detail: string; tone: 'wait' | 'ok' | 'fail' } {
+  if (!input.running || !input.autoOn) {
+    return {
+      title: 'Auto-promote waits on Start',
+      detail: 'Set capital, press Start. Hermes then researches, shadow-tests, and promotes without a click.',
+      tone: 'wait',
+    };
+  }
+  const reasons = Array.isArray(input.lastGateDetail?.reasons)
+    ? (input.lastGateDetail?.reasons as string[])
+    : [];
+  const error = typeof input.lastGateDetail?.error === 'string' ? String(input.lastGateDetail.error) : '';
+  const reasonText = typeof input.lastGateDetail?.reason === 'string' ? String(input.lastGateDetail.reason) : '';
+  if (input.lastGate === 'promoted' || input.lastGate === 'promoted_candidate') {
+    return {
+      title: 'Hermes promoted a candidate',
+      detail: 'The improved genome is now the active paper strategy and will be used on the next decision.',
+      tone: 'ok',
+    };
+  }
+  if (input.datasetStatus === 'CORRUPT' || input.datasetStatus === 'DOWNLOADING' || input.lastGate === 'dataset_unverified') {
+    return {
+      title: 'Waiting on verified market history',
+      detail: 'Shadow and backtest gates need a verified 15m series. Hermes will retry as soon as the dataset verifies.',
+      tone: 'wait',
+    };
+  }
+  if (reasons.includes('SHADOW_EVIDENCE_UNBOUND') || input.lastGate === 'shadow_pending') {
+    return {
+      title: 'Shadow-testing — not active yet',
+      detail: 'Hermes is measuring this candidate on a reserved 14-day window. It becomes active only if shadow PnL, duration, and trades all pass.',
+      tone: 'wait',
+    };
+  }
+  if (input.lastGate === 'proposal_rejected') {
+    return {
+      title: 'Last proposal was invalid',
+      detail: error || 'Hermes returned a malformed parameter change. It retries automatically on the next cycle.',
+      tone: 'fail',
+    };
+  }
+  if (input.lastGate === 'promotion_rejected') {
+    return {
+      title: 'Candidate rejected by a gate',
+      detail: reasons.join(', ') || reasonText || 'Development, validation, holdout, or shadow evidence failed. Baseline stays active.',
+      tone: 'fail',
+    };
+  }
+  return {
+    title: input.lastGate ? `Hermes: ${input.lastGate}` : 'Hermes is researching',
+    detail: reasonText || error || 'Candidates stay listed until every gate passes. The baseline keeps trading paper until then.',
+    tone: 'wait',
+  };
+}
+
 export const StrategyStudio: React.FC<StrategyStudioProps> = ({
   initialGenomes,
   activeGenomeId: propActiveGenomeId,
@@ -42,6 +103,17 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
   const selectedGenome = genomes.find((g) => g.genome_id === selectedId) || activeGenome;
   const isCandidate = selectedGenome && activeGenome && selectedGenome.genome_id !== activeGenome.genome_id;
   const autoOn = botContext?.runtimeStatus?.autopromotionEnabled ?? false;
+  const lastGate = botContext?.runtimeStatus?.lastGate ?? null;
+  const lastGateDetail = botContext?.runtimeStatus?.lastGateDetail ?? null;
+  const datasetStatus = botContext?.runtimeStatus?.datasetStatus ?? null;
+  const journalLast = botContext?.hermesJournal?.last ?? null;
+  const promotionWait = describePromotionWait({
+    autoOn,
+    lastGate: lastGate || journalLast?.status || null,
+    lastGateDetail: lastGateDetail || journalLast?.gate_results || null,
+    datasetStatus,
+    running: Boolean(botContext?.runtimeStatus?.running),
+  });
 
   const handleRunBacktest = async () => {
     setIsRunningBacktest(true);
@@ -179,6 +251,54 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
       {backtestError && (
         <div role="alert" style={{ color: '#fca5a5', fontSize: '12px' }}>{backtestError}</div>
       )}
+
+      <div
+        role="status"
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: '12px',
+          flexWrap: 'wrap',
+          padding: '10px 14px',
+          borderRadius: '8px',
+          border:
+            promotionWait.tone === 'ok'
+              ? '1px solid rgba(16,185,129,0.35)'
+              : promotionWait.tone === 'fail'
+                ? '1px solid rgba(239,68,68,0.35)'
+                : '1px solid rgba(96,165,250,0.35)',
+          backgroundColor:
+            promotionWait.tone === 'ok'
+              ? 'rgba(16,185,129,0.08)'
+              : promotionWait.tone === 'fail'
+                ? 'rgba(239,68,68,0.08)'
+                : 'rgba(96,165,250,0.08)',
+        }}
+      >
+        <div>
+          <div
+            style={{
+              fontSize: '12px',
+              fontWeight: 700,
+              color:
+                promotionWait.tone === 'ok'
+                  ? '#10b981'
+                  : promotionWait.tone === 'fail'
+                    ? '#fca5a5'
+                    : '#93c5fd',
+            }}
+          >
+            {promotionWait.title}
+          </div>
+          <div style={{ fontSize: '12px', color: '#9498a4', marginTop: '4px', maxWidth: '720px' }}>
+            {promotionWait.detail}
+          </div>
+        </div>
+        <div style={{ fontSize: '11px', color: '#676b78', fontFamily: 'monospace', textAlign: 'right' }}>
+          <div>dataset {datasetStatus || 'UNKNOWN'}</div>
+          <div>gate {lastGate || journalLast?.status || 'idle'}</div>
+        </div>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr', gap: '12px' }}>
         <div

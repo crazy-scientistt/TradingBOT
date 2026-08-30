@@ -8,6 +8,7 @@ the canary, and reverting to the baseline without a human in the loop.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -491,3 +492,48 @@ def test_autonomy_revoked_during_activation_cannot_leave_active_candidate_withou
     assert "AUTONOMY_REVOKED" in decision.rejection_reasons
     assert genomes.get_genome_status(candidate.genome_id) == "shadow"
     assert promotions.get_open_canary() is None
+
+
+def _history_candles(count: int) -> tuple:
+    from goldguard.domain.models import Candle
+
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    rows = []
+    for index in range(count):
+        opened = start + timedelta(minutes=15 * index)
+        rows.append(
+            Candle(
+                symbol="PAXGUSDT",
+                timeframe="15m",
+                open_time=opened,
+                close_time=opened + timedelta(minutes=15) - timedelta(milliseconds=1),
+                open=Decimal("2500"),
+                high=Decimal("2505"),
+                low=Decimal("2495"),
+                close=Decimal("2502"),
+                volume=Decimal("10"),
+                closed=True,
+            )
+        )
+    return tuple(rows)
+
+
+def test_verified_history_binds_shadow_from_reserved_tail(env: _Env) -> None:
+    candidate = _candidate()
+    env.genomes.save_genome(candidate, origin="hermes", status="candidate")
+    dataset = EvidenceDataset(
+        dataset_id="history:PAXGUSDT:verified",
+        verified=True,
+        candles_15m=_history_candles(14 * 96 + 400),
+        shadow=ShadowEvidence(
+            days=0,
+            net_pnl=Decimal("0"),
+            trades=0,
+            slippage_acceptable=False,
+        ),
+    )
+
+    decision = env.controller.evaluate(candidate, dataset, env.baseline)
+
+    assert decision.promoted is True, decision.rejection_reasons
+    assert env.genomes.get_genome_status(candidate.genome_id) == "active"

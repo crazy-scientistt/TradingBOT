@@ -74,6 +74,28 @@ def _read_candles(path: Path) -> list[Candle]:
     return [Candle.model_validate(item) for item in raw]
 
 
+def _ohlcv_conflict(left: Candle, right: Candle) -> bool:
+    return (
+        left.open != right.open
+        or left.high != right.high
+        or left.low != right.low
+        or left.close != right.close
+        or left.volume != right.volume
+    )
+
+
+def _align_up(value: datetime, interval_ms: int) -> datetime:
+    millis = _to_ms(value)
+    aligned = ((millis + interval_ms - 1) // interval_ms) * interval_ms
+    return datetime.fromtimestamp(aligned / 1000, tz=UTC)
+
+
+def _align_down(value: datetime, interval_ms: int) -> datetime:
+    millis = _to_ms(value)
+    aligned = (millis // interval_ms) * interval_ms
+    return datetime.fromtimestamp(aligned / 1000, tz=UTC)
+
+
 def _manifest_payload(manifest: BootstrapManifest) -> dict[str, object]:
     return {
         "symbol": manifest.symbol,
@@ -148,6 +170,12 @@ class DatasetService:
         requested_end = _utc(end, name="end")
         if requested_end <= requested_start:
             raise ValueError("end must be after start")
+        # Snap to 1h boundaries so Binance kline open times match expected counts.
+        hour_ms = INTERVAL_MILLISECONDS["1h"]
+        requested_start = _align_up(requested_start, hour_ms)
+        requested_end = _align_down(requested_end, hour_ms)
+        if requested_end <= requested_start:
+            raise ValueError("end must be after start after interval alignment")
         actual_start = requested_start - timedelta(days=self._warmup_days)
         dataset_dir = self._storage_dir / "market" / symbol
         dataset_dir.mkdir(parents=True, exist_ok=True)
@@ -417,6 +445,116 @@ class DatasetService:
         except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
             return None
 
+    def heal_corrupt(self, symbol: str) -> BootstrapManifest | None:
+        """Recover a CORRUPT dataset caused by page-overlap flags or unaligned bounds.
+
+        Unique, contiguous, OHLC-valid series are rewritten with a fresh checksum
+        and marked VERIFIED. Internally inconsistent rows stay CORRUPT.
+        """
+
+        dataset_dir = self._storage_dir / "market" / symbol
+        manifest_path = dataset_dir / "manifest.json"
+        if not manifest_path.exists():
+            return None
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if str(payload.get("status")) == DatasetStatus.VERIFIED.value:
+            return None
+
+        series: dict[str, list[Candle]] = {}
+        for timeframe in self._timeframes:
+            finals = [
+                path
+                for path in sorted(dataset_dir.glob(f"{timeframe}_*.json"))
+                if not path.name.endswith(".partial")
+            ]
+            partials = sorted(dataset_dir.glob(f"{timeframe}_*.json.partial"))
+            matches = finals or partials
+            if not matches:
+                return None
+            try:
+                candles = _read_candles(matches[-1])
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                return None
+            unique: dict[datetime, Candle] = {}
+            for item in candles:
+                if item.timeframe != timeframe or item.symbol != symbol or not item.closed:
+                    continue
+                prior = unique.get(item.open_time)
+                if prior is not None and _ohlcv_conflict(prior, item):
+                    return None
+                unique.setdefault(item.open_time, item)
+            ordered = sorted(unique.values(), key=lambda row: row.open_time)
+            verification = verify_candles(ordered, timeframe)
+            if not verification.verified or not ordered:
+                return None
+            series[timeframe] = ordered
+
+        bound_tf = "1h" if "1h" in series else next(iter(series))
+        bound_rows = series[bound_tf]
+        bound_interval = INTERVAL_MILLISECONDS[bound_tf]
+        actual_start = bound_rows[0].open_time
+        requested_end = bound_rows[-1].open_time + timedelta(milliseconds=bound_interval)
+        trimmed: dict[str, list[Candle]] = {}
+        for timeframe, rows in series.items():
+            clipped = [row for row in rows if actual_start <= row.open_time < requested_end]
+            verification = verify_candles(clipped, timeframe)
+            if not verification.verified or not clipped:
+                return None
+            expected = self._expected_count(actual_start, requested_end, timeframe)
+            if expected and len(clipped) != expected:
+                return None
+            trimmed[timeframe] = clipped
+        series = trimmed
+        tf_checksums = {tf: checksum_candles(rows) for tf, rows in series.items()}
+        tf_counts = {tf: len(rows) for tf, rows in series.items()}
+        range_name = _range_name(actual_start, requested_end)
+        for timeframe, rows in series.items():
+            _atomic_json_write(
+                dataset_dir / f"{timeframe}_{range_name}.json",
+                [item.model_dump(mode="json") for item in rows],
+            )
+            for leftover in dataset_dir.glob(f"{timeframe}_*.json.partial"):
+                leftover.unlink(missing_ok=True)
+        manifest = BootstrapManifest(
+            symbol=symbol,
+            requested_start=actual_start,
+            requested_end=requested_end,
+            actual_start=actual_start,
+            actual_end=requested_end,
+            warmup_days=self._warmup_days,
+            warmup_included=self._warmup_days > 0,
+            status=DatasetStatus.VERIFIED,
+            timeframe_checksums=tf_checksums,
+            timeframe_counts=tf_counts,
+            checksum=self._combined_checksum(tf_checksums),
+            created_at=datetime.now(UTC).isoformat(),
+            progress_percent=100,
+            last_error=None,
+            timeframe_ranges={
+                tf: (rows[0].open_time.isoformat(), rows[-1].open_time.isoformat())
+                for tf, rows in series.items()
+            },
+        )
+        _atomic_json_write(manifest_path, _manifest_payload(manifest))
+        progress_path = dataset_dir / "progress.json"
+        _atomic_json_write(
+            progress_path,
+            {
+                "symbol": symbol,
+                "status": DatasetStatus.VERIFIED.value,
+                "timeframe": None,
+                "downloaded_candles": sum(tf_counts.values()),
+                "expected_candles": sum(tf_counts.values()),
+                "percent": 100,
+                "updated_at": datetime.now(UTC).isoformat(),
+                "error": None,
+            },
+        )
+        return manifest
+
     def load_verified(self, symbol: str, timeframe: str) -> tuple[Candle, ...]:
         """Load candles only when the complete dataset manifest verifies."""
 
@@ -479,7 +617,10 @@ class DatasetService:
                     item_open_ms if max_open_ms is None else max(max_open_ms, item_open_ms)
                 )
                 if item.open_time in page_seen:
-                    duplicate_detected = True
+                    existing_page = by_open.get(item.open_time)
+                    if existing_page is not None and _ohlcv_conflict(existing_page, item):
+                        duplicate_detected = True
+                    continue
                 page_seen.add(item.open_time)
                 if item.symbol != symbol or item.timeframe != timeframe:
                     duplicate_detected = True
@@ -490,8 +631,10 @@ class DatasetService:
                     continue
                 existing = by_open.get(item.open_time)
                 if existing is not None:
-                    duplicate_detected = True
-                by_open.setdefault(item.open_time, item)
+                    if _ohlcv_conflict(existing, item):
+                        duplicate_detected = True
+                    continue
+                by_open[item.open_time] = item
             if max_open_ms is None or max_open_ms < cursor:
                 raise RuntimeError(f"{timeframe} history pagination made no progress")
             values = sorted(by_open.values(), key=lambda item: item.open_time)

@@ -49,6 +49,7 @@ export interface RuntimeStatus {
   hermesStatus: string | null;
   latestLesson: string | null;
   lastGate: string | null;
+  lastGateDetail: Record<string, unknown> | null;
   uiRevision: string | null;
   scopes: string[];
   autopromotionEnabled: boolean;
@@ -147,6 +148,7 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     hermesStatus: status?.hermes_status ?? null,
     latestLesson: status?.latest_lesson ?? null,
     lastGate: status?.last_gate ?? null,
+    lastGateDetail: status?.last_gate_detail ?? null,
     uiRevision: status?.ui_revision ?? null,
     scopes: status?.scopes ?? [],
     autopromotionEnabled: Boolean(status?.autopromotion_enabled),

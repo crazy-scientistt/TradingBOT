@@ -206,3 +206,86 @@ async def test_transient_page_failures_retry_with_backoff(tmp_path: Path) -> Non
     assert manifest.status is DatasetStatus.VERIFIED
     assert client.failures == 1
     assert len(client.calls) >= 2
+
+
+class _OverlapClient(_PagedClient):
+    async def klines(self, **kwargs):  # type: ignore[no-untyped-def]
+        values = await super().klines(**kwargs)
+        if values:
+            return [values[0], *values]
+        return values
+
+
+@pytest.mark.asyncio
+async def test_identical_page_overlap_does_not_corrupt(tmp_path: Path) -> None:
+    start = datetime(2026, 8, 25, tzinfo=UTC)
+    end = start + timedelta(hours=2)
+    service = DatasetService(
+        client=_OverlapClient(_rows(start, end)),
+        storage_dir=tmp_path,
+        warmup_days=0,
+        timeframes=("15m", "1h"),
+        max_attempts=1,
+        backoff_base_seconds=0,
+    )
+    manifest = await service.bootstrap("PAXGUSDT", start, end)
+    assert manifest.status is DatasetStatus.VERIFIED
+    assert service.status("PAXGUSDT") is DatasetStatus.VERIFIED
+
+
+@pytest.mark.asyncio
+async def test_heal_corrupt_rewrites_verified_manifest(tmp_path: Path) -> None:
+    start = datetime(2026, 8, 25, tzinfo=UTC)
+    end = start + timedelta(hours=2)
+    service = DatasetService(
+        client=_PagedClient(_rows(start, end)),
+        storage_dir=tmp_path,
+        warmup_days=0,
+        timeframes=("15m", "1h"),
+        max_attempts=1,
+        backoff_base_seconds=0,
+    )
+    await service.bootstrap("PAXGUSDT", start, end)
+    manifest_path = tmp_path / "market" / "PAXGUSDT" / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["status"] = "CORRUPT"
+    payload["last_error"] = "1h failed verification: missing=0, duplicates=1"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert service.status("PAXGUSDT") is DatasetStatus.CORRUPT
+
+    healed = service.heal_corrupt("PAXGUSDT")
+    assert healed is not None
+    assert healed.status is DatasetStatus.VERIFIED
+    assert service.status("PAXGUSDT") is DatasetStatus.VERIFIED
+    loaded = service.load_verified("PAXGUSDT", "15m")
+    assert len(loaded) > 0
+
+
+@pytest.mark.asyncio
+async def test_heal_reads_partial_checkpoint(tmp_path: Path) -> None:
+    start = datetime(2026, 8, 25, tzinfo=UTC)
+    end = start + timedelta(hours=2)
+    service = DatasetService(
+        client=_PagedClient(_rows(start, end)),
+        storage_dir=tmp_path,
+        warmup_days=0,
+        timeframes=("15m", "1h"),
+        max_attempts=1,
+        backoff_base_seconds=0,
+    )
+    await service.bootstrap("PAXGUSDT", start, end)
+    dataset_dir = tmp_path / "market" / "PAXGUSDT"
+    for final in list(dataset_dir.glob("*.json")):
+        if final.name in {"manifest.json", "progress.json"}:
+            continue
+        partial = final.with_name(final.name + ".partial")
+        final.replace(partial)
+    manifest_path = dataset_dir / "manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["status"] = "CORRUPT"
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    healed = service.heal_corrupt("PAXGUSDT")
+    assert healed is not None
+    assert healed.status is DatasetStatus.VERIFIED
+    assert service.status("PAXGUSDT") is DatasetStatus.VERIFIED

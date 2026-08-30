@@ -112,6 +112,7 @@ class CanaryConfig:
 
 
 PROMOTED_BY = "promotion_controller"
+SHADOW_WINDOW_BARS_15M = 14 * 24 * 4  # 14 days of 15-minute closes
 
 
 class PromotionController:
@@ -191,6 +192,8 @@ class PromotionController:
                 ("DATASET_UNVERIFIED",),
                 f"dataset {dataset.dataset_id} has not passed verification",
             )
+
+        dataset = self._bind_shadow_window(candidate, dataset)
 
         if not self._autonomy.is_full_autonomy():
             state = self._autonomy.state()
@@ -363,6 +366,50 @@ class PromotionController:
         gates.append(shadow)
         gate_reports["shadow"] = shadow.metrics
         return gates
+
+    def _bind_shadow_window(
+        self,
+        candidate: StrategyGenome,
+        dataset: EvidenceDataset,
+    ) -> EvidenceDataset:
+        """Reserve the last 14 days of verified 15m history as candidate-bound shadow.
+
+        Live paper trades of the baseline are not evidence for a candidate. When the
+        dataset is long enough, the tail is measured for this genome and excluded
+        from the development / validation / holdout candles.
+        """
+
+        if dataset.shadow.candidate_id == candidate.genome_id:
+            return dataset
+        candles = dataset.candles_15m
+        if len(candles) < SHADOW_WINDOW_BARS_15M + 400:
+            return dataset
+        if not hasattr(candles[0], "open_time"):
+            return dataset
+        body = candles[:-SHADOW_WINDOW_BARS_15M]
+        tail = candles[-SHADOW_WINDOW_BARS_15M:]
+        try:
+            self._consume_backtest()
+            run = self._engine.run(candidate, tail)
+            report = run.report
+        except Exception:
+            return dataset
+        first = tail[0].open_time
+        last = tail[-1].open_time
+        days = max((last - first).days + 1, 0)
+        shadow = ShadowEvidence(
+            days=days,
+            net_pnl=report.net_pnl,
+            trades=int(report.trade_count),
+            slippage_acceptable=True,
+            candidate_id=candidate.genome_id,
+        )
+        return EvidenceDataset(
+            dataset_id=dataset.dataset_id,
+            verified=dataset.verified,
+            candles_15m=body,
+            shadow=shadow,
+        )
 
     # -- rollback ------------------------------------------------------------------
 

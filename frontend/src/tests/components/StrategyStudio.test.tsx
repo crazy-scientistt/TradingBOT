@@ -65,6 +65,7 @@ describe('StrategyStudio', () => {
     const titles = screen.getAllByText(/Hourly Trend 15m Pullback Recovery/i);
     expect(titles.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('active')).toBeInTheDocument();
+    expect(screen.getByText(/Auto-promote waits on Start/i)).toBeInTheDocument();
   });
 
   it('allows switching between genomes and displays candidate diff against active', () => {

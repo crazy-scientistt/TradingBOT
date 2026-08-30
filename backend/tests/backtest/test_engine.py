@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from goldguard.backtest.engine import BacktestEngine, FrictionConfig
+from goldguard.backtest.engine import BacktestEngine, FrictionConfig, _hourly_from_15m
 from goldguard.domain.enums import ExitReason
 from goldguard.domain.models import Candle
 from goldguard.strategy.genome import trend_pullback_v1
@@ -106,3 +106,17 @@ def test_fee_drag_and_slippage_accounting() -> None:
     assert trade is not None
     assert trade.exit_reason == ExitReason.TAKE_PROFIT
     assert trade.realized_pnl < Decimal("30")  # Gross is $30, net must be < $30 due to friction
+
+
+def test_hourly_bars_are_synthesized_when_1h_feed_is_omitted() -> None:
+    candles_15m = [
+        make_candle(i, open_="2500", high="2505", low="2495", close="2502") for i in range(400)
+    ]
+    hours = _hourly_from_15m(candles_15m)
+    assert len(hours) == 100
+    assert hours[0].timeframe == "1h"
+    assert hours[0].open_time.minute == 0
+    engine = BacktestEngine()
+    result = engine.run(trend_pullback_v1(), candles_15m)
+    assert result.report.trade_count >= 0
+    assert result.run_hash

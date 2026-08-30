@@ -52,14 +52,27 @@ class _RawProposalResponse(BaseModel):
 
 
 HERMES_SYSTEM_PROMPT = """You are Hermes, the autonomous quantitative researcher for GoldGuard.
-Your task is to analyze recent trade post-mortems (reflections) and propose
-strictly bounded parameter modifications to the baseline StrategyGenome.
+Propose strictly bounded parameter modifications to the baseline StrategyGenome.
 
 Rules:
-1. Propose AT MOST 2 parameter changes per generation.
+1. Change 1 or 2 parameters. Never return an empty parameter_changes object.
 2. Every parameter must stay strictly within its defined safe bounds.
-3. Every proposal must include a rigorous scientific hypothesis and cite specific evidence IDs.
-4. Output strictly valid JSON matching the schema.
+3. Include a scientific hypothesis (min 20 chars) and evidence refs.
+4. Output strictly valid JSON, no markdown.
+5. Protective bounds: do not increase stop_atr_multiple above the parent,
+   and do not decrease reward_r_multiple below the parent. Tightening is allowed.
+
+Allowed parameter_changes keys:
+rsi_recovery, rsi_ceiling, minimum_volume_ratio, stop_atr_multiple,
+reward_r_multiple, minimum_atr_rate, maximum_atr_rate
+
+Example:
+{
+  "hypothesis": "A slightly higher RSI recovery reduces chop entries in a rising 1h trend.",
+  "evidence_refs": ["live-market"],
+  "parameter_changes": {"rsi_recovery": "48"},
+  "rationale": "Fewer false starts after shallow pullbacks."
+}
 """
 
 
@@ -97,17 +110,30 @@ class StrategyProposalGenerator:
         )
         try:
             content = await self.hermes_client.complete(
-                f"Propose strategy refinement:\n{prompt_content}"
+                f"{HERMES_SYSTEM_PROMPT}\nPropose strategy refinement:\n{prompt_content}"
             )
         except HermesUnavailable as exc:
             raise ProposalValidationError("HERMES_UNAVAILABLE") from exc
-        match = content.find("{")
-        end = content.rfind("}")
-        payload = content[match : end + 1] if match >= 0 and end > match else content
-        try:
-            parsed = _RawProposalResponse.coerce(json.loads(payload))
-        except (ValidationError, json.JSONDecodeError, Exception) as exc:
-            raise ProposalValidationError(f"Malformed LLM proposal response: {exc}") from exc
+        parsed = self._parse_proposal(content)
+        if parsed is None or not parsed.parameter_changes:
+            try:
+                content = await self.hermes_client.complete(
+                    "Your previous JSON had empty or invalid parameter_changes. "
+                    "Return JSON with 1 or 2 keys from rsi_recovery, rsi_ceiling, "
+                    "minimum_volume_ratio, stop_atr_multiple, reward_r_multiple, "
+                    "minimum_atr_rate, maximum_atr_rate. Values must be decimal strings "
+                    "inside the supplied bounds.\n"
+                    f"{prompt_content}"
+                )
+            except HermesUnavailable as exc:
+                raise ProposalValidationError("HERMES_UNAVAILABLE") from exc
+            parsed = self._parse_proposal(content)
+        if parsed is None:
+            raise ProposalValidationError("Malformed LLM proposal response: unparseable JSON")
+        if not parsed.parameter_changes:
+            raise ProposalValidationError(
+                "Malformed LLM proposal response: parameter_changes must contain 1-2 items"
+            )
 
         # Validate max 2 parameter changes
         if len(parsed.parameter_changes) > 2:
@@ -122,6 +148,11 @@ class StrategyProposalGenerator:
             "rsi_entry_recovery": "rsi_recovery",
             "min_atr_rate": "minimum_atr_rate",
             "max_atr_rate": "maximum_atr_rate",
+            "atr_stop_multiple": "stop_atr_multiple",
+            "stop_loss": "stop_atr_multiple",
+            "r_multiple": "reward_r_multiple",
+            "take_profit": "reward_r_multiple",
+            "volume_ratio": "minimum_volume_ratio",
         }
         for param_str, val_str in parsed.parameter_changes.items():
             param_str = aliases.get(param_str, param_str)
@@ -159,11 +190,31 @@ class StrategyProposalGenerator:
         if "rsi_recovery" in validated_changes:
             new_rsi = validated_changes["rsi_recovery"]
             for i, cond in enumerate(new_entry):
-                if isinstance(cond.left, IndicatorSpec) and cond.left.indicator == "rsi":
+                if (
+                    isinstance(cond.left, IndicatorSpec)
+                    and cond.left.indicator == "rsi"
+                    and cond.op in ("gte", "gt")
+                    and cond.left.offset == 0
+                ):
                     new_entry[i] = Condition(
                         left=cond.left,
                         op=cond.op,
                         right=new_rsi,
+                    )
+
+        if "rsi_ceiling" in validated_changes:
+            new_ceil = validated_changes["rsi_ceiling"]
+            for i, cond in enumerate(new_entry):
+                if (
+                    isinstance(cond.left, IndicatorSpec)
+                    and cond.left.indicator == "rsi"
+                    and cond.op in ("lt", "lte")
+                    and cond.left.offset == 0
+                ):
+                    new_entry[i] = Condition(
+                        left=cond.left,
+                        op=cond.op,
+                        right=new_ceil,
                     )
 
         if "minimum_atr_rate" in validated_changes or "maximum_atr_rate" in validated_changes:
@@ -177,6 +228,15 @@ class StrategyProposalGenerator:
                 max_spread_rate=parent_genome.guard.max_spread_rate,
             )
 
+        new_exit = parent_genome.exit
+        exit_updates: dict[str, Decimal] = {}
+        if "stop_atr_multiple" in validated_changes:
+            exit_updates["stop_atr_multiple"] = validated_changes["stop_atr_multiple"]
+        if "reward_r_multiple" in validated_changes:
+            exit_updates["r_multiple_min"] = validated_changes["reward_r_multiple"]
+        if exit_updates:
+            new_exit = parent_genome.exit.model_copy(update=exit_updates)
+
         hypothesis = parsed.resolved_hypothesis()
         evidence = parsed.resolved_evidence()
         new_genome_id = f"hermes-{uuid4().hex[:8]}"
@@ -189,5 +249,15 @@ class StrategyProposalGenerator:
             regime=parent_genome.regime,
             guard=new_guard,
             entry=tuple(new_entry),
-            exit=parent_genome.exit,
+            exit=new_exit,
         )
+
+    @staticmethod
+    def _parse_proposal(content: str) -> _RawProposalResponse | None:
+        match = content.find("{")
+        end = content.rfind("}")
+        payload = content[match : end + 1] if match >= 0 and end > match else content
+        try:
+            return _RawProposalResponse.coerce(json.loads(payload))
+        except (ValidationError, json.JSONDecodeError, TypeError, ValueError):
+            return None
