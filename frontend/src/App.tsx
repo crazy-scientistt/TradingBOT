@@ -113,43 +113,6 @@ const ConnectionBanner: React.FC = () => {
   );
 };
 
-const QualificationStrip: React.FC = () => {
-  const { runtimeStatus } = useBot();
-  if (!runtimeStatus) return null;
-  const owner = runtimeStatus.executionOwner || 'legacy';
-  const dataset = runtimeStatus.datasetStatus || 'UNKNOWN';
-  const hermes = runtimeStatus.hermesStatus || 'unknown';
-  const lessons = runtimeStatus.reflectionCount ?? 0;
-  return (
-    <div
-      style={{
-        margin: '8px 14px 0',
-        padding: '8px 12px',
-        borderRadius: '6px',
-        border: '1px solid #1c2330',
-        backgroundColor: '#0b1018',
-        color: '#94a3b8',
-        fontSize: '11px',
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '14px',
-        letterSpacing: '0.04em',
-      }}
-    >
-      <span>OWNER {owner.toUpperCase()}</span>
-      {runtimeStatus.scopes?.length ? <span>{runtimeStatus.scopes.join(" · ")}</span> : null}
-      <span>DATASET {dataset}</span>
-      <span>HERMES {hermes.toUpperCase()}</span>
-      <span>LESSONS {lessons}</span>
-      {runtimeStatus.latestLesson ? <span>LAST {runtimeStatus.latestLesson}</span> : null}
-      {runtimeStatus.lastGate ? <span>GATE {runtimeStatus.lastGate}</span> : null}
-      {runtimeStatus.uiRevision ? <span>REV {runtimeStatus.uiRevision}</span> : null}
-      <span>{runtimeStatus.autopromotionEnabled ? 'AUTOPROMOTE ON' : 'AUTOPROMOTE AFTER START'}</span>
-      <span>LIVE OFF</span>
-    </div>
-  );
-};
-
 const SymbolPnlRow: React.FC = () => {
   const { pnlBySymbol } = useBot();
   if (!pnlBySymbol.length) return null;
@@ -220,7 +183,6 @@ const MainDashboard: React.FC = () => {
         {/* Top Header */}
         <TopHeader onOpenSettings={() => setIsSettingsOpen(true)} />
         <ConnectionBanner />
-        <QualificationStrip />
 
         {/* Dashboard Body / Active Tab View */}
         <main
