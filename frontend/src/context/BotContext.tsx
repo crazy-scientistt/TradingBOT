@@ -46,6 +46,8 @@ export interface RuntimeStatus {
   datasetStatus: string | null;
   reflectionCount: number;
   hermesStatus: string | null;
+  latestLesson: string | null;
+  lastGate: string | null;
 }
 
 export interface BotContextType {
@@ -68,6 +70,7 @@ export interface BotContextType {
   quote: { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string };
   position: PositionDetails;
   pipelineSteps: PipelineStep[];
+  pnlBySymbol: Array<{ symbol: string; unrealized?: string; quantity?: string; side?: string }>;
   liveContext: NewsItem[];
   riskHealth: HealthStatusItem[];
   equityHistory: EquityDataPoint[];
@@ -136,6 +139,8 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
     datasetStatus: status?.dataset_status ?? null,
     reflectionCount: status?.reflection_count ?? 0,
     hermesStatus: status?.hermes_status ?? null,
+    latestLesson: status?.latest_lesson ?? null,
+    lastGate: status?.last_gate ?? null,
   };
 };
 
@@ -189,6 +194,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }>(null as unknown as { bid: number; ask: number; spread: number; spread_rate: number; observed_at: string });
   const [position, setPosition] = useState<PositionDetails>(null as unknown as PositionDetails);
   const [pipelineSteps, setPipelineSteps] = useState<PipelineStep[]>([]);
+  const [pnlBySymbol, setPnlBySymbol] = useState<Array<{ symbol: string; unrealized?: string; quantity?: string; side?: string }>>([]);
   const [liveContext, setLiveContext] = useState<NewsItem[]>([]);
   const [riskHealth, setRiskHealth] = useState<HealthStatusItem[]>([]);
   const [equityHistory, setEquityHistory] = useState<EquityDataPoint[]>([]);
@@ -263,6 +269,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCandles(sectionData(snapshot.candles) ?? []);
       setPosition((isRenderablePosition(positionData?.position ?? null) ? positionData?.position : null) as unknown as PositionDetails);
       setPipelineSteps(positionData?.pipelineSteps ?? []);
+      setPnlBySymbol(positionData?.pnlBySymbol ?? []);
       setEquityHistory(sectionData(snapshot.equity) ?? []);
       setLiveContext(sectionData(snapshot.context) ?? []);
       setGenomes(sectionData(snapshot.genomes) ?? []);
@@ -469,6 +476,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     quote,
     position,
     pipelineSteps,
+    pnlBySymbol,
     liveContext,
     riskHealth,
     equityHistory,
@@ -512,6 +520,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     pauseTrading,
     pipelineSteps,
     position,
+    pnlBySymbol,
     preflight,
     probeLatencies,
     promoteGenome,

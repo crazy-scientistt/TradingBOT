@@ -928,6 +928,32 @@ async def app_status() -> dict[str, Any]:
         else (_trading_runtime.status() if _trading_runtime else None)
     )
     market = _market()
+    latest_lesson = None
+    latest_trade = None
+    if _reflection_repo is not None:
+        rows = _reflection_repo.list_reflections(limit=1)
+        if rows:
+            latest_lesson = rows[0].get("lesson_code")
+            latest_trade = rows[0].get("trade_id")
+    last_gate = None
+    if _hermes_loop is not None and getattr(_hermes_loop, "last_result", None) is not None:
+        last_gate = _hermes_loop.last_result.status
+    extra = {}
+    if _runtime_facade is not None:
+        extra = _runtime_facade.describe(
+            genome_id=active_genome.genome_id if active_genome else None,
+            reflection_count=(
+                len(_reflection_repo.list_reflections(limit=200))
+                if _reflection_repo is not None
+                else 0
+            ),
+            dataset_status=_dataset_status_label(),
+            hermes_status="configured" if settings.hermes_base_url else "unconfigured",
+            live_enabled=settings.live_capability_enabled,
+        )
+    extra["latest_lesson"] = latest_lesson
+    extra["latest_lesson_trade"] = latest_trade
+    extra["last_gate"] = last_gate
     return _env(
         {
             "environment": settings.environment,
@@ -943,21 +969,7 @@ async def app_status() -> dict[str, Any]:
             "market_verified": market.verified,
             "canary": _observe_canary(),
             "degraded_reasons": list(runtime_status.degraded_reasons) if runtime_status else [],
-            **(
-                _runtime_facade.describe(
-                    genome_id=active_genome.genome_id if active_genome else None,
-                    reflection_count=(
-                        len(_reflection_repo.list_reflections(limit=200))
-                        if _reflection_repo is not None
-                        else 0
-                    ),
-                    dataset_status=_dataset_status_label(),
-                    hermes_status="configured" if settings.hermes_base_url else "unconfigured",
-                    live_enabled=settings.live_capability_enabled,
-                )
-                if _runtime_facade is not None
-                else {}
-            ),
+            **extra,
         },
         source="runtime",
         availability="available" if runtime_status else "degraded",

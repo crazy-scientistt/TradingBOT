@@ -106,7 +106,35 @@ const QualificationStrip: React.FC = () => {
       <span>DATASET {dataset}</span>
       <span>HERMES {hermes.toUpperCase()}</span>
       <span>LESSONS {lessons}</span>
-      <span>LIVE {runtimeStatus.halted ? 'LOCKED' : 'OFF'}</span>
+      {runtimeStatus.latestLesson ? <span>LAST {runtimeStatus.latestLesson}</span> : null}
+      {runtimeStatus.lastGate ? <span>GATE {runtimeStatus.lastGate}</span> : null}
+      <span>LIVE OFF</span>
+    </div>
+  );
+};
+
+const SymbolPnlRow: React.FC = () => {
+  const { pnlBySymbol } = useBot();
+  if (!pnlBySymbol.length) return null;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+      {pnlBySymbol.map((row) => (
+        <div
+          key={row.symbol}
+          style={{
+            border: '1px solid #1c2330',
+            backgroundColor: '#0b1018',
+            borderRadius: '6px',
+            padding: '8px 12px',
+            minWidth: '140px',
+          }}
+        >
+          <div style={{ fontSize: '10px', color: '#676b78', letterSpacing: '0.06em' }}>{row.symbol}</div>
+          <div style={{ fontSize: '13px', color: '#f8fafc', fontFamily: 'var(--font-mono)' }}>
+            {row.unrealized ?? '0'}
+          </div>
+        </div>
+      ))}
     </div>
   );
 };
@@ -173,6 +201,7 @@ const MainDashboard: React.FC = () => {
               ) : (
                 <DataNotice title="Waiting for a real paper-account snapshot" detail="No equity, PnL, drawdown, or spread value has been observed yet." />
               )}
+              <SymbolPnlRow />
 
               {/* Row 2: Middle Section - Chart (Left) + Open Position & Pipeline (Right) */}
               <div className="gg-row">

@@ -64,6 +64,10 @@ export interface StatusResponse {
   reflection_count?: number;
   dataset_status?: string;
   hermes_status?: string;
+  latest_lesson?: string | null;
+  latest_lesson_trade?: string | null;
+  last_gate?: string | null;
+  canary_stage?: string | null;
 }
 
 export interface Quote {

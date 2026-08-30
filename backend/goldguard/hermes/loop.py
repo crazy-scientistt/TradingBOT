@@ -80,8 +80,26 @@ class HermesResearchLoop:
         self.consecutive_failures = 0
         self._steps_date = ""
         self._steps_today = 0
+        self.last_result: LoopIterationResult | None = None
 
     async def step(
+        self,
+        *,
+        candles_15m: Sequence[Candle],
+        market_summary: str = "",
+        dataset: EvidenceDataset | None = None,
+        now: datetime | None = None,
+    ) -> LoopIterationResult:
+        result = await self._execute_step(
+            candles_15m=candles_15m,
+            market_summary=market_summary,
+            dataset=dataset,
+            now=now,
+        )
+        self.last_result = result
+        return result
+
+    async def _execute_step(
         self,
         *,
         candles_15m: Sequence[Candle],
