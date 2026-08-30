@@ -88,6 +88,7 @@ class MarketIngestionService:
         self._runtime = runtime
         self._candle_repo = candle_repo
         self._poll_seconds = poll_seconds
+        self._aux_close: dict[str, datetime] = {}
         self._owned_http_client: httpx.AsyncClient | None = None
         self._live_socket = client is None
         if client is None:
@@ -210,6 +211,27 @@ class MarketIngestionService:
         self._failures = 0
         self._refresh_verification()
         self._publish()
+        await self._warmup_aux_symbols()
+
+    async def _warmup_aux_symbols(self) -> None:
+        for symbol in self._settings.paper_spot_symbols():
+            if symbol == self._settings.symbol:
+                continue
+            try:
+                bars_15m = await self._client.klines(
+                    symbol=symbol, interval="15m", limit=HISTORY_LIMIT
+                )
+                bars_1h = await self._client.klines(
+                    symbol=symbol, interval="1h", limit=HISTORY_LIMIT
+                )
+            except Exception as exc:
+                logger.warning("aux warmup failed for %s: %s", symbol, exc)
+                continue
+            closed_15 = [item for item in bars_15m if item.closed]
+            closed_1h = [item for item in bars_1h if item.closed]
+            if closed_15:
+                self._aux_close[symbol] = closed_15[-1].close_time
+            self._runtime.seed_symbol_history(symbol, closed_15, closed_1h)
 
     async def _run(self) -> None:
         while True:
@@ -253,6 +275,27 @@ class MarketIngestionService:
         if closed_entry_candle is not None:
             await asyncio.to_thread(self._runtime.process_closed_candle, closed_entry_candle, quote)
         await asyncio.to_thread(self._runtime.process_quote, quote)
+        await self._tick_aux_symbols()
+
+    async def _tick_aux_symbols(self) -> None:
+        for symbol in self._settings.paper_spot_symbols():
+            if symbol == self._settings.symbol:
+                continue
+            try:
+                quote = await self._client.quote(symbol)
+                fetched = await self._client.klines(symbol=symbol, interval="15m", limit=4)
+            except Exception as exc:
+                logger.warning("aux spot tick failed for %s: %s", symbol, exc)
+                continue
+            closed = [item for item in fetched if item.closed]
+            if not closed:
+                continue
+            last = closed[-1]
+            previous = self._aux_close.get(symbol)
+            if previous is not None and last.close_time <= previous:
+                continue
+            self._aux_close[symbol] = last.close_time
+            await asyncio.to_thread(self._runtime.process_closed_candle, last, quote)
 
     async def _run_socket(self) -> None:
         await run_binance_socket(

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     environment: Literal["development", "test", "production"] = "development"
     mode: Literal["paper", "live"] = "paper"
     symbol: Literal["PAXGUSDT"] = "PAXGUSDT"
+    spot_universe: str = "PAXGUSDT,ETHUSDT,SOLUSDT"
     entry_timeframe: Literal["15m"] = "15m"
     regime_timeframe: Literal["1h"] = "1h"
     data_dir: Path = Path("/data")
@@ -165,3 +166,9 @@ class Settings(BaseSettings):
                         f"production CORS origins must use HTTPS: {origin!r}"
                     )
         return self
+
+    def paper_spot_symbols(self) -> tuple[str, ...]:
+        parts = [item.strip().upper() for item in self.spot_universe.split(",") if item.strip()]
+        if self.symbol not in parts:
+            parts = [self.symbol, *parts]
+        return tuple(dict.fromkeys(parts))

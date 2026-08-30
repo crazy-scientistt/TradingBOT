@@ -7,6 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from goldguard.domain.defaults import PARAMETER_BOUNDS
+from goldguard.hermes.client import HermesClient, HermesUnavailable
 from goldguard.providers.client import GatewayClient
 from goldguard.providers.models import ChatCompletionRequest, ChatMessage
 from goldguard.strategy.genome import (
@@ -48,9 +49,11 @@ class StrategyProposalGenerator:
         self,
         gateway_client: GatewayClient,
         model: str = "google-antigravity/gemini-3.7-flash",
+        hermes_client: HermesClient | None = None,
     ) -> None:
         self.gateway_client = gateway_client
         self.model = model
+        self.hermes_client = hermes_client
 
     async def propose(
         self,
@@ -70,25 +73,36 @@ class StrategyProposalGenerator:
             indent=2,
         )
 
-        req = ChatCompletionRequest(
-            model=self.model,
-            messages=[
-                ChatMessage(role="system", content=HERMES_SYSTEM_PROMPT),
-                ChatMessage(
-                    role="user",
-                    content=f"Propose strategy refinement:\n{prompt_content}",
-                ),
-            ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
-            reasoning_effort="high",
-        )
-
-        try:
-            resp = await self.gateway_client.chat_completion(req)
-            parsed = _RawProposalResponse.model_validate_json(resp.content)
-        except (ValidationError, Exception) as exc:
-            raise ProposalValidationError(f"Malformed LLM proposal response: {exc}") from exc
+        parsed: _RawProposalResponse | None = None
+        if self.hermes_client is not None:
+            try:
+                content = await self.hermes_client.complete(
+                    f"Propose strategy refinement:\n{prompt_content}"
+                )
+                match = content.find("{")
+                payload = content[match:] if match >= 0 else content
+                parsed = _RawProposalResponse.model_validate_json(payload)
+            except (HermesUnavailable, ValidationError, Exception):
+                parsed = None
+        if parsed is None:
+            req = ChatCompletionRequest(
+                model=self.model,
+                messages=[
+                    ChatMessage(role="system", content=HERMES_SYSTEM_PROMPT),
+                    ChatMessage(
+                        role="user",
+                        content=f"Propose strategy refinement:\n{prompt_content}",
+                    ),
+                ],
+                temperature=0.2,
+                response_format={"type": "json_object"},
+                reasoning_effort="high",
+            )
+            try:
+                resp = await self.gateway_client.chat_completion(req)
+                parsed = _RawProposalResponse.model_validate_json(resp.content)
+            except (ValidationError, Exception) as exc:
+                raise ProposalValidationError(f"Malformed LLM proposal response: {exc}") from exc
 
         # Validate max 2 parameter changes
         if len(parsed.parameter_changes) > 2:

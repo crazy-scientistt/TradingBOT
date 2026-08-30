@@ -57,7 +57,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
           style={{
             border: '1px solid rgba(240, 185, 11, 0.45)',
             backgroundColor: 'rgba(240, 185, 11, 0.08)',
-            color: '#f0b90b',
+            color: 'var(--gold-primary)',
             padding: '5px 12px',
             borderRadius: '4px',
             fontSize: '11px',
@@ -119,7 +119,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
                   style={{
                     padding: '8px 12px',
                     fontSize: '13px',
-                    color: p === selectedPair ? '#f0b90b' : '#cbd5e1',
+                    color: p === selectedPair ? 'var(--gold-primary)' : '#cbd5e1',
                     fontWeight: p === selectedPair ? 600 : 400,
                     cursor: 'pointer',
                     backgroundColor: p === selectedPair ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
@@ -219,7 +219,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
                 right: '-1px',
                 width: '5px',
                 height: '5px',
-                backgroundColor: '#f0b90b',
+                backgroundColor: 'var(--gold-primary)',
                 borderRadius: '50%',
               }}
             />

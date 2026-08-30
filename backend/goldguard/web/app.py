@@ -45,6 +45,7 @@ from goldguard.context.playbook import ProfessionalChecklist
 from goldguard.context.sources import OpenCodexSearchProvider
 from goldguard.domain.defaults import SAFE_DEFAULT_V1, strategy_settings_from_app
 from goldguard.hermes.bindings import build_tool_bindings
+from goldguard.hermes.client import HermesClient
 from goldguard.hermes.generator import StrategyProposalGenerator
 from goldguard.hermes.loop import HermesLoopConfig, HermesResearchLoop
 from goldguard.hermes.tools import HermesToolRegistry
@@ -326,8 +327,16 @@ async def _dataset_worker() -> None:
         start = end - timedelta(days=365 * 3)
         try:
             logger.info("Bootstrapping 3-year %s dataset from %s", settings.symbol, start.date())
-            await service.bootstrap(settings.symbol, start, end)
-            logger.info("3-year dataset verified for %s", settings.symbol)
+            manifest = await service.bootstrap(settings.symbol, start, end)
+            if getattr(manifest, "status", None) is not None and str(manifest.status) != "VERIFIED":
+                logger.error(
+                    "3-year dataset not verified for %s: status=%s error=%s",
+                    settings.symbol,
+                    manifest.status,
+                    getattr(manifest, "last_error", None),
+                )
+            else:
+                logger.info("3-year dataset verified for %s", settings.symbol)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -685,6 +694,7 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             market_source="startup-degraded",
             market_verified=False,
             calendar=_calendar,
+            reflection_repo=_reflection_repo,
         )
 
     # Hermes and promotion are built from the same durable repositories as the runtime.
@@ -726,8 +736,15 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
                 )
             ),
         )
+        hermes_agent = None
+        if _settings.hermes_base_url and _settings.hermes_bridge_token is not None:
+            hermes_agent = HermesClient(
+                base_url=_settings.hermes_base_url,
+                api_key=_settings.hermes_bridge_token.get_secret_value(),
+                http_client=_hermes_http_client,
+            )
         _hermes_loop = HermesResearchLoop(
-            proposal_generator=StrategyProposalGenerator(hermes_gateway),
+            proposal_generator=StrategyProposalGenerator(hermes_gateway, hermes_client=hermes_agent),
             backtest_engine=_backtest_engine,
             wf_harness=WalkForwardHarness(
                 FrictionConfig(

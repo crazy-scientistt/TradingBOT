@@ -72,3 +72,52 @@ class HermesClient:
         if len(encoded) > self._maximum_response_bytes:
             raise HermesUnavailable("Hermes proposal exceeded the response limit")
         return encoded
+
+    async def complete(self, user_content: str) -> str:
+        raw = await self.request_proposal_text(user_content)
+        return raw
+
+    async def request_proposal_text(self, user_content: str) -> str:
+        payload = {
+            "model": "hermes-agent",
+            "temperature": 0,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Return one declarative strategy proposal as strict JSON. "
+                        "Change at most two allowed parameters and cite supplied evidence IDs."
+                    ),
+                },
+                {"role": "user", "content": user_content},
+            ],
+        }
+        try:
+            response = await self._http_client.post(
+                f"{self._base_url}/v1/chat/completions",
+                headers={
+                    "authorization": f"Bearer {self._api_key}",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=45,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.HTTPStatusError,
+            KeyError,
+            IndexError,
+            TypeError,
+            ValueError,
+            json.JSONDecodeError,
+        ) as error:
+            raise HermesUnavailable("Hermes proposal request failed closed") from error
+        if not isinstance(content, str) or not content.strip():
+            raise HermesUnavailable("Hermes returned a non-text proposal")
+        encoded = content.encode()
+        if len(encoded) > self._maximum_response_bytes:
+            raise HermesUnavailable("Hermes proposal exceeded the response limit")
+        return content

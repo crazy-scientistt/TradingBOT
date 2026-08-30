@@ -32,8 +32,15 @@ from goldguard.services.coordinator import (
     ExitOutcome,
     TradingCoordinator,
 )
+from goldguard.memory.engine import MemoryBank
+from goldguard.memory.reflections import ReflectionEngine, TradeOutcome
 from goldguard.storage.database import Database
-from goldguard.storage.repositories import AgentEventRepository, GenomeRepository, LedgerRepository
+from goldguard.storage.repositories import (
+    AgentEventRepository,
+    GenomeRepository,
+    LedgerRepository,
+    ReflectionRepository,
+)
 from goldguard.strategy.indicators import atr_wilder, ema_series, median_volume_ratio, rsi_wilder
 from goldguard.strategy.runtime import FeatureSnapshot, GenomeRuntime
 
@@ -128,6 +135,7 @@ class TradingRuntime:
         market_source: str = "startup-degraded",
         market_verified: bool = False,
         calendar: EconomicCalendar | None = None,
+        reflection_repo: ReflectionRepository | None = None,
     ) -> None:
         self._database = database
         self._settings = settings
@@ -141,6 +149,11 @@ class TradingRuntime:
         self._market_source = market_source
         self._market_verified = market_verified
         self._calendar = calendar
+        self._reflection_repo = reflection_repo
+        self._book_symbol = settings.symbol
+        self._books_15m: dict[str, list[Candle]] = {settings.symbol: list(self._candles_15m)}
+        self._books_1h: dict[str, list[Candle]] = {settings.symbol: list(self._candles_1h)}
+        self._position_symbol: str | None = None
         self._ai_context: ContextSnapshot | None = None
         self._degraded_reasons: tuple[str, ...] = ()
         self._event_bus = EventBus(sink=AgentEventRepository(database))
@@ -217,7 +230,17 @@ class TradingRuntime:
             else self._aggregate_hourly_candles(self._candles_15m)
         )
         self._latest_quote = latest_quote
+        self._book_symbol = self._settings.symbol
+        self._books_15m[self._book_symbol] = list(self._candles_15m)
+        self._books_1h[self._book_symbol] = list(self._candles_1h)
         self._refresh_market_status()
+        self, symbol: str, candles_15m: list[Candle], candles_1h: list[Candle]
+    ) -> None:
+        self._books_15m[symbol] = list(candles_15m)
+        self._books_1h[symbol] = list(candles_1h)
+        if symbol == self._book_symbol:
+            self._candles_15m = list(candles_15m)
+            self._candles_1h = list(candles_1h)
 
     def start(self) -> None:
         if self._halted:
@@ -241,6 +264,8 @@ class TradingRuntime:
             "PAPER_RUNTIME_RESUMED" if self._state is BotState.COOLDOWN else "PAPER_RUNTIME_STARTED"
         )
         self._transition_to(target, reason)
+        if self._latest_quote is not None:
+            self._record_equity_snapshot(self._latest_quote)
         self._publish_event(
             action="HOLD",
             reason="Paper runtime started",
@@ -330,6 +355,10 @@ class TradingRuntime:
         if not candle.closed:
             raise ValueError("runtime only accepts closed candles")
 
+        if self._broker.position is not None and self._position_symbol and candle.symbol != self._position_symbol:
+            return DecisionOutcome(False, "OTHER_SYMBOL", ("POSITION_ON_OTHER_SYMBOL",))
+
+        self._activate_book(candle.symbol)
         self._upsert_candle(candle)
         if self._paused and self._broker.position is None:
             outcome = DecisionOutcome(False, "PAUSED", ("PAUSED_NEW_ENTRIES",))
@@ -362,11 +391,13 @@ class TradingRuntime:
             self._persist_risk_decision(outcome.decision_chain_id, outcome.risk_decision)
         if outcome.fill is not None:
             self._persist_entry(outcome.fill)
+            self._position_symbol = candle.symbol
             self._record_equity_snapshot(quote)
         if outcome.closed_trade is not None:
             self._persist_closed_trade(
                 outcome.closed_trade, exit_fill=outcome.closed_trade.exit_fill
             )
+            self._position_symbol = None
             self._record_equity_snapshot(quote)
 
         self._sync_state_after_broker_change()
@@ -384,10 +415,13 @@ class TradingRuntime:
 
     def _process_quote(self, quote: Quote) -> ExitOutcome | None:
         self._latest_quote = quote
+        if self._broker.position is not None and self._position_symbol and quote.symbol != self._position_symbol:
+            return None
         outcome = self._coordinator.monitor_open_position(quote)
         if outcome is None or outcome.closed_trade is None:
             return outcome
         self._persist_closed_trade(outcome.closed_trade, exit_fill=outcome.closed_trade.exit_fill)
+        self._position_symbol = None
         self._record_equity_snapshot(quote)
         self._sync_state_after_broker_change()
         self._publish_exit(quote, outcome)
@@ -616,6 +650,8 @@ class TradingRuntime:
                     self._candles_1h[-1] = next_hour
                 elif not self._candles_1h or self._candles_1h[-1].close_time < next_hour.close_time:
                     self._candles_1h.append(next_hour)
+        self._books_15m[self._book_symbol] = list(self._candles_15m)
+        self._books_1h[self._book_symbol] = list(self._candles_1h)
         self._refresh_market_status()
 
     def _build_feature_snapshot(self, quote: Quote) -> FeatureSnapshot:
@@ -912,6 +948,34 @@ class TradingRuntime:
                     trade_id,
                 ),
             )
+        self._record_trade_reflection(trade)
+
+    def _record_trade_reflection(self, trade: ClosedPaperTrade) -> None:
+        if self._reflection_repo is None:
+            return
+        fees = trade.entry_fill.fee + trade.exit_fill.fee
+        outcome = TradeOutcome(
+            trade_id=self._stable_id("trade", trade.entry_fill.client_order_id),
+            namespace="forward",
+            hypothesis="paper closed cycle",
+            realized_pnl=trade.realized_pnl,
+            maximum_adverse_excursion=Decimal("0"),
+            maximum_favorable_excursion=Decimal("0"),
+            fees=fees,
+            exit_reason=trade.exit_reason.value,
+            regime_tags=(self._position_symbol or self._settings.symbol,),
+        )
+        reflection = ReflectionEngine().create(outcome)
+        MemoryBank(self._reflection_repo).record_reflection(reflection)
+
+    def _activate_book(self, symbol: str) -> None:
+        if symbol == self._book_symbol:
+            return
+        self._books_15m[self._book_symbol] = list(self._candles_15m)
+        self._books_1h[self._book_symbol] = list(self._candles_1h)
+        self._book_symbol = symbol
+        self._candles_15m = list(self._books_15m.get(symbol, []))
+        self._candles_1h = list(self._books_1h.get(symbol, []))
 
     def _record_equity_snapshot(self, quote: Quote) -> None:
         snapshot_id = str(uuid4())

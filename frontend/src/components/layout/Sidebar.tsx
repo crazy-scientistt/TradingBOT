@@ -55,9 +55,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
           width: '100%',
           padding: '9px 12px',
           borderRadius: '6px',
-          border: isActive ? '1px solid rgba(240, 185, 11, 0.4)' : '1px solid transparent',
-          backgroundColor: isActive ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
-          color: isActive ? '#f0b90b' : '#9498a4',
+          border: isActive ? '1px solid rgba(61, 126, 255, 0.4)' : '1px solid transparent',
+          backgroundColor: isActive ? 'rgba(61, 126, 255, 0.12)' : 'transparent',
+          color: isActive ? 'var(--gold-primary)' : '#9498a4',
           fontSize: '13.5px',
           fontWeight: isActive ? 600 : 400,
           cursor: 'pointer',
@@ -77,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
           }
         }}
       >
-        <Icon size={17} color={isActive ? '#f0b90b' : '#9498a4'} />
+        <Icon size={17} color={isActive ? 'var(--gold-primary)' : '#9498a4'} />
         <span>{item.name}</span>
       </button>
     );
@@ -87,7 +87,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
     <aside className="gg-sidebar" style={{
       width: '210px',
       minWidth: '210px',
-      backgroundColor: '#090a0c',
+      backgroundColor: 'var(--bg-sidebar)',
       borderRight: '1px solid #181a1f',
       display: 'flex',
       flexDirection: 'column',
@@ -111,7 +111,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
             fontSize: '17px',
             fontWeight: 700,
             letterSpacing: '-0.01em',
-            color: '#f0b90b',
+            color: 'var(--gold-primary)',
             fontFamily: 'var(--font-sans)'
           }}>
             GoldGuard
@@ -140,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'Home', onSelectTa
             borderRadius: '6px',
             border: selected === 'Settings' ? '1px solid rgba(240, 185, 11, 0.4)' : '1px solid transparent',
             backgroundColor: selected === 'Settings' ? 'rgba(240, 185, 11, 0.08)' : 'transparent',
-            color: selected === 'Settings' ? '#f0b90b' : '#9498a4',
+            color: selected === 'Settings' ? 'var(--gold-primary)' : '#9498a4',
             fontSize: '13.5px',
             cursor: 'pointer',
             textAlign: 'left',
