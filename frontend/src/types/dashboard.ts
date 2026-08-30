@@ -29,18 +29,18 @@ export interface Quote {
 export interface KpiMetrics {
   equity: number;
   equityCurrency: string;
-  equityChangePercent: number;
+  equityChangePercent: number | null;
   equityChangePeriod: string;
   cash: number;
   cashCurrency: string;
   cashChangeNote: string;
-  totalPnl: number;
+  totalPnl: number | null;
   totalPnlCurrency: string;
-  totalPnlChangePercent: number;
+  totalPnlChangePercent: number | null;
   totalPnlChangePeriod: string;
-  maxDrawdown: number;
+  maxDrawdown: number | null;
   maxDrawdownPeriod: string;
-  liveSpread: number;
+  liveSpread: number | null;
   liveSpreadCurrency: string;
 }
 

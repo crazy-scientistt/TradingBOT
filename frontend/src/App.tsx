@@ -209,11 +209,7 @@ const MainDashboard: React.FC = () => {
               {/* Row 2: Middle Section - Chart (Left) + Open Position & Pipeline (Right) */}
               <div className="gg-row">
                 <CandlestickChart candles={candles} quote={quote} position={position} />
-                {position ? (
-                  <OpenPositionCard position={position} pipelineSteps={pipelineSteps} />
-                ) : (
-                  <DataNotice title="No open paper position" detail="The paper account is flat or has not produced a position snapshot." />
-                )}
+                <OpenPositionCard position={position} pipelineSteps={pipelineSteps} />
               </div>
 
               {/* Row 3: Bottom Section - Equity Curve (Left) + Live Context (Middle) + Risk & Health (Right) */}

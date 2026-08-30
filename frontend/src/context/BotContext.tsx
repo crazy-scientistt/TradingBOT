@@ -155,22 +155,14 @@ const runtimeFromSnapshot = (status: StatusResponse | null, botState: BotStateSt
 
 const isRenderableKpi = (value: KpiMetrics | null): value is KpiMetrics => {
   if (!value) return false;
-  return [
-    value.equity,
-    value.equityChangePercent,
-    value.cash,
-    value.totalPnl,
-    value.totalPnlChangePercent,
-    value.maxDrawdown,
-    value.liveSpread,
-  ].every((item) => typeof item === 'number' && Number.isFinite(item));
+  return typeof value.equity === 'number' && Number.isFinite(value.equity)
+    && typeof value.cash === 'number' && Number.isFinite(value.cash);
 };
 
 const isRenderablePosition = (value: PositionDetails | null): value is PositionDetails => {
   if (!value) return false;
-  return [value.entry, value.stop, value.target, value.riskPercent].every(
-    (item) => typeof item === 'number' && Number.isFinite(item),
-  );
+  return typeof value.entry === 'number' && Number.isFinite(value.entry)
+    && typeof value.quantity === 'string' && value.quantity.length > 0;
 };
 
 const isRenderableQuote = (

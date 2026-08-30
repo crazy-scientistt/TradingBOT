@@ -285,9 +285,11 @@ def test_agent_event_stream_opens_with_a_snapshot_frame(client: TestClient) -> N
         frames = app_module._agent_event_frames()
         try:
             first = await anext(frames)
-            runtime = app_module._trading_runtime
+            runtime = app_module._event_runtime()
             assert runtime is not None
-            runtime._event_bus.publish(published)
+            active = runtime._active() if hasattr(runtime, "_active") else runtime
+            bus = getattr(active, "_events", None) or getattr(active, "_event_bus")
+            bus.publish(published)
             return [first, await anext(frames)]
         finally:
             await frames.aclose()
@@ -334,6 +336,14 @@ def test_start_enables_hermes_autopromotion(client, monkeypatch) -> None:
     assert app_module._hermes_loop.config.autopromotion_enabled is True
     body = _envelope(client.get("/api/status"))
     assert body["data"]["autopromotion_enabled"] is True
+    equity = _envelope(client.get("/api/equity"))
+    assert equity["availability"] == "available"
+    assert equity["data"]
+    kpi = _envelope(client.get("/api/kpi"))
+    assert kpi["data"]["equity"] == equity["data"][0]["value"]
+    assert kpi["data"]["cash"] == kpi["data"]["equity"]
+    events = _envelope(client.get("/api/agent/events"))
+    assert events["data"]
 
 def test_emergency_stop_cannot_be_cleared_by_start(client: TestClient) -> None:
     assert client.post("/api/bot/stop").status_code == 200

@@ -119,7 +119,7 @@ export const TradesView: React.FC = () => {
               <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: '#676b78' }}>Loading trade history...</td></tr>
             ) : trades.length === 0 ? (
               <tr><td colSpan={7} style={{ padding: '24px', textAlign: 'center', color: '#676b78' }}>
-                No paper orders have been filled yet.
+                No paper orders have been filled yet. HOLD is the default until a 15m setup clears every gate.
               </td></tr>
             ) : trades.map((t, i) => (
               <tr key={t.client_order_id || i} style={{ borderBottom: '1px solid #181a1f', backgroundColor: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.01)' }}>

@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import logging
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
+from goldguard.ai.gemini import AiAssessment
 from goldguard.broker.paper_futures import PaperFuturesBroker
 from goldguard.broker.paper_portfolio import PaperPortfolioBroker
 from goldguard.broker.paper_spot import PaperSpotBroker
 from goldguard.config import Settings
-from goldguard.domain.enums import BotState, ExecutionMode, ExitReason, ProductKind
+from goldguard.domain.enums import AiDecision, BotState, ExecutionMode, ExitReason, ProductKind
 from goldguard.domain.models import Candle, Quote
 from goldguard.domain.profile import AutonomousProfile
 from goldguard.execution.models import MarketScope
 from goldguard.market.catalog import SymbolCatalog, SymbolNotEligible
 from goldguard.memory.recorder import LearningRecorder
+from goldguard.observability.events import AgentEvent, EventBus
 from goldguard.risk.circuit_breaker import CircuitBreaker
 from goldguard.services.emergency import EmergencyService
 from goldguard.services.execution_coordinator import ExecutionCoordinator
@@ -25,7 +30,9 @@ from goldguard.services.runtime import RuntimeStatus
 from goldguard.services.runtime_supervisor import RuntimeSupervisor
 from goldguard.storage.database import Database
 from goldguard.storage.execution_repository import ExecutionRepository
-from goldguard.storage.repositories import GenomeRepository, ReflectionRepository
+from goldguard.storage.repositories import GenomeRepository, LedgerRepository, ReflectionRepository
+
+logger = logging.getLogger("goldguard.autonomous")
 
 
 class AutonomousRuntime:
@@ -85,10 +92,21 @@ class AutonomousRuntime:
         self._last_evals: dict[str, dict[str, str]] = {}
         self._flatten_task: asyncio.Task[None] | None = None
         self._dataset_status = lambda: "OK"
+        self._ledger = LedgerRepository(database)
+        self._paper_account_id = (
+            self._ledger.current_paper_session_id()
+            or self._ledger.create_paper_session(cash)
+        )
+        self._events = EventBus(max_events=200)
+        self._last_equity_at: datetime | None = None
 
     def set_dataset_status(self, getter: object) -> None:
         if callable(getter):
             self._dataset_status = getter
+
+    def set_paper_account(self, account_id: str) -> None:
+        if account_id:
+            self._paper_account_id = account_id
 
     @property
     def broker(self) -> PaperPortfolioBroker:
@@ -111,6 +129,19 @@ class AutonomousRuntime:
         self._coordinator.resume_entries()
         if self._learning is not None:
             self._learning.drain_outbox()
+        self._record_equity_snapshot(force=True)
+        self._events.publish(
+            AgentEvent.create(
+                action="HOLD",
+                reason="Paper runtime started",
+                reason_codes=("RUNTIME_STARTED",),
+                payload={
+                    "state": "RUNNING_FLAT",
+                    "paper_account_id": self._paper_account_id,
+                    "outcome_action": "NO_ACTION",
+                },
+            )
+        )
 
     def pause(self) -> None:
         self._paused = True
@@ -159,7 +190,7 @@ class AutonomousRuntime:
             running=self._running and not self._paused and not self._halted,
             paused=self._paused,
             halted=self._halted,
-            paper_account_id="paper-autonomous",
+            paper_account_id=self._paper_account_id,
             has_position=bool(open_positions),
             market_verified=True,
             market_source="binance-public",
@@ -182,6 +213,12 @@ class AutonomousRuntime:
             )
         return rows
 
+    def recent_events(self, limit: int = 30) -> tuple[AgentEvent, ...]:
+        return self._events.recent(limit)
+
+    def subscribe_events(self) -> AsyncGenerator[AgentEvent, None]:
+        return self._events.subscribe()
+
     async def on_quote(self, quote: Quote, symbol: str | None = None) -> None:
         target = symbol or self._settings.symbol
         if target not in self._profile.spot_pairs:
@@ -202,6 +239,7 @@ class AutonomousRuntime:
         results = await self._coordinator.manage_positions(scope, quote)
         if results.action == "STOP" and results.result is not None:
             await self._record_close(target, results.result)
+        self._record_equity_snapshot(quote.observed_at)
 
     async def on_closed_candle(self, candle: Candle, quote: Quote) -> None:
         if candle.symbol not in self._profile.spot_pairs:
@@ -217,54 +255,60 @@ class AutonomousRuntime:
         self._supervisor.note_closed_candle(scope, candle, quote)
         await self.on_quote(quote, symbol=candle.symbol)
         if not self._running or self._paused or self._halted:
-            self._last_evals[candle.symbol] = {
-                "symbol": candle.symbol,
-                "action": "WATCH",
-                "reason": "paper_not_armed",
-                "close": str(candle.close),
-                "close_time": candle.close_time.isoformat(),
-            }
+            self._remember_eval(
+                candle, action="WATCH", reason="paper_not_armed", persist=False
+            )
             return
         if not self._supervisor.new_entries_allowed(scope):
-            self._last_evals[candle.symbol] = {
-                "symbol": candle.symbol,
-                "action": "HOLD",
-                "reason": "new_entries_blocked",
-                "close": str(candle.close),
-                "close_time": candle.close_time.isoformat(),
-            }
+            self._remember_eval(candle, action="HOLD", reason="new_entries_blocked")
             return
         if not await self._catalog_allows(candle.symbol):
-            self._last_evals[candle.symbol] = {
-                "symbol": candle.symbol,
-                "action": "HOLD",
-                "reason": "symbol_not_eligible",
-                "close": str(candle.close),
-                "close_time": candle.close_time.isoformat(),
-            }
+            self._remember_eval(candle, action="HOLD", reason="symbol_not_eligible")
             return
-        if self._dataset_status() == "CORRUPT":
-            self._last_evals[candle.symbol] = {
-                "symbol": candle.symbol,
-                "action": "HOLD",
-                "reason": "dataset_corrupt",
-                "close": str(candle.close),
-                "close_time": candle.close_time.isoformat(),
-            }
-            return
+        # Historical 3y CORRUPT blocks Hermes promotion, not live 15m paper.
         self._planner.set_cash(self._spot.cash)
         outcome = await self._coordinator.evaluate(scope, candle)
-        self._last_evals[candle.symbol] = {
-            "symbol": candle.symbol,
-            "action": outcome.action,
-            "reason": outcome.reason or outcome.action,
-            "close": str(candle.close),
-            "close_time": candle.close_time.isoformat(),
-        }
+        self._remember_eval(
+            candle,
+            action=outcome.action,
+            reason=outcome.reason or outcome.action,
+        )
         if outcome.action == "ENTER":
             self._planner.mark_open(candle.symbol)
             self._mae[candle.symbol] = Decimal("0")
             self._mfe[candle.symbol] = Decimal("0")
+            self._record_equity_snapshot(force=True)
+
+    async def evaluate_latest_bars(self) -> None:
+        """Score the last closed 15m on Start so the ledger is not empty for 15 minutes."""
+        if not self._running or self._paused or self._halted:
+            return
+        try:
+            symbols = [
+                symbol
+                for symbol, book in self._books.items()
+                if book.get("15m")
+            ]
+            if not symbols:
+                logger.info("no seeded 15m books to evaluate on start")
+                return
+            for symbol in symbols:
+                series = self._books[symbol]["15m"]
+                candle = series[-1]
+                last = self._last_quotes.get(symbol)
+                if last:
+                    quote = Quote(
+                        bid=Decimal(str(last["bid"])),
+                        ask=Decimal(str(last["ask"])),
+                        observed_at=datetime.fromisoformat(last["observed_at"]),
+                    )
+                else:
+                    quote = Quote(
+                        bid=candle.close, ask=candle.close, observed_at=candle.close_time
+                    )
+                await self.on_closed_candle(candle, quote)
+        except Exception:
+            logger.exception("failed to evaluate seeded 15m bars on start")
 
     def context_rows(self) -> list[dict[str, object]]:
         """What the paper agent last read. Empty until a live quote or closed bar arrives."""
@@ -311,8 +355,10 @@ class AutonomousRuntime:
         return rows
 
     async def _catalog_allows(self, symbol: str) -> bool:
-        if self._catalog.spot_client is None:
+        if symbol not in self._profile.spot_pairs:
             return False
+        if self._catalog.spot_client is None:
+            return True
         try:
             if self._catalog._snapshot is None:
                 await self._catalog.refresh()
@@ -381,6 +427,7 @@ class AutonomousRuntime:
         self._mae.pop(symbol, None)
         self._mfe.pop(symbol, None)
         self._learning.drain_outbox()
+        self._record_equity_snapshot(force=True)
 
     def _track_excursion(self, symbol: str, price: Decimal) -> None:
         for position in self._broker.open_positions():
@@ -389,3 +436,112 @@ class AutonomousRuntime:
             unrealized = (price - position.entry_price) * position.quantity
             self._mae[symbol] = min(self._mae.get(symbol, Decimal("0")), unrealized)
             self._mfe[symbol] = max(self._mfe.get(symbol, Decimal("0")), unrealized)
+
+    def _mark_to_market(self) -> tuple[Decimal, Decimal]:
+        cash = self._spot.cash
+        equity = cash
+        for position in self._broker.open_positions():
+            equity += Decimal(str(position.unrealized_pnl or "0"))
+        return equity, cash
+
+    def _record_equity_snapshot(
+        self, when: datetime | None = None, *, force: bool = False
+    ) -> None:
+        now = when or datetime.now(UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        if (
+            not force
+            and self._last_equity_at is not None
+            and (now - self._last_equity_at) < timedelta(seconds=30)
+        ):
+            return
+        equity, cash = self._mark_to_market()
+        with self._database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO equity_snapshots(
+                    id, paper_account_id, equity_text, cash_text, observed_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid4()),
+                    self._paper_account_id,
+                    str(equity),
+                    str(cash),
+                    now.isoformat(),
+                ),
+            )
+        self._last_equity_at = now
+
+    def _pipeline_action(self, action: str, reason: str) -> str:
+        if action == "ENTER":
+            return "ENTRY_FILLED"
+        if reason in {"new_entries_blocked", "symbol_not_eligible"}:
+            return "RISK_REJECTED"
+        if reason in {"INSUFFICIENT_HISTORY"}:
+            return "NO_ACTION"
+        return "NO_ACTION"
+
+    def _remember_eval(
+        self,
+        candle: Candle,
+        *,
+        action: str,
+        reason: str,
+        persist: bool = True,
+    ) -> None:
+        close_time = candle.close_time.isoformat()
+        self._last_evals[candle.symbol] = {
+            "symbol": candle.symbol,
+            "action": action,
+            "reason": reason,
+            "close": str(candle.close),
+            "close_time": close_time,
+        }
+        if not persist:
+            return
+        outcome_action = self._pipeline_action(action, reason)
+        self._events.publish(
+            AgentEvent.create(
+                action=action,
+                reason=reason,
+                reason_codes=(reason,),
+                payload={
+                    "symbol": candle.symbol,
+                    "timeframe": candle.timeframe,
+                    "candle_close_time": close_time,
+                    "paper_account_id": self._paper_account_id,
+                    "outcome_action": outcome_action,
+                    "close": str(candle.close),
+                },
+                audit_worthy=True,
+            )
+        )
+        chain_id = self._ledger.record_decision_chain(
+            mode="paper",
+            account_scope=self._paper_account_id,
+            symbol=candle.symbol,
+            timeframe=candle.timeframe,
+            candle_close_time=close_time,
+        )
+        decision = AiDecision.APPROVE_ENTRY if action == "ENTER" else AiDecision.HOLD
+        self._ledger.save_ai_decision(
+            decision_chain_id=chain_id,
+            context_snapshot_id=None,
+            assessment=AiAssessment(
+                decision=decision,
+                confidence=100 if action == "ENTER" else 60,
+                reason_codes=(reason,),
+                rationale=reason,
+                memory_refs=(),
+                prompt_hash="paper-agent",
+                model="genome-planner",
+            ),
+        )
+        self._ledger.save_risk_decision(
+            decision_chain_id=chain_id,
+            approved=action == "ENTER",
+            details={"reason_codes": [reason], "plan": {"action": action}},
+        )

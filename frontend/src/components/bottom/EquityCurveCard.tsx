@@ -120,7 +120,7 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
         </div>
       </div>
 
-      {series.length < 2 ? (
+      {series.length === 0 ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#676b78', fontSize: '12px', textAlign: 'center', padding: '18px 8px' }}>
           No paper equity snapshots yet. The curve appears after the bot records real account marks.
         </div>
@@ -146,6 +146,25 @@ export const EquityCurveCard: React.FC<EquityCurveCardProps> = ({ data }) => {
               strokeLinecap="round"
               strokeLinejoin="round"
             />
+            {series.length === 1 && (
+              <>
+                <line
+                  x1={12}
+                  y1={getY(series[0].value)}
+                  x2={chartWidth - 5}
+                  y2={getY(series[0].value)}
+                  stroke="var(--gold-primary)"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+                <circle
+                  cx={getX(0)}
+                  cy={getY(series[0].value)}
+                  r={3}
+                  fill="var(--gold-primary)"
+                />
+              </>
+            )}
             {dateLabels.map((d) => (
               <text
                 key={`eq-date-${d.label}-${d.idx}`}

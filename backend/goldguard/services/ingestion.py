@@ -91,6 +91,7 @@ class MarketIngestionService:
         self._aux_close: dict[str, datetime] = {}
         self._aux_quotes: dict[str, Quote] = {}
         self._aux_bars: dict[str, Candle] = {}
+        self._aux_history: dict[str, dict[str, list[Candle]]] = {}
         self._aux_enabled = True
         self._autonomous = None
         self._autonomous_owner = False
@@ -224,14 +225,7 @@ class MarketIngestionService:
         self._publish()
         if self._aux_enabled:
             await self._warmup_aux_symbols()
-        if self._autonomous is not None:
-            seeder = getattr(self._autonomous, "seed_history", None)
-            if seeder is not None:
-                seeder(
-                    symbol,
-                    list(self._candles.get("15m") or []),
-                    list(self._candles.get("1h") or []),
-                )
+        self.seed_autonomous()
 
     async def _warmup_aux_symbols(self) -> None:
         for symbol in self._settings.paper_spot_symbols():
@@ -252,6 +246,7 @@ class MarketIngestionService:
             if closed_15:
                 self._aux_close[symbol] = closed_15[-1].close_time
                 self._aux_bars[symbol] = closed_15[-1]
+            self._aux_history[symbol] = {"15m": closed_15, "1h": closed_1h}
             try:
                 self._aux_quotes[symbol] = await self._client.quote(symbol)
             except Exception as exc:
@@ -313,6 +308,21 @@ class MarketIngestionService:
         self._autonomous = runtime
         self._autonomous_owner = owner and runtime is not None
         self._aux_enabled = self._autonomous_owner
+        self.seed_autonomous()
+
+    def seed_autonomous(self) -> None:
+        if self._autonomous is None:
+            return
+        seeder = getattr(self._autonomous, "seed_history", None)
+        if seeder is None:
+            return
+        seeder(
+            self._settings.symbol,
+            list(self._candles.get("15m") or []),
+            list(self._candles.get("1h") or []),
+        )
+        for symbol, book in self._aux_history.items():
+            seeder(symbol, list(book.get("15m") or []), list(book.get("1h") or []))
 
     async def _dispatch_closed(self, candle: Candle, quote: Quote) -> None:
         if self._autonomous_owner and self._autonomous is not None:

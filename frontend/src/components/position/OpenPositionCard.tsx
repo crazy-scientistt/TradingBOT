@@ -4,11 +4,63 @@ import { PositionDetails, PipelineStep } from '../../types/dashboard';
 import { DecisionPipeline } from './DecisionPipeline';
 
 interface OpenPositionCardProps {
-  position: PositionDetails;
+  position: PositionDetails | null;
   pipelineSteps: PipelineStep[];
 }
 
 export const OpenPositionCard: React.FC<OpenPositionCardProps> = ({ position, pipelineSteps }) => {
+  if (!position) {
+    return (
+      <div className="dashboard-card" style={{
+        width: '310px',
+        minWidth: '290px',
+        padding: '12px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between'
+      }}>
+        <div>
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: '8px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#9498a4', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                OPEN POSITION
+              </span>
+              <span className="badge-paper">PAPER</span>
+            </div>
+          </div>
+          <div style={{
+            fontSize: '18px',
+            fontWeight: 800,
+            color: '#9498a4',
+            letterSpacing: '0.02em',
+            marginBottom: '8px'
+          }}>
+            FLAT
+          </div>
+          <div style={{ fontSize: '13px', fontWeight: 600, color: '#f8fafc', marginBottom: '4px' }}>
+            No open paper position
+          </div>
+          <div style={{ fontSize: '12px', color: '#9498a4', lineHeight: 1.45 }}>
+            The paper account is flat. Entries wait for a closed 15m setup that clears the genome and risk gates.
+          </div>
+        </div>
+        <div>
+          <div style={{
+            height: '1px',
+            backgroundColor: 'rgba(255, 255, 255, 0.06)',
+            margin: '8px 0 2px 0'
+          }} />
+          <DecisionPipeline steps={pipelineSteps} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="dashboard-card" style={{
       width: '310px',

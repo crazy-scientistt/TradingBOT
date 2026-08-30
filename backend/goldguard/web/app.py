@@ -542,9 +542,19 @@ def _gateway_client() -> GatewayClient | None:
 
 
 def _paper_account_id() -> str | None:
+    if _runtime_facade is not None:
+        account = _runtime_facade.status().paper_account_id
+        if account:
+            return account
     if _trading_runtime is not None:
         return _trading_runtime.status().paper_account_id
     return _ledger_repo.current_paper_session_id() if _ledger_repo else None
+
+
+def _event_runtime():
+    if _runtime_facade is not None:
+        return _runtime_facade
+    return _trading_runtime
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +758,10 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
             genome_repo=_genome_repo,
             reflection_repo=_reflection_repo,
         )
+        if _trading_runtime is not None:
+            account = _trading_runtime.status().paper_account_id
+            if account:
+                _autonomous_runtime.set_paper_account(account)
         _runtime_facade = RuntimeFacade(
             profile=active_profile,
             legacy=_trading_runtime,
@@ -1359,9 +1373,10 @@ _PIPELINE_OUTCOMES: dict[str, tuple[int, bool]] = {
 
 
 def _latest_decision_event() -> AgentEvent | None:
-    if _trading_runtime is None:
+    runtime = _event_runtime()
+    if runtime is None:
         return None
-    for event in reversed(_trading_runtime.recent_events(AGENT_EVENT_DISPLAY_LIMIT)):
+    for event in reversed(runtime.recent_events(AGENT_EVENT_DISPLAY_LIMIT)):
         if "outcome_action" in event.payload:
             return event
     return None
@@ -2447,6 +2462,17 @@ async def start_bot() -> dict[str, str]:
         _hermes_loop.set_autopromotion(True)
         asyncio.create_task(_run_hermes_cycle(), name="goldguard-hermes-on-start")
     asyncio.create_task(_refresh_ai_context(), name="goldguard-context-on-start")
+    if (
+        _autonomous_runtime is not None
+        and _runtime_facade is not None
+        and not _runtime_facade.is_legacy_owner()
+    ):
+        if _ingestion is not None:
+            _ingestion.seed_autonomous()
+        asyncio.create_task(
+            _autonomous_runtime.evaluate_latest_bars(),
+            name="goldguard-eval-on-start",
+        )
     return {"status": "started"}
 
 
@@ -2521,7 +2547,8 @@ async def revert_baseline() -> dict[str, Any]:
 @app.get("/api/agent/events")
 async def agent_events(limit: int = AGENT_EVENT_DISPLAY_LIMIT) -> dict[str, Any]:
     """Newest agent decisions, bounded to the display cap. Audit history lives in the ledger."""
-    if _trading_runtime is None:
+    runtime = _event_runtime()
+    if runtime is None:
         return _env(
             [],
             availability="unavailable",
@@ -2530,7 +2557,7 @@ async def agent_events(limit: int = AGENT_EVENT_DISPLAY_LIMIT) -> dict[str, Any]
             detail="trading runtime failed to initialise",
         )
     bounded = max(1, min(limit, AGENT_EVENT_DISPLAY_LIMIT))
-    events = [_event_payload(event) for event in reversed(_trading_runtime.recent_events(bounded))]
+    events = [_event_payload(event) for event in reversed(runtime.recent_events(bounded))]
     return _env(
         events,
         source="event-bus",
@@ -2544,7 +2571,7 @@ def _sse(event_name: str, payload: dict[str, Any]) -> str:
 
 
 async def _agent_event_frames() -> AsyncGenerator[str, None]:
-    runtime = _trading_runtime
+    runtime = _event_runtime()
     if runtime is None:
         yield _sse("snapshot", {"events": [], "bounded_to": AGENT_EVENT_DISPLAY_LIMIT})
         return

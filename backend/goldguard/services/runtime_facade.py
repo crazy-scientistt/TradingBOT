@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
+
 from goldguard.domain.enums import StrategyMode
 from goldguard.domain.profile import AutonomousProfile
+from goldguard.observability.events import AgentEvent
 from goldguard.services.autonomous_runtime import AutonomousRuntime
 from goldguard.services.runtime import RuntimeStatus, TradingRuntime
 
@@ -64,6 +67,15 @@ class RuntimeFacade:
 
     def status(self) -> RuntimeStatus:
         return self._active().status()
+
+    def recent_events(self, limit: int = 30) -> tuple[AgentEvent, ...]:
+        getter = getattr(self._active(), "recent_events", None)
+        if getter is None:
+            return ()
+        return getter(limit)
+
+    def subscribe_events(self) -> AsyncGenerator[AgentEvent, None]:
+        return self._active().subscribe_events()
 
     def is_legacy_owner(self) -> bool:
         return self.owner is StrategyMode.LEGACY or self._autonomous is None

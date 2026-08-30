@@ -151,4 +151,34 @@ describe('paper trading controls', () => {
     await waitFor(() => expect(screen.getByText('No open paper position')).toBeInTheDocument());
     expect(screen.getByText(/Waiting for a real paper-account snapshot/i)).toBeInTheDocument();
   });
+
+  it('renders paper equity even when 24h change and drawdown are still unknown', async () => {
+    const snapshot = dashboard(true);
+    snapshot.kpi = envelope({
+      equity: 100,
+      equityCurrency: 'USDT',
+      equityChangePercent: null,
+      equityChangePeriod: '24H',
+      cash: 100,
+      cashCurrency: 'USDT',
+      cashChangeNote: 'Paper Mode',
+      totalPnl: 0,
+      totalPnlCurrency: 'USDT',
+      totalPnlChangePercent: 0,
+      totalPnlChangePeriod: 'Since start',
+      maxDrawdown: null,
+      maxDrawdownPeriod: '1 recorded snapshots',
+      liveSpread: null,
+      liveSpreadCurrency: 'USDT',
+    });
+    snapshot.equity = envelope([
+      { date: '2026-08-30T09:00:00Z', value: 100, baseline: 100 },
+    ]);
+    stubApi(snapshot);
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText('100.00').length).toBeGreaterThan(0));
+    expect(screen.queryByText(/Waiting for a real paper-account snapshot/i)).not.toBeInTheDocument();
+    expect(screen.getByText('No open paper position')).toBeInTheDocument();
+    expect(screen.getByText('FLAT')).toBeInTheDocument();
+  });
 });
