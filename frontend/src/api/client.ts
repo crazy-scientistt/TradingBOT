@@ -16,6 +16,7 @@ import {
   ResearchQuota,
   TradeReflection,
   BotStateStatus,
+  HermesJournal,
 } from '../types';
 
 const API_BASE = '/api';
@@ -182,6 +183,7 @@ export interface DashboardSnapshot {
   routes: ApiEnvelope<ProviderRoute[]>;
   quota: ApiEnvelope<ResearchQuota | null>;
   reflections: ApiEnvelope<TradeReflection[]>;
+  hermesJournal?: ApiEnvelope<HermesJournal | null>;
   botState: ApiEnvelope<BotStateStatus | null>;
   agentEvents: ApiEnvelope<AgentEvent[]>;
   preflight: PreflightResponse;

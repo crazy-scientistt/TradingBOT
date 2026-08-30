@@ -1779,6 +1779,60 @@ async def hermes_step() -> dict[str, Any]:
     }
 
 
+@app.get("/api/hermes/journal")
+async def hermes_journal() -> dict[str, Any]:
+    """Open notebook: last cycle, Hermes candidates, and closed-trade lessons."""
+    last = None
+    cycles: list[dict[str, Any]] = []
+    if _hermes_loop is not None:
+        cycles = [_jsonable(item) for item in list(_hermes_loop.journal)]
+        result = _hermes_loop.last_result
+        if result is not None:
+            last = {
+                "status": result.status,
+                "iteration_id": result.iteration_id,
+                "candidate_genome_id": result.candidate_genome_id,
+                "gate_results": _jsonable(result.gate_results),
+                "circuit_breaker_tripped": result.circuit_breaker_tripped,
+                "quota_used": list(result.quota_used),
+            }
+            if cycles:
+                last = {**cycles[0], **last}
+    candidates: list[dict[str, Any]] = []
+    if _genome_repo is not None:
+        for row in _genome_repo.list_genomes():
+            if str(row.get("origin") or "") == "hermes":
+                candidates.append(
+                    {
+                        "genome_id": row.get("genome_id"),
+                        "parent_id": row.get("parent_id"),
+                        "status": row.get("status"),
+                        "title": row.get("title"),
+                        "hypothesis": row.get("hypothesis"),
+                        "evidence_refs": row.get("evidence_refs") or [],
+                        "created_at": row.get("created_at"),
+                    }
+                )
+    reflections: list[dict[str, Any]] = []
+    if _reflection_repo is not None:
+        reflections = _reflection_repo.list_reflections(limit=20)
+    return _env(
+        {
+            "last": last,
+            "cycles": cycles,
+            "candidates": candidates[:20],
+            "reflections": reflections,
+            "lesson_note": (
+                None
+                if reflections
+                else "No closed paper trades yet. Hermes cannot write a lesson until a position opens and closes."
+            ),
+            "circuit_open": bool(last and last.get("circuit_breaker_tripped")),
+        },
+        source="hermes-journal",
+    )
+
+
 @app.get("/api/reflections")
 async def list_reflections(namespace: str | None = None, limit: int = 100) -> dict[str, Any]:
     """Post-mortem lessons written by the runtime. Nothing is seeded at boot."""
@@ -2577,6 +2631,7 @@ _DASHBOARD_SECTIONS: tuple[tuple[str, Callable[[], Awaitable[Any]]], ...] = (
     ("routes", list_routes),
     ("quota", get_quota),
     ("reflections", list_reflections),
+    ("hermesJournal", hermes_journal),
     ("botState", bot_state),
     ("agentEvents", agent_events),
     ("preflight", preflight),

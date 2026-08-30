@@ -116,6 +116,38 @@ export interface TradeReflection {
   created_at: string;
 }
 
+export interface HermesCycle {
+  observed_at?: string;
+  status: string;
+  iteration_id?: string;
+  candidate_genome_id?: string | null;
+  title?: string;
+  hypothesis?: string;
+  evidence_refs?: string[];
+  gate_results?: Record<string, unknown>;
+  circuit_breaker_tripped?: boolean;
+  quota_used?: number[];
+}
+
+export interface HermesCandidate {
+  genome_id: string;
+  parent_id?: string | null;
+  status?: string;
+  title?: string;
+  hypothesis?: string;
+  evidence_refs?: string[];
+  created_at?: string;
+}
+
+export interface HermesJournal {
+  last: HermesCycle | null;
+  cycles: HermesCycle[];
+  candidates: HermesCandidate[];
+  reflections: TradeReflection[];
+  lesson_note?: string | null;
+  circuit_open?: boolean;
+}
+
 export interface BotStateStatus {
   state:
     | 'NORMAL'

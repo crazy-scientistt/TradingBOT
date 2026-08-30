@@ -203,6 +203,7 @@ def test_dashboard_snapshot_covers_every_polled_section(client: TestClient) -> N
         "routes",
         "quota",
         "reflections",
+        "hermesJournal",
         "botState",
         "agentEvents",
         "preflight",

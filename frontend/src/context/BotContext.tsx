@@ -17,6 +17,7 @@ import {
   ResearchQuota,
   TradeReflection,
   BotStateStatus,
+  HermesJournal,
 } from '../types';
 
 export interface ToastMessage {
@@ -82,6 +83,7 @@ export interface BotContextType {
   routes: ProviderRoute[];
   quota: ResearchQuota;
   reflections: TradeReflection[];
+  hermesJournal: HermesJournal | null;
   botState: BotStateStatus;
 
   toasts: ToastMessage[];
@@ -209,6 +211,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [routes, setRoutes] = useState<ProviderRoute[]>([]);
   const [quota, setQuota] = useState<ResearchQuota>(null as unknown as ResearchQuota);
   const [reflections, setReflections] = useState<TradeReflection[]>([]);
+  const [hermesJournal, setHermesJournal] = useState<HermesJournal | null>(null);
   const [botState, setBotState] = useState<BotStateStatus>(null as unknown as BotStateStatus);
   const [dataStatus, setDataStatus] = useState<DataStatus>({
     loading: true,
@@ -257,6 +260,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         snapshot.routes,
         snapshot.quota,
         snapshot.reflections,
+        snapshot.hermesJournal,
         snapshot.botState,
         snapshot.agentEvents,
         snapshot.promotionCanary,
@@ -283,6 +287,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setRoutes(sectionData(snapshot.routes) ?? []);
       setQuota(sectionData(snapshot.quota) as ResearchQuota);
       setReflections(sectionData(snapshot.reflections) ?? []);
+      setHermesJournal(sectionData(snapshot.hermesJournal) ?? null);
       setBotState((botStateData && typeof botStateData.state === 'string' ? botStateData : null) as unknown as BotStateStatus);
       setAgentEvents((sectionData(snapshot.agentEvents) ?? []).slice(0, 30));
 
@@ -512,6 +517,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     routes,
     quota,
     reflections,
+    hermesJournal,
     botState,
     toasts,
     addToast,
@@ -541,6 +547,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     emergencyStop,
     equityHistory,
     genomes,
+    hermesJournal,
     isPaperMode,
     kpi,
     liveContext,

@@ -1,3 +1,4 @@
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -81,6 +82,7 @@ class HermesResearchLoop:
         self._steps_date = ""
         self._steps_today = 0
         self.last_result: LoopIterationResult | None = None
+        self.journal: deque[dict[str, Any]] = deque(maxlen=30)
 
     async def step(
         self,
@@ -97,6 +99,22 @@ class HermesResearchLoop:
             now=now,
         )
         self.last_result = result
+        entry: dict[str, Any] = {
+            "observed_at": (now or datetime.now(UTC)).isoformat(),
+            "status": result.status,
+            "iteration_id": result.iteration_id,
+            "candidate_genome_id": result.candidate_genome_id,
+            "gate_results": dict(result.gate_results),
+            "circuit_breaker_tripped": result.circuit_breaker_tripped,
+            "quota_used": list(result.quota_used),
+        }
+        if result.candidate_genome_id:
+            genome = self.genome_repo.get_genome(result.candidate_genome_id)
+            if genome is not None:
+                entry["title"] = genome.title
+                entry["hypothesis"] = genome.hypothesis
+                entry["evidence_refs"] = list(genome.evidence_refs)
+        self.journal.appendleft(entry)
         return result
 
     async def _execute_step(
@@ -225,7 +243,7 @@ class HermesResearchLoop:
             )
             fresh_usage = self.quota_repo.get_usage(date_str)
             if not decision.promoted:
-                self._record_failure()
+                self.consecutive_failures = 0
                 return LoopIterationResult(
                     iteration_id=iteration_id,
                     status="promotion_rejected",
@@ -233,9 +251,12 @@ class HermesResearchLoop:
                     gate_results={
                         **decision.gate_reports,
                         "reasons": list(decision.rejection_reasons),
+                        "hypothesis": candidate_genome.hypothesis,
+                        "title": candidate_genome.title,
+                        "evidence_refs": list(candidate_genome.evidence_refs),
                     },
                     quota_used=fresh_usage,
-                    circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
+                    circuit_breaker_tripped=False,
                 )
             if not self.config.autopromotion_enabled:
                 return LoopIterationResult(
