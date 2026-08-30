@@ -107,6 +107,8 @@ class AutonomousRuntime:
         self._paused = False
         self._supervisor._running = True
         self._coordinator.resume_entries()
+        if self._learning is not None:
+            self._learning.drain_outbox()
 
     def pause(self) -> None:
         self._paused = True
@@ -222,7 +224,7 @@ class AutonomousRuntime:
 
     async def _catalog_allows(self, symbol: str) -> bool:
         if self._catalog.spot_client is None:
-            return True
+            return False
         try:
             if self._catalog._snapshot is None:
                 await self._catalog.refresh()
@@ -243,42 +245,54 @@ class AutonomousRuntime:
         if order is not None:
             fee = Decimal(str(getattr(order, "fee", "0")))
         from goldguard.broker.base import ClosedPaperTrade, PaperFill
-        from goldguard.domain.enums import ExitReason, OrderSide
+        from goldguard.domain.enums import OrderSide
 
+        opened = getattr(position, "opened_at", None)
+        try:
+            entry_at = datetime.fromisoformat(str(opened)) if opened else datetime.now(UTC)
+        except ValueError:
+            entry_at = datetime.now(UTC)
         now = datetime.now(UTC)
-        dummy_entry = PaperFill(
+        qty = Decimal(str(position.quantity or "0")) or Decimal("0.0001")
+        exit_price = Decimal(
+            str(getattr(order, "avg_price", None) or position.current_price or position.entry_price)
+        )
+        entry_fill = PaperFill(
             client_order_id=f"entry-{trade_id}",
             side=OrderSide.BUY,
-            quantity=Decimal(str(position.quantity or "0")) or Decimal("0.0001"),
+            quantity=qty,
             price=Decimal(str(position.entry_price)),
             fee=fee / Decimal("2"),
-            filled_at=now,
+            filled_at=entry_at,
         )
-        dummy_exit = PaperFill(
-            client_order_id=f"exit-{trade_id}",
+        exit_fill = PaperFill(
+            client_order_id=getattr(order, "client_order_id", None) or f"exit-{trade_id}",
             side=OrderSide.SELL,
-            quantity=dummy_entry.quantity,
-            price=Decimal(str(position.current_price or position.entry_price)),
-            fee=fee / Decimal("2"),
+            quantity=qty,
+            price=exit_price,
+            fee=fee / Decimal("2") if order is None else fee,
             filled_at=now,
         )
         closed = ClosedPaperTrade(
-            entry_fill=dummy_entry,
-            exit_fill=dummy_exit,
-            exit_reason=ExitReason.TAKE_PROFIT
-            if realized >= 0
-            else ExitReason.STOP_LOSS,
+            entry_fill=entry_fill,
+            exit_fill=exit_fill,
+            exit_reason=ExitReason.TAKE_PROFIT if realized >= 0 else ExitReason.STOP_LOSS,
             realized_pnl=realized,
         )
         genome = self._genome_repo.get_active_genome()
-        self._learning.record_closed_trade(
-            closed,
-            trade_id=trade_id,
-            symbol=symbol,
-            genome_id=genome.genome_id if genome is not None else None,
-            mae=self._mae.get(symbol, Decimal("0")),
-            mfe=self._mfe.get(symbol, Decimal("0")),
-        )
+        with self._database.transaction() as connection:
+            self._learning.record_closed_trade(
+                closed,
+                trade_id=trade_id,
+                symbol=symbol,
+                genome_id=genome.genome_id if genome is not None else None,
+                mae=self._mae.get(symbol, Decimal("0")),
+                mfe=self._mfe.get(symbol, Decimal("0")),
+                connection=connection,
+            )
+        self._mae.pop(symbol, None)
+        self._mfe.pop(symbol, None)
+        self._learning.drain_outbox()
 
     def _track_excursion(self, symbol: str, price: Decimal) -> None:
         for position in self._broker.open_positions():

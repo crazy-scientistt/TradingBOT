@@ -48,3 +48,31 @@ def test_closed_trade_writes_exactly_one_reflection(tmp_path: Path) -> None:
     assert second is None
     assert len(rows) == 1
     assert rows[0]["trade_id"] == "trade-1"
+
+
+def test_drain_outbox_replays_pending_lesson(tmp_path: Path) -> None:
+    db = Database(tmp_path / "learn-outbox.db")
+    db.migrate()
+    repo = ReflectionRepository(db)
+    recorder = LearningRecorder(repo)
+    repo.enqueue_outbox(
+        trade_id="t-out",
+        payload={
+            "hypothesis": "paper closed cycle replay",
+            "symbol": "ETHUSDT",
+            "realized_pnl": "1.20",
+            "mae": "0.10",
+            "mfe": "2.00",
+            "fees": "0.05",
+            "exit_reason": "TAKE_PROFIT",
+            "namespace": "forward",
+        },
+        error="simulated write failure",
+    )
+    assert repo.has_pending_outbox() is True
+    assert recorder.drain_outbox() == 1
+    assert repo.has_pending_outbox() is False
+    stored = repo.get_by_trade_id("t-out")
+    assert stored is not None
+    assert stored["trade_id"] == "t-out"
+

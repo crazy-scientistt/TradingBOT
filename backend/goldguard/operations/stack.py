@@ -64,6 +64,7 @@ async def collect_stack_diagnostics(
     settings: Settings,
     database_ready: bool,
     paper_broker_ready: bool,
+    paper_futures_ready: bool | None = None,
     http_client: httpx.AsyncClient | None = None,
     dataset_status: str = "UNKNOWN",
     reflection_count: int | None = None,
@@ -83,13 +84,16 @@ async def collect_stack_diagnostics(
             checks.append(_check("database_restart", "fail", "DATABASE_UNINITIALIZED"))
             blockers.append("DATABASE_UNINITIALIZED")
 
+        futures_ready = paper_broker_ready if paper_futures_ready is None else paper_futures_ready
         if paper_broker_ready:
             checks.append(_check("paper_spot", "pass", "paper broker ready"))
-            checks.append(_check("paper_futures", "pass", "paper futures adapter present"))
         else:
             checks.append(_check("paper_spot", "fail", "PAPER_BROKER_UNINITIALIZED"))
-            checks.append(_check("paper_futures", "fail", "PAPER_BROKER_UNINITIALIZED"))
             blockers.append("PAPER_BROKER_UNINITIALIZED")
+        if futures_ready:
+            checks.append(_check("paper_futures", "pass", "paper futures adapter present"))
+        else:
+            checks.append(_check("paper_futures", "fail", "PAPER_FUTURES_UNINITIALIZED"))
 
         market_base = settings.market_base_url.rstrip("/")
         if settings.market_ingestion_enabled:
@@ -141,13 +145,22 @@ async def collect_stack_diagnostics(
                     break
             if ok:
                 checks.append(_check("hermes_http", "pass", detail))
-                checks.append(
-                    _check(
-                        "hermes_memory_restart",
-                        "not_run",
-                        "HTTP health is not memory or learning proof",
+                if reflection_count and reflection_count > 0:
+                    checks.append(
+                        _check(
+                            "hermes_memory_restart",
+                            "pass",
+                            "goldguard reflections persisted",
+                        )
                     )
-                )
+                else:
+                    checks.append(
+                        _check(
+                            "hermes_memory_restart",
+                            "not_run",
+                            "HTTP health is not memory or learning proof",
+                        )
+                    )
             else:
                 checks.append(_check("hermes_http", "fail", f"HERMES_{detail}"))
                 checks.append(_check("hermes_memory_restart", "fail", f"HERMES_{detail}"))

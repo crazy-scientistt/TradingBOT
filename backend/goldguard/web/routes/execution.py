@@ -155,7 +155,10 @@ async def get_diagnostics() -> dict[str, Any]:
     data = await collect_stack_diagnostics(
         settings=settings,
         database_ready=app_module._db is not None,
-        paper_broker_ready=app_module._broker is not None,
+        paper_broker_ready=(
+            app_module._broker is not None or app_module._autonomous_runtime is not None
+        ),
+        paper_futures_ready=app_module._autonomous_runtime is not None,
         http_client=app_module._provider_http_client,
         dataset_status=getattr(app_module, "_dataset_status_label", lambda: "UNKNOWN")(),
         reflection_count=(

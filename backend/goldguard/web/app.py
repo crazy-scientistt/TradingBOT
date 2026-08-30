@@ -243,6 +243,20 @@ def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
         (Decimal(str(trade["realized_pnl_text"] or "0")) for trade in closed),
         Decimal("0"),
     )
+    if not closed and _reflection_repo is not None:
+        lessons = _reflection_repo.list_reflections(namespace="forward", limit=500)
+        closed = [
+            {
+                "status": "CLOSED",
+                "realized_pnl_text": str(item.get("net_pnl") or "0"),
+                "opened_at": item.get("created_at"),
+            }
+            for item in lessons
+        ]
+        net_pnl = sum(
+            (Decimal(str(item.get("net_pnl") or "0")) for item in lessons),
+            Decimal("0"),
+        )
     opened = [
         datetime.fromisoformat(str(trade["opened_at"]))
         for trade in closed
@@ -252,9 +266,13 @@ def _hermes_dataset(market: MarketSnapshot) -> EvidenceDataset:
     if opened:
         shadow_days = max((datetime.now(UTC) - min(opened)).days, 0)
     candles, dataset_id = _research_candles(market)
+    dataset_label = _dataset_status_label()
+    verified = dataset_label != "CORRUPT" and (
+        True if dataset_id.startswith("history:") else market.verified
+    )
     return EvidenceDataset(
         dataset_id=dataset_id,
-        verified=True if dataset_id.startswith("history:") else market.verified,
+        verified=verified,
         candles_15m=tuple(candles),
         shadow=ShadowEvidence(
             days=shadow_days,

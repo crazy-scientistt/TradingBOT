@@ -1515,6 +1515,23 @@ class ReflectionRepository:
         except sqlite3.OperationalError:
             return False
 
+    def list_pending_outbox(self) -> list[dict[str, Any]]:
+        try:
+            with self.database.connect() as connection:
+                rows = connection.execute(
+                    "SELECT trade_id, payload_json FROM learning_outbox WHERE status = 'pending'"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        pending: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except json.JSONDecodeError:
+                payload = {}
+            pending.append({"trade_id": str(row["trade_id"]), "payload": payload})
+        return pending
+
     def get_by_trade_id(self, trade_id: str) -> dict[str, Any] | None:
         with self.database.connect() as connection:
             row = connection.execute(
