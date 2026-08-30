@@ -199,11 +199,14 @@ class HermesResearchLoop:
                 gate_results={"reason": state["revoked_reason"] or "autonomy is revoked"},
             )
 
+        self.genome_repo.save_genome(candidate_genome, origin="hermes", status="candidate")
+        cand_id = candidate_genome.genome_id
         if self.promotion_controller is not None and dataset is not None:
             if not dataset.verified:
                 return LoopIterationResult(
                     iteration_id=iteration_id,
                     status="dataset_unverified",
+                    candidate_genome_id=cand_id,
                     quota_used=self.quota_repo.get_usage(date_str),
                     gate_results={"reason": "CORRUPT or unverified dataset cannot qualify Hermes"},
                 )
@@ -214,8 +217,6 @@ class HermesResearchLoop:
                         date_str=date_str, max_limit=self.config.max_backtest_calls
                     )
                 )
-            self.genome_repo.save_genome(candidate_genome, origin="hermes", status="candidate")
-            cand_id = candidate_genome.genome_id
             decision = self.promotion_controller.evaluate(
                 candidate_genome,
                 dataset,

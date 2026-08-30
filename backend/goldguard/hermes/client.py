@@ -27,7 +27,7 @@ class HermesClient:
 
     async def request_proposal(self, packet: SanitizedResearchPacket) -> bytes:
         payload = {
-            "model": "hermes-agent",
+            "model": "google-antigravity/gemini-3.7-flash",
             "temperature": 0,
             "messages": [
                 {
@@ -98,7 +98,7 @@ class HermesClient:
 
     async def request_proposal_text(self, user_content: str) -> str:
         payload = {
-            "model": "hermes-agent",
+            "model": "google-antigravity/gemini-3.7-flash",
             "temperature": 0,
             "messages": [
                 {

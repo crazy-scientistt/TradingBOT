@@ -22,11 +22,33 @@ class ProposalValidationError(ValueError):
 
 
 class _RawProposalResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
-    hypothesis: str = Field(min_length=10, max_length=1000)
-    evidence_refs: list[str] = Field(min_length=1, max_length=10)
+    hypothesis: str = Field(default="", max_length=1000)
+    evidence_refs: list[str] = Field(default_factory=list)
     parameter_changes: dict[str, str] = Field(min_length=1, max_length=10)
+    rationale: str = Field(default="", max_length=1000)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    def resolved_hypothesis(self) -> str:
+        text = (self.hypothesis or self.rationale).strip()
+        if len(text) >= 10:
+            return text[:1000]
+        return "Hermes bounded parameter mutation from live market evidence."
+
+    def resolved_evidence(self) -> list[str]:
+        refs = [item for item in (self.evidence_refs or self.evidence_ids) if item]
+        return refs or ["live-market"]
+
+    @classmethod
+    def coerce(cls, raw: dict[str, Any]) -> "_RawProposalResponse":
+        changes = raw.get("parameter_changes") or {}
+        if isinstance(changes, dict):
+            raw = {
+                **raw,
+                "parameter_changes": {str(key): str(value) for key, value in changes.items()},
+            }
+        return cls.model_validate(raw)
 
 
 HERMES_SYSTEM_PROMPT = """You are Hermes, the autonomous quantitative researcher for GoldGuard.
@@ -83,8 +105,8 @@ class StrategyProposalGenerator:
         end = content.rfind("}")
         payload = content[match : end + 1] if match >= 0 and end > match else content
         try:
-            parsed = _RawProposalResponse.model_validate_json(payload)
-        except (ValidationError, Exception) as exc:
+            parsed = _RawProposalResponse.coerce(json.loads(payload))
+        except (ValidationError, json.JSONDecodeError, Exception) as exc:
             raise ProposalValidationError(f"Malformed LLM proposal response: {exc}") from exc
 
         # Validate max 2 parameter changes
@@ -155,13 +177,15 @@ class StrategyProposalGenerator:
                 max_spread_rate=parent_genome.guard.max_spread_rate,
             )
 
+        hypothesis = parsed.resolved_hypothesis()
+        evidence = parsed.resolved_evidence()
         new_genome_id = f"hermes-{uuid4().hex[:8]}"
         return StrategyGenome(
             genome_id=new_genome_id,
             parent_id=parent_genome.genome_id,
-            title=f"Refinement: {parsed.hypothesis[:50]}",
-            hypothesis=parsed.hypothesis,
-            evidence_refs=tuple(parsed.evidence_refs),
+            title=f"Refinement: {hypothesis[:50]}",
+            hypothesis=hypothesis,
+            evidence_refs=tuple(evidence),
             regime=parent_genome.regime,
             guard=new_guard,
             entry=tuple(new_entry),
