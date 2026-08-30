@@ -16,7 +16,7 @@ interface EmergencyCockpitProps {
 }
 
 export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
-  const { botState, activeGenomeId, triggerKillSwitch, revokeAutonomy, revertBaseline } = useBot();
+  const { botState, activeGenomeId, triggerKillSwitch, revokeAutonomy, revertBaseline, restoreAutonomy } = useBot();
   const [confirmAction, setConfirmAction] = useState<string | null>(null);
 
   const getStateColor = (st: string) => {
@@ -38,12 +38,15 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
   const handleConfirm = () => {
     if (confirmAction === 'kill') triggerKillSwitch();
     if (confirmAction === 'revoke') revokeAutonomy();
+    if (confirmAction === 'restore') restoreAutonomy();
     if (confirmAction === 'revert') revertBaseline();
     setConfirmAction(null);
   };
 
   const stateColor = getStateColor(botState.state);
-  const lossPct = Math.min(100, Math.round(((botState.daily_loss_percent || 0.45) / (botState.daily_loss_limit || 3.0)) * 100));
+  const lossPctRaw = botState.daily_loss_percent;
+  const limitRaw = botState.daily_loss_limit;
+  const lossPct = lossPctRaw != null && limitRaw ? Math.min(100, Math.round((lossPctRaw / limitRaw) * 100)) : 0;
 
   return (
     <div
@@ -107,7 +110,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
             <span style={{ color: '#9498a4' }}>24h Rolling Loss</span>
             <span style={{ fontWeight: 700, color: lossPct > 70 ? '#ef4444' : '#e2e4e8' }}>
-              {(botState.daily_loss_percent || 0.45).toFixed(2)}% / {(botState.daily_loss_limit || 3.0).toFixed(2)}%
+              {(lossPctRaw ?? 0).toFixed(2)}% / {(limitRaw ?? 0).toFixed(2)}%
             </span>
           </div>
           <div style={{ width: '100%', height: '6px', backgroundColor: '#181a20', borderRadius: '3px', overflow: 'hidden' }}>
@@ -184,17 +187,19 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <PauseCircle size={16} color="var(--gold-primary)" />
               <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--gold-primary)' }}>
-                Revoke Autonomy
+                {botState.full_autonomy ? 'Revoke Autonomy' : 'Restore Autonomy'}
               </span>
             </div>
             <span style={{ fontSize: '11.5px', color: '#9498a4' }}>
-              Suspend autonomous Hermes strategy research and require manual human approval for all mutations.
+              {botState.full_autonomy
+                ? 'Suspend autonomous Hermes strategy research and require manual human approval for all mutations.'
+                : 'Re-enable Hermes research and promotion. Does not clear an emergency stop.'}
             </span>
           </div>
 
           <button
             type="button"
-            onClick={() => setConfirmAction('revoke')}
+            onClick={() => setConfirmAction(botState.full_autonomy ? 'revoke' : 'restore')}
             style={{
               padding: '8px 12px',
               backgroundColor: 'rgba(61, 126, 255, 0.15)',
@@ -206,7 +211,7 @@ export const EmergencyCockpit: React.FC<EmergencyCockpitProps> = () => {
               cursor: 'pointer',
             }}
           >
-            Revoke Autonomy
+            {botState.full_autonomy ? 'Revoke Autonomy' : 'Restore Autonomy'}
           </button>
         </div>
 

@@ -20,6 +20,14 @@ import {
 
 const API_BASE = '/api';
 
+export function toBinanceSymbol(pair: string): string {
+  const compact = pair.replace(/[\s/]/g, '').toUpperCase();
+  if (compact === 'PAXGUSDT' || compact === 'ETHUSDT' || compact === 'SOLUSDT') {
+    return compact;
+  }
+  return 'PAXGUSDT';
+}
+
 export type Availability = 'available' | 'degraded' | 'unavailable';
 
 /**
@@ -381,6 +389,10 @@ export const api = {
 
   async revertBaseline(): Promise<{ status: string; active_genome_id: string }> {
     return fetchJson(`${API_BASE}/bot/revert-baseline`, { method: 'POST' });
+  },
+
+  async restoreAutonomy(): Promise<{ status: string }> {
+    return fetchJson(`${API_BASE}/bot/restore-autonomy`, { method: 'POST' });
   },
 
   // Feeds: Decisions & Trades

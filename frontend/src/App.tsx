@@ -219,8 +219,8 @@ const MainDashboard: React.FC = () => {
               {/* Row 3: Bottom Section - Equity Curve (Left) + Live Context (Middle) + Risk & Health (Right) */}
               <div className="gg-row">
                 <EquityCurveCard data={equityHistory} />
-                <LiveContextCard items={liveContext} />
-                <RiskHealthCard items={riskHealth} />
+                <LiveContextCard items={liveContext} onViewAll={() => setActiveTab('News')} />
+                <RiskHealthCard items={riskHealth} onViewAll={() => setActiveTab('Cockpit')} />
               </div>
             </>
           )}

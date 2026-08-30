@@ -1136,38 +1136,64 @@ async def market_candles(
         raise HTTPException(
             status_code=400, detail="interval must be one of 1m, 5m, 15m, 1h, 4h, 1d"
         )
+    requested = symbol.upper()
+    if requested not in {"PAXGUSDT", "ETHUSDT", "SOLUSDT"}:
+        raise HTTPException(status_code=400, detail="symbol must be PAXGUSDT, ETHUSDT, or SOLUSDT")
     limit = max(1, min(limit, CANDLE_PAGE_LIMIT))
     market = _market()
-    candles: list[Any]
+    candles: list[Any] = []
     source = market.source
-    if interval == "15m":
-        stored = market.candles_15m
-    elif interval == "1h":
-        stored = market.candles_1h
-    else:
-        stored = ()
-    if stored:
-        candles = list(stored)
-        forming = _ingestion.hub.forming.get(interval) if _ingestion is not None else None
-        if forming is not None:
-            if candles and candles[-1].open_time == forming.open_time:
-                candles[-1] = forming
-            elif not forming.closed:
-                candles.append(forming)
-    elif _ingestion is not None and market.availability != "unavailable":
+    stored: tuple[Any, ...] = ()
+    primary = _settings.symbol if _settings is not None else "PAXGUSDT"
+    fetched_alt = False
+    if requested != primary:
+        if _ingestion is None:
+            return _env(
+                [],
+                availability="unavailable",
+                source="binance-chart",
+                stale=True,
+                detail=f"no public chart feed for {requested}",
+            )
         try:
-            candles = await _ingestion.chart_candles(interval, limit)
+            candles = await _ingestion.chart_candles(interval, limit, symbol=requested)
             source = "binance-chart"
+            fetched_alt = True
         except Exception as exc:
             return _env(
                 [],
                 availability="unavailable",
-                source=market.source,
+                source="binance-chart",
                 stale=True,
                 detail=f"chart klines unavailable: {exc}",
             )
-    else:
-        candles = []
+    elif interval == "15m":
+        stored = market.candles_15m
+    elif interval == "1h":
+        stored = market.candles_1h
+    if not fetched_alt:
+        if stored:
+            candles = list(stored)
+            forming = _ingestion.hub.forming.get(interval) if _ingestion is not None else None
+            if forming is not None:
+                if candles and candles[-1].open_time == forming.open_time:
+                    candles[-1] = forming
+                elif not forming.closed:
+                    candles.append(forming)
+        elif _ingestion is not None and market.availability != "unavailable":
+            try:
+                candles = await _ingestion.chart_candles(interval, limit)
+                source = "binance-chart"
+            except Exception as exc:
+                return _env(
+                    [],
+                    availability="unavailable",
+                    source=market.source,
+                    stale=True,
+                    detail=f"chart klines unavailable: {exc}",
+                )
+        else:
+            candles = []
     if not candles:
         return _env(
             [],
@@ -1216,13 +1242,30 @@ async def market_candles(
 @app.get("/api/market/quote")
 async def market_quote(symbol: str = "PAXGUSDT") -> dict[str, Any]:
     """Latest ingested bid/ask. Null until a quote has actually been observed."""
+    requested = symbol.upper()
+    if requested not in {"PAXGUSDT", "ETHUSDT", "SOLUSDT"}:
+        raise HTTPException(status_code=400, detail="symbol must be PAXGUSDT, ETHUSDT, or SOLUSDT")
     market = _market()
     quote = market.latest_quote
+    source = market.source
+    primary = _settings.symbol if _settings is not None else "PAXGUSDT"
+    if requested != primary and _ingestion is not None:
+        try:
+            quote = await _ingestion.public_quote(requested)
+            source = "binance-public"
+        except Exception as exc:
+            return _env(
+                None,
+                availability="unavailable",
+                source="binance-public",
+                stale=True,
+                detail=f"quote unavailable: {exc}",
+            )
     if quote is None:
         return _env(
             None,
             availability="unavailable",
-            source=market.source,
+            source=source,
             stale=True,
             detail=market.detail or "no live quote has been observed yet",
         )
@@ -1230,15 +1273,15 @@ async def market_quote(symbol: str = "PAXGUSDT") -> dict[str, Any]:
     mid = (quote.ask + quote.bid) / Decimal("2")
     return _env(
         {
-            "symbol": symbol,
+            "symbol": requested,
             "bid": float(quote.bid),
             "ask": float(quote.ask),
             "spread": float(spread),
             "spread_rate": float(spread / mid) if mid > 0 else None,
             "observed_at": quote.observed_at.isoformat(),
         },
-        availability=market.availability,
-        source=market.source,
+        availability=market.availability if requested == primary else "available",
+        source=source,
         observed_at=quote.observed_at,
         stale=market.stale,
         detail=market.detail,

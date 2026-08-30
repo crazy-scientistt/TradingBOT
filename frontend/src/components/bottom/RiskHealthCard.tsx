@@ -5,9 +5,10 @@ import { HealthStatusItem } from '../../types/dashboard';
 
 interface RiskHealthCardProps {
   items: HealthStatusItem[];
+  onViewAll?: () => void;
 }
 
-export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items }) => {
+export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items, onViewAll }) => {
   const getIcon = (iconType: string) => {
     switch (iconType) {
       case 'database':
@@ -82,6 +83,8 @@ export const RiskHealthCard: React.FC<RiskHealthCardProps> = ({ items }) => {
       {/* Footer Link */}
       <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px' }}>
         <button
+          type="button"
+          onClick={onViewAll}
           style={{
             background: 'transparent',
             border: 'none',

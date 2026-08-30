@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { TrendingUp } from 'lucide-react';
 import { useBot } from '../../context/BotContext';
-import { api } from '../../api/client';
+import { api, toBinanceSymbol } from '../../api/client';
 
 const fmt = (v: number | null | undefined, decimals = 2): string =>
-  v != null && Number.isFinite(v) ? v.toFixed(decimals) : 'â€”';
+  v != null && Number.isFinite(v) ? v.toFixed(decimals) : '—';
 
 export const MarketView: React.FC = () => {
-  const { quote, candles, dataStatus } = useBot();
+  const { quote, candles, dataStatus, selectedPair } = useBot();
+  const symbol = toBinanceSymbol(selectedPair);
   const [interval, setInterval] = useState<'15m' | '1h'>('15m');
   const [localCandles, setLocalCandles] = useState(candles);
   const [loading, setLoading] = useState(false);
@@ -15,11 +16,11 @@ export const MarketView: React.FC = () => {
   const fetchCandles = useCallback(async (iv: '15m' | '1h') => {
     setLoading(true);
     try {
-      const rows = await api.getMarketCandles('PAXGUSDT', iv, 50);
+      const rows = await api.getMarketCandles(symbol, iv, 50);
       setLocalCandles(rows);
     } catch { /* keep previous */ }
     setLoading(false);
-  }, []);
+  }, [symbol]);
 
   useEffect(() => { setLocalCandles(candles); }, [candles]);
   useEffect(() => { fetchCandles(interval); }, [interval, fetchCandles]);

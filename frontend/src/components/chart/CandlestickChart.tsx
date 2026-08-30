@@ -11,8 +11,9 @@ import {
   createChart,
 } from 'lightweight-charts';
 import { Candle, PositionDetails, Quote } from '../../types/dashboard';
-import { api } from '../../api/client';
+import { api, toBinanceSymbol } from '../../api/client';
 import { ChartControls } from './ChartControls';
+import { useBot } from '../../context/BotContext';
 
 interface CandlestickChartProps {
   candles: Candle[];
@@ -64,6 +65,8 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
   position,
 }) => {
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const { selectedPair } = useBot();
+  const symbol = toBinanceSymbol(selectedPair);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeries = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -117,14 +120,14 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
   const load = useCallback(async (tf: ChartTf) => {
     try {
-      const data = await api.getMarketCandles('PAXGUSDT', toApiInterval(tf), 500);
+      const data = await api.getMarketCandles(symbol, toApiInterval(tf), 500);
       const next = Array.isArray(data) ? data : [];
       setRows(next);
       applyBars(next, true);
     } catch {
       /* keep previous bars */
     }
-  }, [applyBars]);
+  }, [applyBars, symbol]);
 
   useEffect(() => {
     if (activeTf === '15m' && seedCandles.length && rows.length === 0) {
@@ -391,7 +394,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
             <span style={{ fontSize: '14.5px', fontWeight: 700, color: '#f8fafc' }}>
-              PAXG / USDT · {activeTf}
+              {selectedPair} · {activeTf}
             </span>
             <span style={{ fontSize: '11px', color: '#676b78' }}>{status}</span>
           </div>
@@ -450,7 +453,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       {tvMode ? (
         <iframe
           title="TradingView PAXGUSDT"
-          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE%3APAXGUSDT&interval=${activeTf === '1D' ? 'D' : activeTf === '4h' ? '240' : activeTf === '1h' ? '60' : activeTf === '5m' ? '5' : activeTf === '1m' ? '1' : '15'}&theme=dark&style=1&locale=en&hideideas=1`}
+          src={`https://s.tradingview.com/widgetembed/?symbol=BINANCE%3A${symbol}&interval=${activeTf === '1D' ? 'D' : activeTf === '4h' ? '240' : activeTf === '1h' ? '60' : activeTf === '5m' ? '5' : activeTf === '1m' ? '1' : '15'}&theme=dark&style=1&locale=en&hideideas=1`}
           style={{ width: '100%', height: chartHeight, border: 0, backgroundColor: '#0b0c0e' }}
         />
       ) : (

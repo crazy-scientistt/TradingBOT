@@ -392,20 +392,26 @@ class MarketIngestionService:
             self._refresh_verification()
             self._publish()
 
-    async def chart_candles(self, interval: str, limit: int) -> list[Candle]:
+    async def chart_candles(
+        self, interval: str, limit: int, symbol: str | None = None
+    ) -> list[Candle]:
         """Closed history plus the forming bar for the chart. Not used by the strategy."""
         if interval not in CHART_INTERVALS:
             raise ValueError(f"unsupported chart interval {interval}")
         limit = max(1, min(limit, 500))
-        if interval in ("15m", "1h") and self._candles.get(interval):
+        target = (symbol or self._settings.symbol).upper()
+        same_book = target == self._settings.symbol
+        if same_book and interval in ("15m", "1h") and self._candles.get(interval):
             closed = list(self._candles[interval][-limit:])
         else:
             closed = await self._client.klines(
-                symbol=self._settings.symbol,
+                symbol=target,
                 interval=interval,
                 limit=limit,
                 include_open=True,
             )
+        if not same_book:
+            return closed[-limit:]
         forming = self.hub.forming.get(interval)
         if forming is None:
             return closed
@@ -414,6 +420,9 @@ class MarketIngestionService:
         if forming.closed:
             return closed
         return [*closed, forming]
+
+    async def public_quote(self, symbol: str) -> Quote:
+        return await self._client.quote(symbol.upper())
 
     def _spawn_runtime_work(self, operation: Callable[[], object], name: str) -> None:
         task = asyncio.create_task(asyncio.to_thread(operation), name=name)

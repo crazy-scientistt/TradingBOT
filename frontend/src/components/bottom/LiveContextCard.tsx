@@ -5,9 +5,10 @@ import { NewsItem } from '../../types/dashboard';
 
 interface LiveContextCardProps {
   items: NewsItem[];
+  onViewAll?: () => void;
 }
 
-export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
+export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items, onViewAll }) => {
   const getIcon = (category: string) => {
     switch (category) {
       case 'fed':
@@ -89,6 +90,8 @@ export const LiveContextCard: React.FC<LiveContextCardProps> = ({ items }) => {
       {/* Footer Link */}
       <div style={{ display: 'flex', justifyContent: 'center', marginTop: '6px' }}>
         <button
+          type="button"
+          onClick={onViewAll}
           style={{
             background: 'transparent',
             border: 'none',

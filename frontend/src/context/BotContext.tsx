@@ -102,6 +102,7 @@ export interface BotContextType {
   probeLatencies: () => Promise<void>;
   triggerKillSwitch: () => Promise<void>;
   revokeAutonomy: () => Promise<void>;
+  restoreAutonomy: () => Promise<void>;
   revertBaseline: () => Promise<void>;
 }
 
@@ -452,6 +453,16 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [addToast, refreshAll]);
 
+  const restoreAutonomy = useCallback(async () => {
+    try {
+      await api.restoreAutonomy();
+      addToast('success', 'Autonomy restored', 'Hermes research and promotion are enabled again.');
+      await refreshAll();
+    } catch (error) {
+      addToast('error', 'Restore failed', error instanceof Error ? error.message : 'The server rejected the request.');
+    }
+  }, [addToast, refreshAll]);
+
   const revertBaseline = useCallback(async () => {
     try {
       await api.revertBaseline();
@@ -505,6 +516,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     probeLatencies,
     triggerKillSwitch: emergencyStop,
     revokeAutonomy,
+    restoreAutonomy,
     revertBaseline,
   }), [
     activeGenomeId,
@@ -545,6 +557,7 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     updateRoute,
     quota,
     revokeAutonomy,
+    restoreAutonomy,
   ]);
 
   return <BotContext.Provider value={value}>{children}</BotContext.Provider>;

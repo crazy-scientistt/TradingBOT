@@ -148,6 +148,30 @@ export const StrategyStudio: React.FC<StrategyStudioProps> = ({
             <Play size={14} fill="#000" />
             {isRunningBacktest ? 'Simulating Engine...' : 'Run Backtest'}
           </button>
+          {isCandidate && selectedGenome && (
+            <button
+              type="button"
+              onClick={() => {
+                if (propOnPromote) propOnPromote(selectedGenome.genome_id);
+                else if (botContext) void botContext.promoteGenome(selectedGenome.genome_id);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '8px 14px',
+                backgroundColor: '#181a20',
+                color: '#e2e4e8',
+                fontWeight: 700,
+                fontSize: '13px',
+                borderRadius: '6px',
+                border: '1px solid #2d3139',
+                cursor: 'pointer',
+              }}
+            >
+              Promote candidate
+            </button>
+          )}
 
         </div>
       </div>

@@ -17,6 +17,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
     systemHealthy,
     degraded,
     addToast,
+    agentEvents,
   } = useBot();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -201,14 +202,21 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSettings }) => {
             letterSpacing: '0.02em',
           }}
         >
-          {utcTime || '2026-08-27 00:00:00 UTC'}
+          {utcTime || '—'}
         </div>
 
         {/* Action icons */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', color: '#9498a4' }}>
           {/* Bell Icon with dot */}
           <div
-            onClick={() => addToast('info', 'System Operational', 'All risk bounds & single execution lease valid')}
+            onClick={() => {
+              const last = agentEvents[0];
+              if (last) {
+                addToast('info', last.action.replace(/_/g, ' '), last.reason);
+              } else {
+                addToast('info', 'No notifications', 'Agent events appear here when the paper loop records one.');
+              }
+            }}
             style={{ position: 'relative', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
             title="Notifications"
           >
