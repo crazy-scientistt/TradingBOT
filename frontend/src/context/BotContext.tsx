@@ -411,10 +411,21 @@ export const BotProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const result = await api.triggerHermesStep();
       const status = result.status || 'complete';
+      const gates = result.gate_results || {};
+      const detail =
+        result.candidate_genome_id
+          ? `Candidate ${result.candidate_genome_id}`
+          : typeof gates.error === 'string'
+            ? gates.error
+            : typeof gates.reason === 'string'
+              ? gates.reason
+              : Array.isArray(gates.reasons)
+                ? gates.reasons.map(String).join(' ')
+                : undefined;
       addToast(
-        status.includes('reject') || status.includes('fail') || status.includes('quota') ? 'warning' : 'success',
+        status.includes('reject') || status.includes('fail') || status.includes('quota') || status.includes('unavail') ? 'warning' : 'success',
         `Hermes: ${status.replace(/_/g, ' ')}`,
-        result.candidate_genome_id ? `Candidate ${result.candidate_genome_id}` : undefined,
+        detail,
       );
       await refreshAll();
       return result;

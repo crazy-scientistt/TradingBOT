@@ -174,12 +174,18 @@ class HermesResearchLoop:
             )
         except (ProposalValidationError, Exception) as exc:
             self._record_failure()
+            message = str(exc)
+            status = (
+                "hermes_unconfigured"
+                if "HERMES_UNAVAILABLE" in message or "unconfigured" in message.lower()
+                else "proposal_rejected"
+            )
             return LoopIterationResult(
                 iteration_id=iteration_id,
-                status="proposal_rejected",
+                status=status,
                 quota_used=self.quota_repo.get_usage(date_str),
                 circuit_breaker_tripped=self._is_circuit_breaker_tripped(),
-                gate_results={"error": str(exc)},
+                gate_results={"error": message},
             )
 
         # Autonomy may be revoked while the awaited proposal call is in flight.
