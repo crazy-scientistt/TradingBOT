@@ -6,20 +6,10 @@ import { toBinanceSymbol } from '../../api/client';
 const fmt = (v: number | null | undefined, decimals = 2): string =>
   v != null && Number.isFinite(v) ? v.toFixed(decimals) : '—';
 
-const INTERVALS: Array<{ label: string; tv: string }> = [
-  { label: '1m', tv: '1' },
-  { label: '5m', tv: '5' },
-  { label: '15m', tv: '15' },
-  { label: '1h', tv: '60' },
-  { label: '4h', tv: '240' },
-  { label: '1D', tv: 'D' },
-];
-
 export const MarketView: React.FC = () => {
   const { quote, selectedPair } = useBot();
   const [symbol, setSymbol] = useState(`BINANCE:${toBinanceSymbol(selectedPair)}`);
   const [draft, setDraft] = useState(`BINANCE:${toBinanceSymbol(selectedPair)}`);
-  const [interval, setInterval] = useState('15');
 
   useEffect(() => {
     const next = `BINANCE:${toBinanceSymbol(selectedPair)}`;
@@ -29,7 +19,7 @@ export const MarketView: React.FC = () => {
 
   const src =
     `https://s.tradingview.com/widgetembed/?symbol=${encodeURIComponent(symbol)}` +
-    `&interval=${interval}&theme=dark&style=1&locale=en&symboledit=1` +
+    `&interval=15&theme=dark&style=1&locale=en&symboledit=1` +
     `&hideideas=1&hidesidetoolbar=0&withdateranges=1&toolbarbg=0b0c0e`;
 
   return (
@@ -45,7 +35,7 @@ export const MarketView: React.FC = () => {
               TradingView · {symbol}
             </h2>
             <span style={{ fontSize: '12px', color: '#9498a4' }}>
-              Search any Binance pair, NASDAQ, NYSE, or FX ticker. Paper trading still uses the desk pair.
+              Search any Binance pair, NASDAQ, NYSE, or FX ticker. Use the chart toolbar for timeframe.
             </span>
           </div>
         </div>
@@ -97,28 +87,6 @@ export const MarketView: React.FC = () => {
           <QuoteTile label="Spread" value={fmt(quote.spread)} color="var(--gold-primary)" />
         </div>
       )}
-
-      <div style={{ display: 'flex', gap: '6px' }}>
-        {INTERVALS.map((item) => (
-          <button
-            key={item.tv}
-            type="button"
-            onClick={() => setInterval(item.tv)}
-            style={{
-              padding: '4px 10px',
-              borderRadius: '4px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              border: interval === item.tv ? '1px solid rgba(61, 126, 255,0.5)' : '1px solid #22242a',
-              backgroundColor: interval === item.tv ? 'rgba(61, 126, 255,0.08)' : '#141518',
-              color: interval === item.tv ? 'var(--gold-primary)' : '#9498a4',
-            }}
-          >
-            {item.label}
-          </button>
-        ))}
-      </div>
 
       <iframe
         title={`TradingView ${symbol}`}
