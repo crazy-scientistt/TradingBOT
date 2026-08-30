@@ -4,9 +4,10 @@ from pathlib import Path
 
 import pytest
 from goldguard.config import Settings
-from goldguard.domain.enums import StrategyMode
+from goldguard.domain.enums import ExecutionMode, OrderSide, ProductKind, StrategyMode
 from goldguard.domain.models import Candle, Quote
 from goldguard.domain.profile import default_autonomous_profile
+from goldguard.execution.models import OrderIntent
 from goldguard.services.autonomous_runtime import AutonomousRuntime
 from goldguard.services.runtime_facade import RuntimeFacade
 from goldguard.storage.database import Database
@@ -108,3 +109,38 @@ async def test_autonomous_hold_without_history_does_not_open(tmp_path: Path) -> 
     quote = Quote(bid=Decimal("2500"), ask=Decimal("2501"), observed_at=datetime.now(UTC))
     await runtime.on_closed_candle(_candle("ETHUSDT"), quote)
     assert runtime.broker.open_positions() == ()
+
+
+@pytest.mark.asyncio
+async def test_autonomous_stop_flattens_open_spot(tmp_path: Path) -> None:
+    db = Database(tmp_path / "auto3.db")
+    db.migrate()
+    genomes = GenomeRepository(db)
+    genomes.save_genome(trend_pullback_v1(), origin="baseline", status="active")
+    runtime = AutonomousRuntime(
+        settings=Settings(paper_starting_balance=Decimal("100")),
+        database=db,
+        profile=default_autonomous_profile(),
+        genome_repo=genomes,
+        reflection_repo=ReflectionRepository(db),
+    )
+    runtime.start()
+    runtime._spot.on_price("ETHUSDT", Decimal("2500"))
+    await runtime._spot.submit(
+        OrderIntent(
+            intent_id="flatten-1",
+            client_order_id="flatten-1",
+            mode=ExecutionMode.PAPER,
+            product=ProductKind.SPOT,
+            symbol="ETHUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("0.01"),
+            price=Decimal("2500"),
+        )
+    )
+    assert runtime.broker.open_positions()
+    runtime.stop()
+    await runtime._flatten()
+    assert runtime.broker.open_positions() == ()
+    assert runtime.status().halted is True
+

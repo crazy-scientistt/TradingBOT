@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -9,7 +10,7 @@ from goldguard.broker.paper_futures import PaperFuturesBroker
 from goldguard.broker.paper_portfolio import PaperPortfolioBroker
 from goldguard.broker.paper_spot import PaperSpotBroker
 from goldguard.config import Settings
-from goldguard.domain.enums import BotState, ExecutionMode, ProductKind
+from goldguard.domain.enums import BotState, ExecutionMode, ExitReason, ProductKind
 from goldguard.domain.models import Candle, Quote
 from goldguard.domain.profile import AutonomousProfile
 from goldguard.execution.models import MarketScope
@@ -80,6 +81,7 @@ class AutonomousRuntime:
         self._halted = False
         self._mae: dict[str, Decimal] = {}
         self._mfe: dict[str, Decimal] = {}
+        self._flatten_task: asyncio.Task[None] | None = None
 
     @property
     def broker(self) -> PaperPortfolioBroker:
@@ -110,6 +112,17 @@ class AutonomousRuntime:
         self._running = False
         self._halted = True
         self._coordinator.pause_entries()
+        self._supervisor._running = False
+        try:
+            loop = asyncio.get_running_loop()
+            self._flatten_task = loop.create_task(self._flatten())
+        except RuntimeError:
+            asyncio.run(self._flatten())
+
+    async def _flatten(self) -> None:
+        scopes = self._supervisor.market_scopes()
+        await self._emergency.cancel_entries(scopes)
+        await self._emergency.close_owned_positions(scopes, ExitReason.EMERGENCY)
 
     def shutdown(self) -> None:
         self._running = False

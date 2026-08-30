@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from goldguard.broker.paper_portfolio import PaperPortfolioBroker
-from goldguard.domain.enums import ExitReason, ProductKind
+from goldguard.domain.enums import ExitReason, OrderStatus, ProductKind
 from goldguard.execution.models import MarketScope
 
 
@@ -22,11 +22,23 @@ class EmergencyService:
 
     async def cancel_entries(self, scopes: tuple[MarketScope, ...] | list[MarketScope]) -> int:
         self.pause()
-        cancelled_count = 0
-        for _scope in scopes:
-            # cancel open orders in scope
-            pass
-        return cancelled_count
+        wanted = {(scope.product, scope.symbol) for scope in scopes}
+        cancelled = 0
+        for order in list(self.broker.spot._orders.values()):
+            if (ProductKind.SPOT, order.symbol) not in wanted:
+                continue
+            if order.status != OrderStatus.OPEN:
+                continue
+            await self.broker.spot.cancel(order.client_order_id)
+            cancelled += 1
+        for order in list(self.broker.futures._orders.values()):
+            if (ProductKind.FUTURES, order.symbol) not in wanted:
+                continue
+            if order.status != OrderStatus.OPEN:
+                continue
+            await self.broker.futures.cancel(order.client_order_id)
+            cancelled += 1
+        return cancelled
 
     async def close_owned_positions(
         self,

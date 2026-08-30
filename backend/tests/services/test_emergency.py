@@ -11,6 +11,7 @@ from goldguard.domain.enums import (
     ExitReason,
     MarginMode,
     OrderSide,
+    OrderStatus,
     ProductKind,
 )
 from goldguard.execution.models import MarketScope, OrderIntent
@@ -64,3 +65,31 @@ async def test_emergency_service_closes_positions() -> None:
 
     snap = await broker.snapshot()
     assert snap.positions_count == 0
+
+
+@pytest.mark.asyncio
+async def test_emergency_cancels_open_orders() -> None:
+    spot = PaperSpotBroker(starting_cash=Decimal("1000.00"))
+    futures = PaperFuturesBroker(starting_collateral=Decimal("0"))
+    broker = PaperPortfolioBroker(spot=spot, futures=futures)
+    emergency = EmergencyService(broker=broker)
+    spot.on_price("PAXGUSDT", Decimal("2500.00"))
+    await spot.submit(
+        OrderIntent(
+            intent_id="i-open",
+            client_order_id="c-open",
+            mode=ExecutionMode.PAPER,
+            product=ProductKind.SPOT,
+            symbol="PAXGUSDT",
+            side=OrderSide.BUY,
+            quantity=Decimal("0.1"),
+            price=Decimal("2500.00"),
+        )
+    )
+    filled = spot._orders["c-open"]
+    spot._orders["c-open"] = filled.model_copy(update={"status": OrderStatus.OPEN})
+    scope = MarketScope(mode=ExecutionMode.PAPER, product=ProductKind.SPOT, symbol="PAXGUSDT")
+    cancelled = await emergency.cancel_entries([scope])
+    assert cancelled == 1
+    assert spot._orders["c-open"].status == OrderStatus.CANCELLED
+
